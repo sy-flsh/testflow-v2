@@ -16,7 +16,7 @@ export function ProjectTabs({
   activeTab: (typeof tabs)[number]["value"];
 }) {
   return (
-    <nav className="tf-project-tabs mt-5 flex items-center gap-1">
+    <nav className="tf-project-tabs mt-5 flex items-center gap-1 overflow-x-auto">
       {tabs.map((tab) => (
         <Link
           key={tab.value}

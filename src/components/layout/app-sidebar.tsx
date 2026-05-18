@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { getProjectIdFromPathname, getProjectName } from "@/lib/project-context";
 import { cn } from "@/lib/utils";
 
 const workspaceNav = [
@@ -22,16 +23,23 @@ const workspaceNav = [
 const projectNav = [
   {
     href: "/projects/demo-project/testcases",
+    segment: "testcases",
     label: "테스트케이스",
     icon: FileText,
   },
-  { href: "/projects/demo-project/runs", label: "테스트실행", icon: Play },
-  { href: "/projects/demo-project/bugs", label: "결함", icon: Bug },
-  { href: "/projects/demo-project/reports", label: "보고서", icon: BarChart3 },
+  { href: "/projects/demo-project/runs", segment: "runs", label: "테스트실행", icon: Play },
+  { href: "/projects/demo-project/bugs", segment: "bugs", label: "결함", icon: Bug },
+  { href: "/projects/demo-project/reports", segment: "reports", label: "보고서", icon: BarChart3 },
 ];
 
 export function AppSidebar() {
   const pathname = usePathname();
+  const projectId = getProjectIdFromPathname(pathname);
+  const projectName = getProjectName(projectId);
+  const projectItems = projectNav.map((item) => ({
+    ...item,
+    href: projectId ? `/projects/${projectId}/${item.segment}` : item.href,
+  }));
 
   return (
     <aside className="tf-sidebar fixed bottom-0 left-0 top-14 z-20 flex w-60 flex-col border-r border-[var(--border-default)] bg-white">
@@ -40,10 +48,15 @@ export function AppSidebar() {
 
         <div className="my-4 border-t border-[var(--border-default)]" />
 
-        <p className="mb-2 px-3 text-xs font-medium text-[var(--text-tertiary)]">
-          프로젝트 컨텍스트
-        </p>
-        <SidebarSection items={projectNav} pathname={pathname} />
+        <div className="mb-2 px-3">
+          <p className="text-xs font-medium text-[var(--text-tertiary)]">
+            프로젝트 컨텍스트
+          </p>
+          <p className="mt-1 truncate text-xs font-semibold text-[var(--text-secondary)]">
+            {projectId ? projectName : "프로젝트를 선택하세요"}
+          </p>
+        </div>
+        <SidebarSection items={projectItems} pathname={pathname} disabled={!projectId} />
       </div>
 
       <div className="border-t border-[var(--border-default)] p-3">
@@ -61,13 +74,16 @@ export function AppSidebar() {
 function SidebarSection({
   items,
   pathname,
+  disabled = false,
 }: {
   items: Array<{
     href: string;
+    segment?: string;
     label: string;
     icon: ComponentType<{ className?: string }>;
   }>;
   pathname: string;
+  disabled?: boolean;
 }) {
   return (
     <nav className="space-y-1">
@@ -78,6 +94,7 @@ function SidebarSection({
           label={item.label}
           icon={item.icon}
           active={isActive(pathname, item.href)}
+          disabled={disabled}
         />
       ))}
     </nav>
@@ -89,12 +106,23 @@ function SidebarLink({
   label,
   icon: Icon,
   active,
+  disabled = false,
 }: {
   href: string;
   label: string;
   icon: ComponentType<{ className?: string }>;
   active: boolean;
+  disabled?: boolean;
 }) {
+  if (disabled) {
+    return (
+      <span className="tf-sidebar-link flex h-9 cursor-not-allowed items-center gap-2 rounded-md px-3 text-sm font-medium text-[var(--text-tertiary)] opacity-60">
+        <Icon className="tf-icon h-4 w-4" />
+        <span>{label}</span>
+      </span>
+    );
+  }
+
   return (
     <Link
       href={href}
