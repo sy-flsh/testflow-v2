@@ -1,4 +1,8 @@
 @import "tailwindcss";
+@source "./**/*.{ts,tsx}";
+@source "../components/**/*.{ts,tsx}";
+@source "../features/**/*.{ts,tsx}";
+@source "../lib/**/*.{ts,tsx}";
 
 :root {
   color-scheme: light;
@@ -76,4 +80,116 @@ select {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
   background: white;
+}
+
+.tf-link-reset {
+  color: inherit;
+  text-decoration: none;
+}
+
+.tf-top-header {
+  position: fixed;
+  inset-inline: 0;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  height: 56px;
+  align-items: center;
+  border-bottom: 1px solid var(--border-default);
+  background: white;
+}
+
+.tf-sidebar {
+  position: fixed;
+  top: 56px;
+  bottom: 0;
+  left: 0;
+  z-index: 20;
+  display: flex;
+  width: 240px;
+  flex-direction: column;
+  border-right: 1px solid var(--border-default);
+  background: white;
+}
+
+.tf-main {
+  padding-top: 56px;
+  padding-left: 240px;
+  min-height: 100vh;
+  background: var(--bg-subtle);
+}
+
+.tf-main-inner {
+  width: 100%;
+  max-width: 1280px;
+  margin-inline: auto;
+  padding: 32px;
+}
+
+.tf-sidebar-link {
+  display: flex;
+  height: 36px;
+  align-items: center;
+  gap: 8px;
+  border-radius: var(--radius-md);
+  padding-inline: 12px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+  text-decoration: none;
+  transition:
+    background-color 150ms ease,
+    color 150ms ease;
+}
+
+.tf-sidebar-link:hover,
+.tf-sidebar-link-active {
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  text-decoration: none;
+}
+
+.tf-icon,
+.lucide {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  stroke-width: 2;
+}
+
+.tf-icon-md {
+  width: 20px;
+  height: 20px;
+}
+
+.tf-project-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 20px;
+}
+
+.tf-project-tab {
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.tf-project-tab:hover {
+  background: var(--bg-muted);
+  color: var(--text-primary);
+  text-decoration: none;
+}
+
+.tf-project-tab-active {
+  background: var(--brand-primary);
+  color: white;
+}
+
+.tf-project-tab-active:hover {
+  background: var(--brand-primary-hover);
+  color: white;
 }

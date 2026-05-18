@@ -34,7 +34,7 @@ export function AppSidebar() {
   const pathname = usePathname();
 
   return (
-    <aside className="fixed bottom-0 left-0 top-14 z-20 flex w-60 flex-col border-r border-[var(--border-default)] bg-white">
+    <aside className="tf-sidebar fixed bottom-0 left-0 top-14 z-20 flex w-60 flex-col border-r border-[var(--border-default)] bg-white">
       <div className="flex-1 overflow-y-auto p-3">
         <SidebarSection items={workspaceNav} pathname={pathname} />
 
@@ -99,13 +99,13 @@ function SidebarLink({
     <Link
       href={href}
       className={cn(
-        "flex h-9 items-center gap-2 rounded-md px-3 text-sm font-medium transition-colors",
+        "tf-sidebar-link flex h-9 items-center gap-2 rounded-md px-3 text-sm font-medium transition-colors",
         active
-          ? "bg-[var(--bg-muted)] text-[var(--text-primary)]"
+          ? "tf-sidebar-link-active bg-[var(--bg-muted)] text-[var(--text-primary)]"
           : "text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] hover:text-[var(--text-primary)]",
       )}
     >
-      <Icon className="h-4 w-4" />
+      <Icon className="tf-icon h-4 w-4" />
       <span>{label}</span>
     </Link>
   );
