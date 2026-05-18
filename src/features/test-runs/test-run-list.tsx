@@ -8,11 +8,12 @@ import {
   Play,
   Plus,
   Search,
-  X,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { EmptyState } from "@/components/common/empty-state";
+import { DialogShell } from "@/components/common/dialog-shell";
+import { FormField, SelectField, TextAreaField } from "@/components/common/form-field";
 import { StatusBadge } from "@/components/common/status-badge";
 import { cn } from "@/lib/utils";
 import {
@@ -270,63 +271,72 @@ function CreateRunDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 px-4">
-      <div className="flex max-h-[92vh] w-full max-w-5xl flex-col rounded-lg border border-[var(--border-default)] bg-white shadow-xl">
-        <header className="flex h-14 items-center justify-between border-b border-[var(--border-default)] px-5">
-          <h2 className="text-base font-semibold">새 테스트 플랜 만들기</h2>
+    <DialogShell
+      title="새 테스트 플랜 만들기"
+      description="실행 대상 테스트케이스를 선택해 mock 테스트 플랜을 생성합니다."
+      onClose={onClose}
+      maxWidth="max-w-5xl"
+      footer={
+        <div className="flex justify-end gap-2">
           <button
             onClick={onClose}
-            className="flex h-8 w-8 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-muted)]"
-            aria-label="닫기"
+            className="h-9 rounded-md border border-[var(--border-default)] bg-white px-3 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
           >
-            <X className="tf-icon" />
+            취소
           </button>
-        </header>
-
-        <div className="flex-1 space-y-6 overflow-y-auto px-5 py-5">
+          <button
+            onClick={() => handleSubmit(false)}
+            className="h-9 rounded-md border border-[var(--border-default)] bg-white px-3 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
+          >
+            임시저장
+          </button>
+          <button
+            onClick={() => handleSubmit(true)}
+            className="h-9 rounded-md bg-[var(--brand-primary)] px-3 text-sm font-medium text-white hover:bg-[var(--brand-primary-hover)]"
+          >
+            플랜 생성 & 실행 시작
+          </button>
+        </div>
+      }
+    >
+      <div className="space-y-6">
           <section>
             <h3 className="mb-3 text-sm font-semibold">기본 정보</h3>
             <div className="grid gap-4 md:grid-cols-2">
-              <label className="block text-sm font-medium md:col-span-2">
-                플랜 이름 <span className="text-[var(--status-fail)]">*</span>
+              <FormField label="플랜 이름" required error={titleError ? "플랜 이름을 입력하세요." : undefined} className="md:col-span-2">
                 <input
                   value={title}
                   onChange={(event) => setTitle(event.target.value)}
                   className={cn(
-                    "mt-2 h-10 w-full rounded-md border px-3 text-sm outline-none focus:border-[var(--brand-primary)]",
-                    titleError
-                      ? "border-[var(--status-fail)]"
-                      : "border-[var(--border-default)]",
+                    "h-10 w-full rounded-md border px-3 text-sm outline-none focus:border-[var(--brand-primary)]",
+                    titleError ? "border-[var(--status-fail)]" : "border-[var(--border-default)]",
                   )}
                   placeholder="Sprint 13 회귀 테스트"
                 />
-                {titleError && (
-                  <span className="mt-1 block text-xs text-[var(--status-fail)]">
-                    플랜 이름을 입력하세요.
-                  </span>
-                )}
-              </label>
-              <label className="block text-sm font-medium md:col-span-2">
-                설명
-                <textarea
+              </FormField>
+              <FormField label="설명" className="md:col-span-2">
+                <TextAreaField
                   value={description}
                   onChange={(event) => setDescription(event.target.value)}
                   rows={3}
-                  className="mt-2 w-full resize-none rounded-md border border-[var(--border-default)] px-3 py-2 text-sm outline-none focus:border-[var(--brand-primary)]"
                 />
-              </label>
-              <SelectField
-                label="담당자"
-                value={assignee}
-                onChange={setAssignee}
-                options={["김QA", "홍길동", "이PM", "박개발"]}
-              />
-              <SelectField
-                label="실행 환경"
-                value={environment}
-                onChange={setEnvironment}
-                options={["Dev", "QA Server", "Staging", "Prod"]}
-              />
+              </FormField>
+              <FormField label="담당자">
+                <SelectField value={assignee} onChange={(event) => setAssignee(event.target.value)}>
+                  <option value="김QA">김QA</option>
+                  <option value="홍길동">홍길동</option>
+                  <option value="이PM">이PM</option>
+                  <option value="박개발">박개발</option>
+                </SelectField>
+              </FormField>
+              <FormField label="실행 환경">
+                <SelectField value={environment} onChange={(event) => setEnvironment(event.target.value)}>
+                  <option value="Dev">Dev</option>
+                  <option value="QA Server">QA Server</option>
+                  <option value="Staging">Staging</option>
+                  <option value="Prod">Prod</option>
+                </SelectField>
+              </FormField>
               <DateField label="시작일" value={startDate} onChange={setStartDate} />
               <DateField label="마감일" value={dueDate} onChange={setDueDate} />
             </div>
@@ -406,30 +416,8 @@ function CreateRunDialog({
               )}
             </div>
           </section>
-        </div>
-
-        <footer className="flex justify-end gap-2 border-t border-[var(--border-default)] px-5 py-4">
-          <button
-            onClick={onClose}
-            className="h-9 rounded-md border border-[var(--border-default)] bg-white px-3 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
-          >
-            취소
-          </button>
-          <button
-            onClick={() => handleSubmit(false)}
-            className="h-9 rounded-md border border-[var(--border-default)] bg-white px-3 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
-          >
-            임시저장
-          </button>
-          <button
-            onClick={() => handleSubmit(true)}
-            className="h-9 rounded-md bg-[var(--brand-primary)] px-3 text-sm font-medium text-white hover:bg-[var(--brand-primary-hover)]"
-          >
-            플랜 생성 & 실행 시작
-          </button>
-        </footer>
       </div>
-    </div>
+    </DialogShell>
   );
 }
 
@@ -447,35 +435,6 @@ function ResultCount({
       <span className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
       {label} {value}
     </span>
-  );
-}
-
-function SelectField({
-  label,
-  value,
-  onChange,
-  options,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  options: string[];
-}) {
-  return (
-    <label className="block text-sm font-medium">
-      {label}
-      <select
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="mt-2 h-10 w-full rounded-md border border-[var(--border-default)] bg-white px-3 text-sm outline-none focus:border-[var(--brand-primary)]"
-      >
-        {options.map((option) => (
-          <option key={option} value={option}>
-            {option}
-          </option>
-        ))}
-      </select>
-    </label>
   );
 }
 

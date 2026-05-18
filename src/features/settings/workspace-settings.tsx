@@ -16,6 +16,8 @@ import {
   Users,
   X,
 } from "lucide-react";
+import { DialogShell } from "@/components/common/dialog-shell";
+import { FormField, SelectField, TextAreaField, TextInput } from "@/components/common/form-field";
 import type { Member, MemberRole } from "@/lib/domain/types";
 import { mockMembers, mockPendingInvites } from "@/lib/mock/mock-data";
 import { cn } from "@/lib/utils";
@@ -179,45 +181,13 @@ export function WorkspaceSettings() {
       </div>
 
       {inviteOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 p-4">
-          <div className="w-full max-w-xl rounded-lg bg-white shadow-2xl">
-            <DialogHeader title="멤버 초대" description="실제 이메일 발송은 후속 Phase에서 API로 연결합니다." onClose={() => setInviteOpen(false)} />
-            <div className="space-y-4 p-5">
-              <label className="block">
-                <span className="mb-1 block text-sm font-semibold text-[var(--text-primary)]">
-                  이메일
-                </span>
-                <textarea
-                  value={inviteEmails}
-                  onChange={(event) => setInviteEmails(event.target.value)}
-                  rows={5}
-                  placeholder="qa@example.com, dev@example.com 또는 줄바꿈으로 여러 명 입력"
-                  className="w-full resize-none rounded-md border border-[var(--border-subtle)] px-3 py-2 text-sm leading-6 outline-none focus:border-[var(--brand-primary)] focus:ring-2 focus:ring-blue-100"
-                />
-              </label>
-              <FieldSelect
-                label="역할"
-                value={inviteRole}
-                onChange={(value) => setInviteRole(value as MemberRole)}
-                options={[
-                  ["Admin", "Admin"],
-                  ["Member", "Member"],
-                  ["Viewer", "Viewer"],
-                ]}
-              />
-              <label className="block">
-                <span className="mb-1 block text-sm font-semibold text-[var(--text-primary)]">
-                  환영 메시지
-                </span>
-                <textarea
-                  value={welcomeMessage}
-                  onChange={(event) => setWelcomeMessage(event.target.value)}
-                  rows={4}
-                  className="w-full resize-none rounded-md border border-[var(--border-subtle)] px-3 py-2 text-sm leading-6 outline-none focus:border-[var(--brand-primary)] focus:ring-2 focus:ring-blue-100"
-                />
-              </label>
-            </div>
-            <div className="flex justify-end gap-2 border-t border-[var(--border-subtle)] px-5 py-4">
+        <DialogShell
+          title="멤버 초대"
+          description="실제 이메일 발송은 후속 Phase에서 API로 연결합니다."
+          onClose={() => setInviteOpen(false)}
+          maxWidth="max-w-xl"
+          footer={
+            <div className="flex justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setInviteOpen(false)}
@@ -234,31 +204,43 @@ export function WorkspaceSettings() {
                 초대 보내기
               </button>
             </div>
+          }
+        >
+          <div className="space-y-4">
+            <FormField label="이메일">
+              <TextAreaField
+                value={inviteEmails}
+                onChange={(event) => setInviteEmails(event.target.value)}
+                rows={5}
+                placeholder="qa@example.com, dev@example.com 또는 줄바꿈으로 여러 명 입력"
+              />
+            </FormField>
+            <FormField label="역할">
+              <SelectField value={inviteRole} onChange={(event) => setInviteRole(event.target.value as MemberRole)}>
+                <option value="Admin">Admin</option>
+                <option value="Member">Member</option>
+                <option value="Viewer">Viewer</option>
+              </SelectField>
+            </FormField>
+            <FormField label="환영 메시지">
+              <TextAreaField
+                value={welcomeMessage}
+                onChange={(event) => setWelcomeMessage(event.target.value)}
+                rows={4}
+              />
+            </FormField>
           </div>
-        </div>
+        </DialogShell>
       )}
 
       {deleteOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 p-4">
-          <div className="w-full max-w-lg rounded-lg bg-white shadow-2xl">
-            <DialogHeader title="워크스페이스 삭제" description="이 작업은 실제로 실행되지 않는 mock 확인 Dialog입니다." onClose={() => setDeleteOpen(false)} />
-            <div className="space-y-4 p-5">
-              <div className="rounded-md border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-700">
-                삭제를 진행하면 프로젝트, 테스트케이스, 실행 결과, 결함 데이터가 모두 삭제됩니다.
-                v0.1 mock UI에서는 실제 삭제 API를 호출하지 않습니다.
-              </div>
-              <label className="block">
-                <span className="mb-1 block text-sm font-semibold text-[var(--text-primary)]">
-                  확인을 위해 <span className="text-red-600">{workspaceName}</span>을 정확히 입력하세요.
-                </span>
-                <input
-                  value={deleteConfirm}
-                  onChange={(event) => setDeleteConfirm(event.target.value)}
-                  className="h-10 w-full rounded-md border border-[var(--border-subtle)] px-3 text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-100"
-                />
-              </label>
-            </div>
-            <div className="flex justify-end gap-2 border-t border-[var(--border-subtle)] px-5 py-4">
+        <DialogShell
+          title="워크스페이스 삭제"
+          description="이 작업은 실제로 실행되지 않는 mock 확인 Dialog입니다."
+          onClose={() => setDeleteOpen(false)}
+          maxWidth="max-w-lg"
+          footer={
+            <div className="flex justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setDeleteOpen(false)}
@@ -279,8 +261,22 @@ export function WorkspaceSettings() {
                 영구 삭제
               </button>
             </div>
+          }
+        >
+          <div className="space-y-4">
+            <div className="rounded-md border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-700">
+              삭제를 진행하면 프로젝트, 테스트케이스, 실행 결과, 결함 데이터가 모두 삭제됩니다.
+              v0.1 mock UI에서는 실제 삭제 API를 호출하지 않습니다.
+            </div>
+            <FormField label={`확인을 위해 ${workspaceName}을 정확히 입력하세요.`}>
+              <TextInput
+                value={deleteConfirm}
+                onChange={(event) => setDeleteConfirm(event.target.value)}
+                className="focus:border-red-500 focus:ring-red-100"
+              />
+            </FormField>
           </div>
-        </div>
+        </DialogShell>
       )}
     </div>
   );
@@ -337,18 +333,23 @@ function GeneralTab({
         </div>
 
         <div className="grid gap-4 md:grid-cols-2">
-          <FieldInput label="워크스페이스 이름" value={name} onChange={onNameChange} />
-          <FieldInput label="URL slug" value={slug} onChange={onSlugChange} prefix="testflow.local/" />
-          <FieldSelect
-            label="시간대"
-            value={timezone}
-            onChange={onTimezoneChange}
-            options={[
-              ["Asia/Seoul", "Asia/Seoul"],
-              ["UTC", "UTC"],
-              ["America/Los_Angeles", "America/Los_Angeles"],
-            ]}
-          />
+          <FormField label="워크스페이스 이름">
+            <TextInput value={name} onChange={(event) => onNameChange(event.target.value)} />
+          </FormField>
+          <FormField label="URL slug">
+            <TextInput
+              value={slug}
+              onChange={(event) => onSlugChange(event.target.value)}
+              prefix="testflow.local/"
+            />
+          </FormField>
+          <FormField label="시간대">
+            <SelectField value={timezone} onChange={(event) => onTimezoneChange(event.target.value)}>
+              <option value="Asia/Seoul">Asia/Seoul</option>
+              <option value="UTC">UTC</option>
+              <option value="America/Los_Angeles">America/Los_Angeles</option>
+            </SelectField>
+          </FormField>
         </div>
 
         <div className="flex justify-end">
@@ -396,17 +397,17 @@ function MembersTab({
                 className="h-10 w-full rounded-md border border-[var(--border-subtle)] bg-white pl-10 pr-3 text-sm outline-none focus:border-[var(--brand-primary)] focus:ring-2 focus:ring-blue-100"
               />
             </label>
-            <FieldSelect
-              label="역할 필터"
-              value={roleFilter}
-              onChange={(value) => onRoleFilterChange(value as MemberRole | "all")}
-              options={[
-                ["all", "전체 역할"],
-                ["Admin", "Admin"],
-                ["Member", "Member"],
-                ["Viewer", "Viewer"],
-              ]}
-            />
+            <FormField label="역할 필터">
+              <SelectField
+                value={roleFilter}
+                onChange={(event) => onRoleFilterChange(event.target.value as MemberRole | "all")}
+              >
+                <option value="all">전체 역할</option>
+                <option value="Admin">Admin</option>
+                <option value="Member">Member</option>
+                <option value="Viewer">Viewer</option>
+              </SelectField>
+            </FormField>
           </div>
           <button
             type="button"
@@ -606,65 +607,6 @@ function RoleBadge({ role }: { role: MemberRole }) {
   );
 }
 
-function FieldInput({
-  label,
-  value,
-  prefix,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  prefix?: string;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <label className="block">
-      <span className="mb-1 block text-sm font-semibold text-[var(--text-primary)]">{label}</span>
-      <div className="flex h-10 overflow-hidden rounded-md border border-[var(--border-subtle)] bg-white focus-within:border-[var(--brand-primary)] focus-within:ring-2 focus-within:ring-blue-100">
-        {prefix && (
-          <span className="inline-flex items-center border-r border-[var(--border-subtle)] bg-[var(--surface-muted)] px-3 text-sm text-[var(--text-tertiary)]">
-            {prefix}
-          </span>
-        )}
-        <input
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          className="min-w-0 flex-1 px-3 text-sm outline-none"
-        />
-      </div>
-    </label>
-  );
-}
-
-function FieldSelect({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  options: [string, string][];
-  onChange: (value: string) => void;
-}) {
-  return (
-    <label className="block">
-      <span className="mb-1 block text-sm font-semibold text-[var(--text-primary)]">{label}</span>
-      <select
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="h-10 w-full rounded-md border border-[var(--border-subtle)] bg-white px-3 text-sm outline-none focus:border-[var(--brand-primary)]"
-      >
-        {options.map(([optionValue, optionLabel]) => (
-          <option key={optionValue} value={optionValue}>
-            {optionLabel}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
-
 function SectionHeader({
   title,
   description,
@@ -680,33 +622,6 @@ function SectionHeader({
         {title}
       </h2>
       <p className="mt-1 text-sm text-[var(--text-secondary)]">{description}</p>
-    </div>
-  );
-}
-
-function DialogHeader({
-  title,
-  description,
-  onClose,
-}: {
-  title: string;
-  description: string;
-  onClose: () => void;
-}) {
-  return (
-    <div className="flex items-start justify-between gap-4 border-b border-[var(--border-subtle)] px-5 py-4">
-      <div>
-        <h2 className="text-lg font-semibold text-[var(--text-primary)]">{title}</h2>
-        <p className="mt-1 text-sm text-[var(--text-secondary)]">{description}</p>
-      </div>
-      <button
-        type="button"
-        onClick={onClose}
-        className="inline-flex h-9 w-9 items-center justify-center rounded-md hover:bg-[var(--surface-muted)]"
-        aria-label={`${title} 닫기`}
-      >
-        <X className="h-4 w-4" />
-      </button>
     </div>
   );
 }

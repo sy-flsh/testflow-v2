@@ -10,11 +10,15 @@ import {
   Plus,
   Search,
   Trash2,
-  X,
 } from "lucide-react";
+import { DialogShell } from "@/components/common/dialog-shell";
+import { DrawerShell } from "@/components/common/drawer-shell";
 import { EmptyState } from "@/components/common/empty-state";
+import { FormField, SelectField, TextAreaField, TextInput } from "@/components/common/form-field";
 import { PriorityBadge } from "@/components/common/priority-badge";
 import { StatusBadge } from "@/components/common/status-badge";
+import { TableActionBar } from "@/components/common/action-bar";
+import { defectSeverityBadgeStyles } from "@/lib/domain/badge-maps";
 import { cn } from "@/lib/utils";
 import {
   createDefectId,
@@ -44,13 +48,6 @@ const priorityLabels: Record<DefectPriority, string> = {
   high: "High",
   medium: "Medium",
   low: "Low",
-};
-
-const severityStyles: Record<Severity, string> = {
-  critical: "bg-red-50 text-red-700 ring-red-200",
-  major: "bg-orange-50 text-orange-700 ring-orange-200",
-  minor: "bg-amber-50 text-amber-700 ring-amber-200",
-  trivial: "bg-slate-100 text-slate-700 ring-slate-200",
 };
 
 const assignees = ["김QA", "박개발", "이프론트", "최검색", "정QA", "미지정"];
@@ -130,7 +127,7 @@ function SeverityBadge({ severity }: { severity: Severity }) {
     <span
       className={cn(
         "inline-flex h-6 items-center rounded-full px-2.5 text-xs font-medium ring-1 ring-inset",
-        severityStyles[severity],
+        defectSeverityBadgeStyles[severity],
       )}
     >
       {severityLabels[severity]}
@@ -412,10 +409,7 @@ export function DefectManager() {
       </section>
 
       {selectedIds.length > 0 && (
-        <section className="tf-card flex flex-col gap-3 border-[var(--brand-primary)] bg-blue-50/60 p-3 md:flex-row md:items-center md:justify-between">
-          <span className="text-sm font-semibold text-[var(--brand-primary)]">
-            {selectedIds.length}개 선택됨
-          </span>
+        <TableActionBar count={selectedIds.length}>
           <div className="flex flex-wrap gap-2">
             <select
               onChange={(event) => {
@@ -463,7 +457,7 @@ export function DefectManager() {
               삭제
             </button>
           </div>
-        </section>
+        </TableActionBar>
       )}
 
       <section className="tf-card overflow-hidden">
@@ -555,81 +549,103 @@ export function DefectManager() {
       </section>
 
       {drawerMode && (
-        <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/20">
-          <button type="button" className="flex-1 cursor-default" onClick={closeDrawer} aria-label="닫기" />
-          <aside className="flex h-full w-full max-w-4xl flex-col bg-white shadow-2xl">
-            <div className="flex items-start justify-between border-b border-[var(--border-subtle)] px-6 py-4">
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-wide text-[var(--text-tertiary)]">
-                  {drawerMode === "create" ? "새 결함" : form.id}
-                </div>
-                <h2 className="mt-1 text-xl font-semibold text-[var(--text-primary)]">
-                  {drawerMode === "create" ? "새 결함 등록" : form.title || "제목 없음"}
-                </h2>
-              </div>
-              <div className="flex items-center gap-2">
-                {drawerMode === "edit" && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={duplicateDefect}
-                      className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border-subtle)] px-3 text-sm font-medium hover:bg-[var(--surface-muted)]"
-                    >
-                      <Copy className="tf-icon" />
-                      복제
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setDeleteTarget(defects.find((defect) => defect.id === form.id) ?? null)
-                      }
-                      className="inline-flex h-9 items-center gap-2 rounded-md border border-red-200 px-3 text-sm font-medium text-red-700 hover:bg-red-50"
-                    >
-                      <Trash2 className="tf-icon" />
-                      삭제
-                    </button>
-                  </>
-                )}
+        <DrawerShell
+          title={drawerMode === "create" ? "새 결함 등록" : form.title || "제목 없음"}
+          description={drawerMode === "create" ? "새 결함" : form.id}
+          onClose={closeDrawer}
+          widthClassName="max-w-4xl"
+          actions={
+            drawerMode === "edit" ? (
+              <>
                 <button
                   type="button"
-                  onClick={closeDrawer}
-                  className="inline-flex h-9 w-9 items-center justify-center rounded-md hover:bg-[var(--surface-muted)]"
-                  aria-label="Drawer 닫기"
+                  onClick={duplicateDefect}
+                  className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border-subtle)] px-3 text-sm font-medium hover:bg-[var(--surface-muted)]"
                 >
-                  <X className="tf-icon" />
+                  <Copy className="tf-icon" />
+                  복제
                 </button>
-              </div>
+                <button
+                  type="button"
+                  onClick={() => setDeleteTarget(defects.find((defect) => defect.id === form.id) ?? null)}
+                  className="inline-flex h-9 items-center gap-2 rounded-md border border-red-200 px-3 text-sm font-medium text-red-700 hover:bg-red-50"
+                >
+                  <Trash2 className="tf-icon" />
+                  삭제
+                </button>
+              </>
+            ) : undefined
+          }
+          footer={
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeDrawer}
+                className="h-10 rounded-md border border-[var(--border-subtle)] px-4 text-sm font-medium hover:bg-[var(--surface-muted)]"
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                onClick={saveDefect}
+                className="h-10 rounded-md bg-[var(--brand-primary)] px-4 text-sm font-semibold text-white hover:bg-[var(--brand-primary-hover)]"
+              >
+                저장
+              </button>
             </div>
-
-            <div className="grid flex-1 overflow-y-auto lg:grid-cols-[280px_1fr]">
+          }
+        >
+          <div className="grid min-h-0 flex-1 overflow-y-auto lg:grid-cols-[280px_1fr]">
               <div className="border-b border-[var(--border-subtle)] bg-[var(--surface-muted)] p-5 lg:border-b-0 lg:border-r">
                 <div className="space-y-4">
-                  <FieldSelect
-                    label="상태"
-                    value={form.status}
-                    onChange={(value) => setForm((current) => ({ ...current, status: value as DefectStatus }))}
-                    options={Object.entries(statusLabels)}
-                  />
-                  <FieldSelect
-                    label="심각도"
-                    value={form.severity}
-                    onChange={(value) => setForm((current) => ({ ...current, severity: value as Severity }))}
-                    options={Object.entries(severityLabels)}
-                  />
-                  <FieldSelect
-                    label="우선순위"
-                    value={form.priority}
-                    onChange={(value) =>
-                      setForm((current) => ({ ...current, priority: value as DefectPriority }))
-                    }
-                    options={Object.entries(priorityLabels)}
-                  />
-                  <FieldSelect
-                    label="담당자"
-                    value={form.assignee}
-                    onChange={(value) => setForm((current) => ({ ...current, assignee: value }))}
-                    options={assignees.map((assignee) => [assignee, assignee])}
-                  />
+                  <FormField label="상태">
+                    <SelectField
+                      value={form.status}
+                      onChange={(event) => setForm((current) => ({ ...current, status: event.target.value as DefectStatus }))}
+                    >
+                      {Object.entries(statusLabels).map(([value, label]) => (
+                        <option key={value} value={value}>
+                          {label}
+                        </option>
+                      ))}
+                    </SelectField>
+                  </FormField>
+                  <FormField label="심각도">
+                    <SelectField
+                      value={form.severity}
+                      onChange={(event) => setForm((current) => ({ ...current, severity: event.target.value as Severity }))}
+                    >
+                      {Object.entries(severityLabels).map(([value, label]) => (
+                        <option key={value} value={value}>
+                          {label}
+                        </option>
+                      ))}
+                    </SelectField>
+                  </FormField>
+                  <FormField label="우선순위">
+                    <SelectField
+                      value={form.priority}
+                      onChange={(event) => setForm((current) => ({ ...current, priority: event.target.value as DefectPriority }))}
+                    >
+                      {Object.entries(priorityLabels).map(([value, label]) => (
+                        <option key={value} value={value}>
+                          {label}
+                        </option>
+                      ))}
+                    </SelectField>
+                  </FormField>
+                  <FormField label="담당자">
+                    <SelectField
+                      value={form.assignee}
+                      onChange={(event) => setForm((current) => ({ ...current, assignee: event.target.value }))}
+                    >
+                      {assignees.map((assignee) => (
+                        <option key={assignee} value={assignee}>
+                          {assignee}
+                        </option>
+                      ))}
+                    </SelectField>
+                  </FormField>
                   <MetaRow label="등록자" value={form.reporter} />
                   <MetaRow label="등록일" value={form.createdAt} />
                   <MetaRow label="마지막 수정" value={form.updatedAt} />
@@ -651,43 +667,41 @@ export function DefectManager() {
               </div>
 
               <div className="space-y-5 p-6">
-                <label className="block">
-                  <span className="mb-1 block text-sm font-semibold text-[var(--text-primary)]">제목</span>
-                  <input
+                <FormField label="제목" required error={titleError || undefined}>
+                  <TextInput
                     value={form.title}
                     onChange={(event) => {
                       setForm((current) => ({ ...current, title: event.target.value }));
                       setTitleError("");
                     }}
-                    className={cn(
-                      "h-10 w-full rounded-md border bg-white px-3 text-sm outline-none focus:border-[var(--brand-primary)] focus:ring-2 focus:ring-blue-100",
-                      titleError ? "border-red-300" : "border-[var(--border-subtle)]",
-                    )}
                     placeholder="결함 제목을 입력하세요"
+                    className={titleError ? "border-red-300" : undefined}
                   />
-                  {titleError && <span className="mt-1 block text-xs text-red-600">{titleError}</span>}
-                </label>
-                <FieldTextarea
-                  label="설명"
-                  value={form.description}
-                  onChange={(value) => setForm((current) => ({ ...current, description: value }))}
-                  placeholder="문제 현상과 영향 범위를 입력하세요"
-                  rows={5}
-                />
-                <FieldTextarea
-                  label="재현 단계"
-                  value={form.reproductionSteps}
-                  onChange={(value) => setForm((current) => ({ ...current, reproductionSteps: value }))}
-                  placeholder="1. 재현에 필요한 단계를 입력하세요"
-                  rows={7}
-                />
-                <FieldTextarea
-                  label="체크리스트"
-                  value={form.checklistText}
-                  onChange={(value) => setForm((current) => ({ ...current, checklistText: value }))}
-                  placeholder="한 줄에 하나씩 확인 항목을 입력하세요"
-                  rows={5}
-                />
+                </FormField>
+                <FormField label="설명">
+                  <TextAreaField
+                    value={form.description}
+                    onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
+                    placeholder="문제 현상과 영향 범위를 입력하세요"
+                    rows={5}
+                  />
+                </FormField>
+                <FormField label="재현 단계">
+                  <TextAreaField
+                    value={form.reproductionSteps}
+                    onChange={(event) => setForm((current) => ({ ...current, reproductionSteps: event.target.value }))}
+                    placeholder="1. 재현에 필요한 단계를 입력하세요"
+                    rows={7}
+                  />
+                </FormField>
+                <FormField label="체크리스트">
+                  <TextAreaField
+                    value={form.checklistText}
+                    onChange={(event) => setForm((current) => ({ ...current, checklistText: event.target.value }))}
+                    placeholder="한 줄에 하나씩 확인 항목을 입력하세요"
+                    rows={5}
+                  />
+                </FormField>
 
                 <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-muted)] p-4">
                   <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-[var(--text-primary)]">
@@ -709,38 +723,21 @@ export function DefectManager() {
                 </div>
               </div>
             </div>
-
-            <div className="flex justify-end gap-2 border-t border-[var(--border-subtle)] px-6 py-4">
-              <button
-                type="button"
-                onClick={closeDrawer}
-                className="h-10 rounded-md border border-[var(--border-subtle)] px-4 text-sm font-medium hover:bg-[var(--surface-muted)]"
-              >
-                취소
-              </button>
-              <button
-                type="button"
-                onClick={saveDefect}
-                className="h-10 rounded-md bg-[var(--brand-primary)] px-4 text-sm font-semibold text-white hover:bg-[var(--brand-primary-hover)]"
-              >
-                저장
-              </button>
-            </div>
-          </aside>
-        </div>
+        </DrawerShell>
       )}
 
       {deleteTarget && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/30 p-4">
-          <div className="w-full max-w-md rounded-lg bg-white p-5 shadow-2xl">
-            <h3 className="text-lg font-semibold text-[var(--text-primary)]">결함 삭제</h3>
-            <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">
-              {deleteTarget === "selected"
-                ? `선택한 ${selectedIds.length}개 결함을 삭제할까요?`
-                : `${deleteTarget.id} 결함을 삭제할까요?`}
-              이 작업은 mock 목록에서만 제거됩니다.
-            </p>
-            <div className="mt-5 flex justify-end gap-2">
+        <DialogShell
+          title="결함 삭제"
+          description={
+            deleteTarget === "selected"
+              ? `선택한 ${selectedIds.length}개 결함을 삭제할까요?`
+              : `${deleteTarget.id} 결함을 삭제할까요?`
+          }
+          onClose={() => setDeleteTarget(null)}
+          maxWidth="max-w-md"
+          footer={
+            <div className="flex justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setDeleteTarget(null)}
@@ -756,66 +753,14 @@ export function DefectManager() {
                 삭제
               </button>
             </div>
+          }
+        >
+          <div className="text-sm leading-6 text-[var(--text-secondary)]">
+            이 작업은 mock 목록에서만 제거됩니다.
           </div>
-        </div>
+        </DialogShell>
       )}
     </div>
-  );
-}
-
-function FieldSelect({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  options: [string, string][];
-  onChange: (value: string) => void;
-}) {
-  return (
-    <label className="block">
-      <span className="mb-1 block text-xs font-semibold text-[var(--text-tertiary)]">{label}</span>
-      <select
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="h-9 w-full rounded-md border border-[var(--border-subtle)] bg-white px-3 text-sm outline-none focus:border-[var(--brand-primary)]"
-      >
-        {options.map(([optionValue, optionLabel]) => (
-          <option key={optionValue} value={optionValue}>
-            {optionLabel}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
-
-function FieldTextarea({
-  label,
-  value,
-  placeholder,
-  rows,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  placeholder: string;
-  rows: number;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <label className="block">
-      <span className="mb-1 block text-sm font-semibold text-[var(--text-primary)]">{label}</span>
-      <textarea
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        rows={rows}
-        placeholder={placeholder}
-        className="w-full resize-none rounded-md border border-[var(--border-subtle)] bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-[var(--brand-primary)] focus:ring-2 focus:ring-blue-100"
-      />
-    </label>
   );
 }
 

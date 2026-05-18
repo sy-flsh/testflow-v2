@@ -9,12 +9,13 @@ import {
   Paperclip,
   Pause,
   Play,
-  X,
   XCircle,
 } from "lucide-react";
 import { useMemo, useState } from "react";
+import { DialogShell } from "@/components/common/dialog-shell";
 import { EmptyState } from "@/components/common/empty-state";
 import { PriorityBadge } from "@/components/common/priority-badge";
+import { FormField, SelectField, TextAreaField } from "@/components/common/form-field";
 import { StatusBadge } from "@/components/common/status-badge";
 import { addMockDefectFromRunResult } from "@/lib/mock/mock-store";
 import { cn } from "@/lib/utils";
@@ -445,51 +446,13 @@ function DefectDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 px-4">
-      <div className="w-full max-w-lg rounded-lg border border-[var(--border-default)] bg-white shadow-xl">
-        <header className="flex h-14 items-center justify-between border-b border-[var(--border-default)] px-5">
-          <h2 className="text-base font-semibold">결함 등록</h2>
-          <button
-            onClick={onClose}
-            className="flex h-8 w-8 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-muted)]"
-            aria-label="닫기"
-          >
-            <X className="tf-icon" />
-          </button>
-        </header>
-        <div className="space-y-4 px-5 py-5">
-          <p className="rounded-md bg-[var(--bg-subtle)] px-3 py-2 text-sm text-[var(--text-secondary)]">
-            연관 TC: {result.testCase.id} {result.testCase.title}
-          </p>
-          <label className="block text-sm font-medium">
-            제목 <span className="text-[var(--status-fail)]">*</span>
-            <input
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              className={cn(
-                "mt-2 h-10 w-full rounded-md border px-3 text-sm outline-none focus:border-[var(--brand-primary)]",
-                submitted && !title.trim()
-                  ? "border-[var(--status-fail)]"
-                  : "border-[var(--border-default)]",
-              )}
-            />
-          </label>
-          <div className="grid gap-3 md:grid-cols-2">
-            <SimpleSelect label="심각도" options={["Critical", "Major", "Minor", "Trivial"]} />
-            <SimpleSelect label="우선순위" options={["High", "Medium", "Low"]} />
-          </div>
-          <label className="block text-sm font-medium">
-            재현 단계
-            <textarea
-              defaultValue={result.testCase.steps
-                .map((step, index) => `${index + 1}. ${step}`)
-                .join("\n")}
-              rows={5}
-              className="mt-2 w-full resize-none rounded-md border border-[var(--border-default)] px-3 py-2 text-sm outline-none focus:border-[var(--brand-primary)]"
-            />
-          </label>
-        </div>
-        <footer className="flex justify-end gap-2 border-t border-[var(--border-default)] px-5 py-4">
+    <DialogShell
+      title="결함 등록"
+      description={`연관 TC: ${result.testCase.id} ${result.testCase.title}`}
+      onClose={onClose}
+      maxWidth="max-w-lg"
+      footer={
+        <div className="flex justify-end gap-2">
           <button
             onClick={onClose}
             className="h-9 rounded-md border border-[var(--border-default)] bg-white px-3 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
@@ -502,21 +465,45 @@ function DefectDialog({
           >
             결함 등록
           </button>
-        </footer>
+        </div>
+      }
+    >
+      <div className="space-y-4">
+        <p className="rounded-md bg-[var(--bg-subtle)] px-3 py-2 text-sm text-[var(--text-secondary)]">
+          연관 TC: {result.testCase.id} {result.testCase.title}
+        </p>
+        <FormField label="제목" required error={submitted && !title.trim() ? "제목을 입력하세요." : undefined}>
+          <TextAreaField
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+            rows={1}
+            className="min-h-10"
+          />
+        </FormField>
+        <div className="grid gap-3 md:grid-cols-2">
+          <FormField label="심각도">
+            <SelectField defaultValue="Critical">
+              <option>Critical</option>
+              <option>Major</option>
+              <option>Minor</option>
+              <option>Trivial</option>
+            </SelectField>
+          </FormField>
+          <FormField label="우선순위">
+            <SelectField defaultValue="High">
+              <option>High</option>
+              <option>Medium</option>
+              <option>Low</option>
+            </SelectField>
+          </FormField>
+        </div>
+        <FormField label="재현 단계">
+          <TextAreaField
+            defaultValue={result.testCase.steps.map((step, index) => `${index + 1}. ${step}`).join("\n")}
+            rows={5}
+          />
+        </FormField>
       </div>
-    </div>
-  );
-}
-
-function SimpleSelect({ label, options }: { label: string; options: string[] }) {
-  return (
-    <label className="block text-sm font-medium">
-      {label}
-      <select className="mt-2 h-10 w-full rounded-md border border-[var(--border-default)] bg-white px-3 text-sm outline-none focus:border-[var(--brand-primary)]">
-        {options.map((option) => (
-          <option key={option}>{option}</option>
-        ))}
-      </select>
-    </label>
+    </DialogShell>
   );
 }

@@ -10,12 +10,13 @@ import {
   Plus,
   Search,
   Trash2,
-  X,
   XCircle,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { EmptyState } from "@/components/common/empty-state";
+import { DialogShell } from "@/components/common/dialog-shell";
+import { FormField, TextAreaField, TextInput } from "@/components/common/form-field";
 import type { Project, ProjectStatus } from "@/lib/domain/types";
 import { projectStatusLabels as statusLabels } from "@/lib/domain/labels";
 import { loadMockProjects, saveMockProjects } from "@/lib/mock/mock-store";
@@ -398,8 +399,7 @@ function CreateProjectDialog({
   const [submitted, setSubmitted] = useState(false);
   const nameError = submitted && name.trim().length === 0;
 
-  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  function submitProject() {
     setSubmitted(true);
 
     if (!name.trim()) {
@@ -413,88 +413,24 @@ function CreateProjectDialog({
     });
   }
 
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSubmitted(true);
+
+    if (!name.trim()) {
+      return;
+    }
+    submitProject();
+  }
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 px-4">
-      <form
-        onSubmit={handleSubmit}
-        className="w-full max-w-lg rounded-lg border border-[var(--border-default)] bg-white shadow-xl"
-      >
-        <div className="flex h-14 items-center justify-between border-b border-[var(--border-default)] px-5">
-          <h2 className="text-base font-semibold">새 프로젝트 만들기</h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex h-8 w-8 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-muted)] hover:text-[var(--text-primary)]"
-            aria-label="닫기"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        <div className="space-y-5 px-5 py-5">
-          <label className="block text-sm font-medium">
-            프로젝트 이름 <span className="text-[var(--status-fail)]">*</span>
-            <input
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              maxLength={50}
-              className={cn(
-                "mt-2 h-10 w-full rounded-md border px-3 text-sm outline-none placeholder:text-[var(--text-tertiary)] focus:border-[var(--brand-primary)]",
-                nameError
-                  ? "border-[var(--status-fail)]"
-                  : "border-[var(--border-default)]",
-              )}
-              placeholder="예: 결제 시스템 v2"
-            />
-            {nameError && (
-              <span className="mt-1 block text-xs text-[var(--status-fail)]">
-                프로젝트 이름을 입력하세요.
-              </span>
-            )}
-          </label>
-
-          <label className="block text-sm font-medium">
-            설명
-            <textarea
-              value={description}
-              onChange={(event) => setDescription(event.target.value)}
-              maxLength={200}
-              rows={3}
-              className="mt-2 w-full resize-none rounded-md border border-[var(--border-default)] px-3 py-2 text-sm outline-none placeholder:text-[var(--text-tertiary)] focus:border-[var(--brand-primary)]"
-              placeholder="프로젝트 설명을 입력하세요"
-            />
-          </label>
-
-          <div>
-            <p className="mb-2 text-sm font-medium">컬러 라벨</p>
-            <div className="flex flex-wrap gap-2">
-              {colorOptions.map((color) => (
-                <button
-                  key={color}
-                  type="button"
-                  onClick={() => setSelectedColor(color)}
-                  className={cn(
-                    "h-8 w-8 rounded-full border-2",
-                    selectedColor === color
-                      ? "border-[var(--text-primary)]"
-                      : "border-white",
-                  )}
-                  style={{ backgroundColor: color }}
-                  aria-label={`${color} 라벨 선택`}
-                />
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <p className="mb-2 text-sm font-medium">멤버 초대</p>
-            <div className="rounded-md border border-[var(--border-default)] bg-[var(--bg-subtle)] px-3 py-2 text-sm text-[var(--text-tertiary)]">
-              멤버 초대는 후속 Phase에서 연결합니다.
-            </div>
-          </div>
-        </div>
-
-        <div className="flex justify-end gap-2 border-t border-[var(--border-default)] px-5 py-4">
+    <DialogShell
+      title="새 프로젝트 만들기"
+      description="프로젝트 정보를 입력해 mock 목록에 추가합니다."
+      onClose={onClose}
+      maxWidth="max-w-lg"
+      footer={
+        <div className="flex justify-end gap-2">
           <button
             type="button"
             onClick={onClose}
@@ -503,14 +439,62 @@ function CreateProjectDialog({
             취소
           </button>
           <button
-            type="submit"
+            type="button"
+            onClick={submitProject}
             className="h-9 rounded-md bg-[var(--brand-primary)] px-3 text-sm font-medium text-white hover:bg-[var(--brand-primary-hover)]"
           >
             프로젝트 생성
           </button>
         </div>
+      }
+    >
+      <form onSubmit={handleSubmit} className="space-y-5">
+        <FormField label="프로젝트 이름" required error={nameError ? "프로젝트 이름을 입력하세요." : undefined}>
+          <TextInput
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            maxLength={50}
+            placeholder="예: 결제 시스템 v2"
+          />
+        </FormField>
+
+        <FormField label="설명">
+          <TextAreaField
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+            maxLength={200}
+            rows={3}
+            placeholder="프로젝트 설명을 입력하세요"
+          />
+        </FormField>
+
+        <div>
+          <p className="mb-2 text-sm font-medium">컬러 라벨</p>
+          <div className="flex flex-wrap gap-2">
+            {colorOptions.map((color) => (
+              <button
+                key={color}
+                type="button"
+                onClick={() => setSelectedColor(color)}
+                className={cn(
+                  "h-8 w-8 rounded-full border-2",
+                  selectedColor === color ? "border-[var(--text-primary)]" : "border-white",
+                )}
+                style={{ backgroundColor: color }}
+                aria-label={`${color} 라벨 선택`}
+              />
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <p className="mb-2 text-sm font-medium">멤버 초대</p>
+          <div className="rounded-md border border-[var(--border-default)] bg-[var(--bg-subtle)] px-3 py-2 text-sm text-[var(--text-tertiary)]">
+            멤버 초대는 후속 Phase에서 연결합니다.
+          </div>
+        </div>
       </form>
-    </div>
+    </DialogShell>
   );
 }
 
@@ -524,16 +508,17 @@ function DeleteProjectDialog({
   onConfirm: () => void;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 px-4">
-      <div className="w-full max-w-md rounded-lg border border-[var(--border-default)] bg-white shadow-xl">
-        <div className="border-b border-[var(--border-default)] px-5 py-4">
-          <h2 className="text-base font-semibold">프로젝트 삭제</h2>
-          <p className="mt-2 text-sm text-[var(--text-secondary)]">
-            <span className="font-medium">{project.name}</span> 프로젝트를 mock
-            목록에서 삭제할까요?
-          </p>
-        </div>
-        <div className="flex justify-end gap-2 px-5 py-4">
+    <DialogShell
+      title="프로젝트 삭제"
+      description={
+        <>
+          <span className="font-medium">{project.name}</span> 프로젝트를 mock 목록에서 삭제할까요?
+        </>
+      }
+      onClose={onClose}
+      maxWidth="max-w-md"
+      footer={
+        <div className="flex justify-end gap-2">
           <button
             onClick={onClose}
             className="h-9 rounded-md border border-[var(--border-default)] bg-white px-3 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
@@ -547,8 +532,10 @@ function DeleteProjectDialog({
             삭제
           </button>
         </div>
-      </div>
-    </div>
+      }
+    >
+      <div className="text-sm text-[var(--text-secondary)]">이 작업은 mock 목록에서만 제거됩니다.</div>
+    </DialogShell>
   );
 }
 

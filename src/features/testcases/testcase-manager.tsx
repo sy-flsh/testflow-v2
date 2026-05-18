@@ -11,10 +11,13 @@ import {
   Search,
   Tag,
   Upload,
-  X,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { EmptyState } from "@/components/common/empty-state";
+import { DialogShell } from "@/components/common/dialog-shell";
+import { DrawerShell } from "@/components/common/drawer-shell";
+import { FormField, SelectField, TextAreaField, TextInput } from "@/components/common/form-field";
+import { TableActionBar } from "@/components/common/action-bar";
 import { PriorityBadge } from "@/components/common/priority-badge";
 import type { Priority, TestCase, TestCaseStatus as TcStatus, TestFolder } from "@/lib/domain/types";
 import {
@@ -323,16 +326,11 @@ export function TestCaseManager() {
 
         <section className="min-w-0 border-t border-[var(--border-default)] lg:border-l lg:border-t-0">
           {selectedIds.length > 0 && (
-            <div className="flex items-center justify-between border-b border-[var(--border-default)] bg-blue-50 px-4 py-3">
-              <p className="text-sm font-medium text-[var(--brand-primary)]">
-                {selectedIds.length}개 선택됨
-              </p>
-              <div className="flex items-center gap-2">
-                <BulkButton onClick={deleteSelected}>삭제</BulkButton>
-                <BulkButton onClick={addTagToSelected}>태그 추가</BulkButton>
-                <BulkButton onClick={moveSelectedFolder}>폴더 이동</BulkButton>
-              </div>
-            </div>
+            <TableActionBar count={selectedIds.length} className="rounded-none border-x-0 border-t-0">
+              <BulkButton onClick={deleteSelected}>삭제</BulkButton>
+              <BulkButton onClick={addTagToSelected}>태그 추가</BulkButton>
+              <BulkButton onClick={moveSelectedFolder}>폴더 이동</BulkButton>
+            </TableActionBar>
           )}
 
           {visibleTestCases.length === 0 ? (
@@ -540,132 +538,13 @@ function TestCaseDrawer({
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/20">
-      <aside className="ml-auto flex h-full w-full max-w-[640px] flex-col border-l border-[var(--border-default)] bg-white shadow-xl">
-        <header className="flex h-14 items-center justify-between border-b border-[var(--border-default)] px-5">
-          <div>
-            <p className="text-xs text-[var(--text-tertiary)]">
-              {draft.id ?? "새 테스트케이스"}
-            </p>
-            <h2 className="text-base font-semibold">
-              {draft.id ? "TC 상세/편집" : "새 테스트케이스"}
-            </h2>
-          </div>
-          <button
-            onClick={onClose}
-            className="flex h-8 w-8 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-muted)]"
-            aria-label="Drawer 닫기"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </header>
-
-        <div className="flex-1 space-y-5 overflow-y-auto px-5 py-5">
-          <label className="block text-sm font-medium">
-            제목 <span className="text-[var(--status-fail)]">*</span>
-            <input
-              value={draft.title}
-              onChange={(event) => update("title", event.target.value)}
-              className={cn(
-                "mt-2 h-10 w-full rounded-md border px-3 text-sm outline-none focus:border-[var(--brand-primary)]",
-                titleError
-                  ? "border-[var(--status-fail)]"
-                  : "border-[var(--border-default)]",
-              )}
-              placeholder="테스트케이스 제목"
-            />
-            {titleError && (
-              <span className="mt-1 block text-xs text-[var(--status-fail)]">
-                제목을 입력하세요.
-              </span>
-            )}
-          </label>
-
-          <div className="grid gap-3 md:grid-cols-2">
-            <label className="block text-sm font-medium">
-              우선순위
-              <select
-                value={draft.priority}
-                onChange={(event) =>
-                  update("priority", event.target.value as Priority)
-                }
-                className="mt-2 h-10 w-full rounded-md border border-[var(--border-default)] bg-white px-3 text-sm outline-none focus:border-[var(--brand-primary)]"
-              >
-                <option value="high">High</option>
-                <option value="medium">Medium</option>
-                <option value="low">Low</option>
-              </select>
-            </label>
-            <label className="block text-sm font-medium">
-              폴더
-              <select
-                value={draft.folderId}
-                onChange={(event) => update("folderId", event.target.value)}
-                className="mt-2 h-10 w-full rounded-md border border-[var(--border-default)] bg-white px-3 text-sm outline-none focus:border-[var(--brand-primary)]"
-              >
-                {folders
-                  .filter((folder) => folder.id !== "all")
-                  .map((folder) => (
-                    <option key={folder.id} value={folder.id}>
-                      {folder.parentId ? "ㄴ " : ""}
-                      {folder.label}
-                    </option>
-                  ))}
-              </select>
-            </label>
-          </div>
-
-          <label className="block text-sm font-medium">
-            태그
-            <div className="relative mt-2">
-              <Tag className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-tertiary)]" />
-              <input
-                value={draft.tagsText}
-                onChange={(event) => update("tagsText", event.target.value)}
-                className="h-10 w-full rounded-md border border-[var(--border-default)] pl-9 pr-3 text-sm outline-none focus:border-[var(--brand-primary)]"
-                placeholder="smoke, payment"
-              />
-            </div>
-          </label>
-
-          <TextareaField
-            label="설명"
-            value={draft.description}
-            onChange={(value) => update("description", value)}
-            rows={3}
-          />
-          <TextareaField
-            label="사전 조건"
-            value={draft.preconditions}
-            onChange={(value) => update("preconditions", value)}
-            rows={4}
-          />
-          <TextareaField
-            label="실행 단계"
-            value={draft.stepsText}
-            onChange={(value) => update("stepsText", value)}
-            rows={5}
-            placeholder="1. 결제 페이지 진입&#10;2. 카드 정보 입력"
-          />
-          <TextareaField
-            label="기대 결과"
-            value={draft.expectedResult}
-            onChange={(value) => update("expectedResult", value)}
-            rows={4}
-          />
-
-          <div className="rounded-lg border border-dashed border-[var(--border-strong)] bg-[var(--bg-subtle)] p-4">
-            <div className="mb-2 flex items-center gap-2 text-sm font-medium">
-              <Paperclip className="h-4 w-4" />
-              첨부 파일
-            </div>
-            <p className="text-sm text-[var(--text-secondary)]">
-              첨부 파일 업로드는 후속 단계에서 구현합니다.
-            </p>
-          </div>
-        </div>
-
-        <footer className="flex justify-end gap-2 border-t border-[var(--border-default)] px-5 py-4">
+    <DrawerShell
+      title={draft.id ? "TC 상세/편집" : "새 테스트케이스"}
+      description={draft.id ?? "새 테스트케이스"}
+      onClose={onClose}
+      widthClassName="max-w-[640px]"
+      footer={
+        <div className="flex justify-end gap-2">
           <button
             onClick={onClose}
             className="h-9 rounded-md border border-[var(--border-default)] bg-white px-3 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
@@ -678,9 +557,99 @@ function TestCaseDrawer({
           >
             저장
           </button>
-        </footer>
-      </aside>
-    </div>
+        </div>
+      }
+    >
+      <div className="space-y-5 px-5 py-5">
+        <FormField label="제목" required error={titleError ? "제목을 입력하세요." : undefined}>
+          <TextInput
+            value={draft.title}
+            onChange={(event) => update("title", event.target.value)}
+            placeholder="테스트케이스 제목"
+          />
+        </FormField>
+
+        <div className="grid gap-3 md:grid-cols-2">
+          <FormField label="우선순위">
+            <SelectField
+              value={draft.priority}
+              onChange={(event) => update("priority", event.target.value as Priority)}
+            >
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+            </SelectField>
+          </FormField>
+          <FormField label="폴더">
+            <SelectField
+              value={draft.folderId}
+              onChange={(event) => update("folderId", event.target.value)}
+            >
+              {folders
+                .filter((folder) => folder.id !== "all")
+                .map((folder) => (
+                  <option key={folder.id} value={folder.id}>
+                    {folder.parentId ? "ㄴ " : ""}
+                    {folder.label}
+                  </option>
+                ))}
+            </SelectField>
+          </FormField>
+        </div>
+
+        <FormField label="태그">
+          <div className="relative">
+            <Tag className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-tertiary)]" />
+            <TextInput
+              value={draft.tagsText}
+              onChange={(event) => update("tagsText", event.target.value)}
+              placeholder="smoke, payment"
+              className="pl-9"
+            />
+          </div>
+        </FormField>
+
+        <FormField label="설명">
+          <TextAreaField
+            value={draft.description}
+            onChange={(event) => update("description", event.target.value)}
+            rows={3}
+          />
+        </FormField>
+        <FormField label="사전 조건">
+          <TextAreaField
+            value={draft.preconditions}
+            onChange={(event) => update("preconditions", event.target.value)}
+            rows={4}
+          />
+        </FormField>
+        <FormField label="실행 단계">
+          <TextAreaField
+            value={draft.stepsText}
+            onChange={(event) => update("stepsText", event.target.value)}
+            rows={5}
+            placeholder="1. 결제 페이지 진입&#10;2. 카드 정보 입력"
+          />
+        </FormField>
+        <FormField label="기대 결과">
+          <TextAreaField
+            value={draft.expectedResult}
+            onChange={(event) => update("expectedResult", event.target.value)}
+            rows={4}
+          />
+        </FormField>
+
+        <div className="rounded-lg border border-dashed border-[var(--border-strong)] bg-[var(--bg-subtle)] p-4">
+          <div className="mb-2 flex items-center gap-2 text-sm font-medium">
+            <Paperclip className="h-4 w-4" />
+            첨부 파일
+          </div>
+          <p className="text-sm text-[var(--text-secondary)]">
+            첨부 파일 업로드는 후속 단계에서 구현합니다.
+          </p>
+        </div>
+      </div>
+    </DrawerShell>
   );
 }
 
@@ -688,59 +657,13 @@ function ExcelUploadModal({ onClose }: { onClose: () => void }) {
   const [hasMockFile, setHasMockFile] = useState(false);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 px-4">
-      <div className="w-full max-w-xl rounded-lg border border-[var(--border-default)] bg-white shadow-xl">
-        <header className="flex h-14 items-center justify-between border-b border-[var(--border-default)] px-5">
-          <h2 className="text-base font-semibold">엑셀 파일 업로드</h2>
-          <button
-            onClick={onClose}
-            className="flex h-8 w-8 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-muted)]"
-            aria-label="닫기"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </header>
-
-        <div className="space-y-5 px-5 py-5">
-          <button className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border-default)] bg-white px-3 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]">
-            <Download className="h-4 w-4" />
-            엑셀 템플릿 다운로드
-          </button>
-          <p className="text-sm text-[var(--text-secondary)]">
-            먼저 표준 템플릿을 다운로드하세요. 실제 파일 파싱은 후속 단계에서
-            연결합니다.
-          </p>
-
-          <div className="rounded-lg border-2 border-dashed border-[var(--border-strong)] bg-[var(--bg-subtle)] px-6 py-10 text-center">
-            <Upload className="mx-auto h-8 w-8 text-[var(--text-tertiary)]" />
-            <p className="mt-3 text-sm font-medium">
-              파일을 끌어다 놓거나 선택하세요
-            </p>
-            <p className="mt-1 text-xs text-[var(--text-secondary)]">
-              지원 예정: .xlsx, .xls, .csv
-            </p>
-            <button
-              onClick={() => setHasMockFile(true)}
-              className="mt-4 h-9 rounded-md bg-[var(--brand-primary)] px-3 text-sm font-medium text-white hover:bg-[var(--brand-primary-hover)]"
-            >
-              파일 선택
-            </button>
-          </div>
-
-          <section className="rounded-lg border border-[var(--border-default)] p-4">
-            <h3 className="mb-3 text-sm font-semibold">업로드 후 미리보기</h3>
-            <div className="space-y-2 text-sm">
-              <PreviewItem
-                ok={hasMockFile}
-                text={hasMockFile ? "인식된 행: 45개" : "파일 선택 대기 중"}
-              />
-              <PreviewItem ok={hasMockFile} text="컬럼 매핑 확인" />
-              <PreviewItem ok={!hasMockFile} warning text="2개 행에 누락된 필드" />
-            </div>
-          </section>
-        </div>
-
-        <footer className="flex justify-end gap-2 border-t border-[var(--border-default)] px-5 py-4">
+    <DialogShell
+      title="엑셀 파일 업로드"
+      description="먼저 표준 템플릿을 다운로드하세요. 실제 파일 파싱은 후속 단계에서 연결합니다."
+      onClose={onClose}
+      maxWidth="max-w-xl"
+      footer={
+        <div className="flex justify-end gap-2">
           <button
             onClick={onClose}
             className="h-9 rounded-md border border-[var(--border-default)] bg-white px-3 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
@@ -753,36 +676,36 @@ function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           >
             업로드 실행
           </button>
-        </footer>
-      </div>
-    </div>
-  );
-}
+        </div>
+      }
+    >
+      <div className="space-y-5">
+        <button className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border-default)] bg-white px-3 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]">
+          <Download className="h-4 w-4" />
+          엑셀 템플릿 다운로드
+        </button>
+        <div className="rounded-lg border-2 border-dashed border-[var(--border-strong)] bg-[var(--bg-subtle)] px-6 py-10 text-center">
+          <Upload className="mx-auto h-8 w-8 text-[var(--text-tertiary)]" />
+          <p className="mt-3 text-sm font-medium">파일을 끌어다 놓거나 선택하세요</p>
+          <p className="mt-1 text-xs text-[var(--text-secondary)]">지원 예정: .xlsx, .xls, .csv</p>
+          <button
+            onClick={() => setHasMockFile(true)}
+            className="mt-4 h-9 rounded-md bg-[var(--brand-primary)] px-3 text-sm font-medium text-white hover:bg-[var(--brand-primary-hover)]"
+          >
+            파일 선택
+          </button>
+        </div>
 
-function TextareaField({
-  label,
-  value,
-  onChange,
-  rows,
-  placeholder,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  rows: number;
-  placeholder?: string;
-}) {
-  return (
-    <label className="block text-sm font-medium">
-      {label}
-      <textarea
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        rows={rows}
-        className="mt-2 w-full resize-none rounded-md border border-[var(--border-default)] px-3 py-2 text-sm outline-none placeholder:text-[var(--text-tertiary)] focus:border-[var(--brand-primary)]"
-        placeholder={placeholder}
-      />
-    </label>
+        <section className="rounded-lg border border-[var(--border-default)] p-4">
+          <h3 className="mb-3 text-sm font-semibold">업로드 후 미리보기</h3>
+          <div className="space-y-2 text-sm">
+            <PreviewItem ok={hasMockFile} text={hasMockFile ? "인식된 행: 45개" : "파일 선택 대기 중"} />
+            <PreviewItem ok={hasMockFile} text="컬럼 매핑 확인" />
+            <PreviewItem ok={!hasMockFile} warning text="2개 행에 누락된 필드" />
+          </div>
+        </section>
+      </div>
+    </DialogShell>
   );
 }
 

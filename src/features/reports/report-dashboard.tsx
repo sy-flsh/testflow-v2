@@ -12,11 +12,12 @@ import {
   Lock,
   Share2,
   Timer,
-  X,
 } from "lucide-react";
 import { EmptyState } from "@/components/common/empty-state";
+import { DialogShell } from "@/components/common/dialog-shell";
 import { PriorityBadge } from "@/components/common/priority-badge";
 import { StatusBadge } from "@/components/common/status-badge";
+import { FormField, SelectField } from "@/components/common/form-field";
 import { priorityLabels } from "@/lib/domain/labels";
 import type { Defect, TestRun } from "@/lib/domain/types";
 import {
@@ -158,35 +159,41 @@ export function ReportDashboard() {
       <section className="tf-card p-4">
         <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
           <div className="grid flex-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <FieldSelect
-              label="기간"
-              value={filter.period}
-              onChange={(value) => updateFilter("period", value as ReportFilter["period"])}
-              options={[
-                ["7d", "최근 7일"],
-                ["14d", "최근 14일"],
-                ["30d", "최근 30일"],
-                ["custom", "사용자 지정"],
-              ]}
-            />
-            <FieldSelect
-              label="플랜"
-              value={filter.plan}
-              onChange={(value) => updateFilter("plan", value)}
-              options={plans.map((plan) => [plan, plan])}
-            />
-            <FieldSelect
-              label="담당자"
-              value={filter.assignee}
-              onChange={(value) => updateFilter("assignee", value)}
-              options={assignees.map((assignee) => [assignee, assignee])}
-            />
-            <FieldSelect
-              label="환경"
-              value={filter.environment}
-              onChange={(value) => updateFilter("environment", value)}
-              options={environments.map((environment) => [environment, environment])}
-            />
+            <FormField label="기간">
+              <SelectField value={filter.period} onChange={(event) => updateFilter("period", event.target.value as ReportFilter["period"])}>
+                <option value="7d">최근 7일</option>
+                <option value="14d">최근 14일</option>
+                <option value="30d">최근 30일</option>
+                <option value="custom">사용자 지정</option>
+              </SelectField>
+            </FormField>
+            <FormField label="플랜">
+              <SelectField value={filter.plan} onChange={(event) => updateFilter("plan", event.target.value)}>
+                {plans.map((plan) => (
+                  <option key={plan} value={plan}>
+                    {plan}
+                  </option>
+                ))}
+              </SelectField>
+            </FormField>
+            <FormField label="담당자">
+              <SelectField value={filter.assignee} onChange={(event) => updateFilter("assignee", event.target.value)}>
+                {assignees.map((assignee) => (
+                  <option key={assignee} value={assignee}>
+                    {assignee}
+                  </option>
+                ))}
+              </SelectField>
+            </FormField>
+            <FormField label="환경">
+              <SelectField value={filter.environment} onChange={(event) => updateFilter("environment", event.target.value)}>
+                {environments.map((environment) => (
+                  <option key={environment} value={environment}>
+                    {environment}
+                  </option>
+                ))}
+              </SelectField>
+            </FormField>
           </div>
           <div className="flex flex-wrap gap-2">
             <button
@@ -279,63 +286,13 @@ export function ReportDashboard() {
       )}
 
       {shareOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 p-4">
-          <div className="w-full max-w-lg rounded-lg bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-5 py-4">
-              <div>
-                <h2 className="text-lg font-semibold text-[var(--text-primary)]">공유 링크 생성</h2>
-                <p className="mt-1 text-sm text-[var(--text-secondary)]">
-                  실제 공유 링크 발급은 후속 Phase에서 API로 연결합니다.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShareOpen(false)}
-                className="inline-flex h-9 w-9 items-center justify-center rounded-md hover:bg-[var(--surface-muted)]"
-                aria-label="공유 Dialog 닫기"
-              >
-                <X className="tf-icon" />
-              </button>
-            </div>
-            <div className="space-y-4 p-5">
-              <FieldSelect
-                label="만료 기간"
-                value={expiry}
-                onChange={setExpiry}
-                options={[
-                  ["1", "1일"],
-                  ["7", "7일"],
-                  ["30", "30일"],
-                  ["never", "만료 없음"],
-                ]}
-              />
-              <ToggleRow
-                icon={Lock}
-                title="비밀번호 보호"
-                description="공유 링크 접근 시 비밀번호 입력을 요구합니다."
-                checked={passwordProtected}
-                onChange={setPasswordProtected}
-              />
-              <ToggleRow
-                icon={Bug}
-                title="결함 상세 공개"
-                description="Top Failed TC와 연결된 결함 상세를 함께 표시합니다."
-                checked={includeDefects}
-                onChange={setIncludeDefects}
-              />
-              {shareCreated && (
-                <div className="rounded-md border border-blue-200 bg-blue-50 p-3">
-                  <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-blue-800">
-                    <Link2 className="tf-icon" />
-                    생성된 mock 링크
-                  </div>
-                  <div className="break-all rounded-md bg-white px-3 py-2 text-sm text-[var(--text-secondary)]">
-                    https://testflow.local/share/report-demo-7d
-                  </div>
-                </div>
-              )}
-            </div>
-            <div className="flex justify-end gap-2 border-t border-[var(--border-subtle)] px-5 py-4">
+        <DialogShell
+          title="공유 링크 생성"
+          description="실제 공유 링크 발급은 후속 Phase에서 API로 연결합니다."
+          onClose={() => setShareOpen(false)}
+          maxWidth="max-w-lg"
+          footer={
+            <div className="flex justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setShareOpen(false)}
@@ -352,39 +309,46 @@ export function ReportDashboard() {
                 링크 생성
               </button>
             </div>
+          }
+        >
+          <div className="space-y-4">
+            <FormField label="만료 기간">
+              <SelectField value={expiry} onChange={(event) => setExpiry(event.target.value)}>
+                <option value="1">1일</option>
+                <option value="7">7일</option>
+                <option value="30">30일</option>
+                <option value="never">만료 없음</option>
+              </SelectField>
+            </FormField>
+            <ToggleRow
+              icon={Lock}
+              title="비밀번호 보호"
+              description="공유 링크 접근 시 비밀번호 입력을 요구합니다."
+              checked={passwordProtected}
+              onChange={setPasswordProtected}
+            />
+            <ToggleRow
+              icon={Bug}
+              title="결함 상세 공개"
+              description="Top Failed TC와 연결된 결함 상세를 함께 표시합니다."
+              checked={includeDefects}
+              onChange={setIncludeDefects}
+            />
+            {shareCreated && (
+              <div className="rounded-md border border-blue-200 bg-blue-50 p-3">
+                <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-blue-800">
+                  <Link2 className="tf-icon" />
+                  생성된 mock 링크
+                </div>
+                <div className="break-all rounded-md bg-white px-3 py-2 text-sm text-[var(--text-secondary)]">
+                  https://testflow.local/share/report-demo-7d
+                </div>
+              </div>
+            )}
           </div>
-        </div>
+        </DialogShell>
       )}
     </div>
-  );
-}
-
-function FieldSelect({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  options: [string, string][];
-  onChange: (value: string) => void;
-}) {
-  return (
-    <label className="block">
-      <span className="mb-1 block text-xs font-semibold text-[var(--text-tertiary)]">{label}</span>
-      <select
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="h-10 w-full rounded-md border border-[var(--border-subtle)] bg-white px-3 text-sm outline-none focus:border-[var(--brand-primary)]"
-      >
-        {options.map(([optionValue, optionLabel]) => (
-          <option key={optionValue} value={optionValue}>
-            {optionLabel}
-          </option>
-        ))}
-      </select>
-    </label>
   );
 }
 
