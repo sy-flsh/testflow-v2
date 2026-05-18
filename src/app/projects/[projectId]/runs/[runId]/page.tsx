@@ -1,12 +1,16 @@
-import { Play } from "lucide-react";
 import { AppShell } from "@/components/layout/app-shell";
 import { ProjectHeader } from "@/components/layout/project-header";
 import { Breadcrumbs } from "@/components/common/breadcrumbs";
-import { EmptyState } from "@/components/common/empty-state";
 import { PageHeader } from "@/components/common/page-header";
-import { StatusBadge } from "@/components/common/status-badge";
+import { TestRunRunner } from "@/features/test-runs/test-run-runner";
 
-export default function TestRunDetailPage() {
+export default async function TestRunDetailPage({
+  params,
+}: {
+  params: Promise<{ runId: string }>;
+}) {
+  const { runId } = await params;
+
   return (
     <AppShell>
       <Breadcrumbs
@@ -20,14 +24,9 @@ export default function TestRunDetailPage() {
       <ProjectHeader activeTab="runs" />
       <PageHeader
         title="테스트 실행 상세"
-        description="Runner 화면 또는 Drawer 기반 실행 패널이 들어갈 화면입니다."
-        actions={<StatusBadge status="pending" label="미실행" />}
+        description="테스터가 TC를 하나씩 확인하며 결과를 기록하는 실행 화면입니다."
       />
-      <EmptyState
-        icon={Play}
-        title="Runner 화면 구현 예정"
-        description="Pass, Fail, Block, Skip 상태 저장과 다음 TC 이동 UX를 후속 작업에서 연결합니다."
-      />
+      <TestRunRunner runId={runId} />
     </AppShell>
   );
 }
