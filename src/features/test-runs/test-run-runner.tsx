@@ -16,6 +16,7 @@ import { useMemo, useState } from "react";
 import { EmptyState } from "@/components/common/empty-state";
 import { PriorityBadge } from "@/components/common/priority-badge";
 import { StatusBadge } from "@/components/common/status-badge";
+import { addMockDefectFromRunResult } from "@/lib/mock/mock-store";
 import { cn } from "@/lib/utils";
 import {
   loadMockRuns,
@@ -124,11 +125,13 @@ export function TestRunRunner({ runId }: { runId: string }) {
     }
   }
 
-  function registerDefect() {
+  function registerDefect(title: string) {
     if (!run || !defectTarget) {
       setDefectTarget(null);
       return;
     }
+
+    addMockDefectFromRunResult({ result: defectTarget, title });
 
     const nextRuns = runs.map((item) =>
       item.id === run.id
@@ -265,7 +268,13 @@ export function TestRunRunner({ runId }: { runId: string }) {
             />
           </div>
 
-          <InfoBox title="사전 조건" items={activeResult.testCase.preconditions} />
+          <InfoBox
+            title="사전 조건"
+            items={activeResult.testCase.preconditions
+              .split("\n")
+              .map((item) => item.replace(/^-\s*/, "").trim())
+              .filter(Boolean)}
+          />
           <InfoBox title="실행 단계" items={activeResult.testCase.steps} ordered />
           <div className="mb-5 rounded-lg bg-[var(--bg-subtle)] p-4">
             <h3 className="mb-2 text-sm font-semibold">기대 결과</h3>
@@ -422,7 +431,7 @@ function DefectDialog({
 }: {
   result: MockRunResult;
   onClose: () => void;
-  onSubmit: () => void;
+  onSubmit: (title: string) => void;
 }) {
   const [title, setTitle] = useState(`${result.testCase.title} 실패`);
   const [submitted, setSubmitted] = useState(false);
@@ -432,7 +441,7 @@ function DefectDialog({
     if (!title.trim()) {
       return;
     }
-    onSubmit();
+    onSubmit(title);
   }
 
   return (

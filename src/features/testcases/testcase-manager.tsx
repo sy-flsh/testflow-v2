@@ -16,31 +16,14 @@ import {
 import { useMemo, useState } from "react";
 import { EmptyState } from "@/components/common/empty-state";
 import { PriorityBadge } from "@/components/common/priority-badge";
+import type { Priority, TestCase, TestCaseStatus as TcStatus, TestFolder } from "@/lib/domain/types";
+import {
+  priorityLabels,
+  testCaseStatusLabels as statusLabels,
+} from "@/lib/domain/labels";
+import { mockTestFolders } from "@/lib/mock/mock-data";
+import { loadMockTestCases, saveMockTestCases } from "@/lib/mock/mock-store";
 import { cn } from "@/lib/utils";
-
-type Priority = "high" | "medium" | "low";
-type TcStatus = "ready" | "draft" | "deprecated";
-
-type TestCase = {
-  id: string;
-  title: string;
-  priority: Priority;
-  status: TcStatus;
-  folderId: string;
-  tags: string[];
-  author: string;
-  updatedAtLabel: string;
-  description: string;
-  preconditions: string;
-  steps: string[];
-  expectedResult: string;
-};
-
-type FolderNode = {
-  id: string;
-  label: string;
-  parentId?: string;
-};
 
 type Draft = {
   id?: string;
@@ -54,46 +37,10 @@ type Draft = {
   expectedResult: string;
 };
 
-const folders: FolderNode[] = [
-  { id: "all", label: "전체" },
-  { id: "payment", label: "결제 모듈" },
-  { id: "payment-checkout", label: "결제하기", parentId: "payment" },
-  { id: "refund", label: "환불", parentId: "payment" },
-  { id: "payment-method", label: "결제수단", parentId: "payment" },
-  { id: "signup", label: "회원가입" },
-  { id: "mypage", label: "마이페이지" },
-  { id: "search", label: "검색" },
-];
-
-const statusLabels: Record<TcStatus, string> = {
-  ready: "Ready",
-  draft: "Draft",
-  deprecated: "Deprecated",
-};
-
-const priorityLabels: Record<Priority, string> = {
-  high: "High",
-  medium: "Medium",
-  low: "Low",
-};
-
-const initialTestCases: TestCase[] = [
-  createTc("TC-001", "정상 카드 결제 성공 시나리오", "high", "ready", "payment-checkout", ["smoke", "payment"], "홍길동", "2시간 전"),
-  createTc("TC-002", "잔액 부족 시 결제 실패 처리", "high", "ready", "payment-checkout", ["payment", "error"], "홍길동", "2시간 전"),
-  createTc("TC-003", "환불 요청 후 영수증 발행 확인", "medium", "ready", "refund", ["refund"], "김QA", "어제"),
-  createTc("TC-004", "결제 수단 변경 후 재결제", "medium", "draft", "payment-method", ["payment"], "김QA", "어제"),
-  createTc("TC-005", "결제 중 네트워크 단절 시 복구", "high", "ready", "payment-checkout", ["payment", "edge"], "홍길동", "2일 전"),
-  createTc("TC-006", "카드 한도 초과 메시지 표시", "medium", "ready", "payment-checkout", ["card", "limit"], "이PM", "2일 전"),
-  createTc("TC-007", "3D 인증 실패 후 재시도", "high", "draft", "payment-method", ["3ds", "payment"], "박개발", "3일 전"),
-  createTc("TC-008", "부분 환불 금액 계산 확인", "medium", "ready", "refund", ["refund", "amount"], "김QA", "3일 전"),
-  createTc("TC-009", "신규 회원 가입 정상 플로우", "high", "ready", "signup", ["signup", "smoke"], "최QA", "4일 전"),
-  createTc("TC-010", "약관 미동의 시 가입 차단", "medium", "ready", "signup", ["signup", "terms"], "최QA", "4일 전"),
-  createTc("TC-011", "마이페이지 주문 내역 조회", "medium", "ready", "mypage", ["mypage", "order"], "홍길동", "5일 전"),
-  createTc("TC-012", "검색어 자동완성 결과 표시", "low", "draft", "search", ["search"], "이PM", "5일 전"),
-];
+const folders: TestFolder[] = mockTestFolders;
 
 export function TestCaseManager() {
-  const [testCases, setTestCases] = useState(initialTestCases);
+  const [testCases, setTestCases] = useState(() => loadMockTestCases());
   const [selectedFolderId, setSelectedFolderId] = useState("all");
   const [query, setQuery] = useState("");
   const [tagFilter, setTagFilter] = useState("all");
@@ -195,34 +142,34 @@ export function TestCaseManager() {
       .filter(Boolean);
 
     if (drawerDraft.id) {
-      setTestCases((current) =>
-        current.map((tc) =>
-          tc.id === drawerDraft.id
-            ? {
-                ...tc,
-                title: drawerDraft.title.trim(),
-                priority: drawerDraft.priority,
-                folderId: drawerDraft.folderId,
-                tags,
-                description: drawerDraft.description,
-                preconditions: drawerDraft.preconditions,
-                steps,
-                expectedResult: drawerDraft.expectedResult,
-                updatedAtLabel: "방금 전",
-              }
-            : tc,
-        ),
+      const nextTestCases = testCases.map((tc) =>
+        tc.id === drawerDraft.id
+          ? {
+              ...tc,
+              title: drawerDraft.title.trim(),
+              priority: drawerDraft.priority,
+              folderId: drawerDraft.folderId,
+              tags,
+              description: drawerDraft.description,
+              preconditions: drawerDraft.preconditions,
+              steps,
+              expectedResult: drawerDraft.expectedResult,
+              updatedAtLabel: "방금 전",
+            }
+          : tc,
       );
+      setTestCases(nextTestCases);
+      saveMockTestCases(nextTestCases);
     } else {
       const nextIndex = testCases.length + 1;
       const nextId = `TC-${String(nextIndex).padStart(3, "0")}`;
 
-      setTestCases((current) => [
+      const nextTestCases: TestCase[] = [
         {
           id: nextId,
           title: drawerDraft.title.trim(),
           priority: drawerDraft.priority,
-          status: "draft",
+          status: "draft" as const,
           folderId: drawerDraft.folderId,
           tags,
           author: "홍길동",
@@ -232,8 +179,10 @@ export function TestCaseManager() {
           steps,
           expectedResult: drawerDraft.expectedResult,
         },
-        ...current,
-      ]);
+        ...testCases,
+      ];
+      setTestCases(nextTestCases);
+      saveMockTestCases(nextTestCases);
     }
 
     setDrawerDraft(null);
@@ -261,30 +210,30 @@ export function TestCaseManager() {
   }
 
   function deleteSelected() {
-    setTestCases((current) =>
-      current.filter((tc) => !selectedIds.includes(tc.id)),
-    );
+    const nextTestCases = testCases.filter((tc) => !selectedIds.includes(tc.id));
+    setTestCases(nextTestCases);
+    saveMockTestCases(nextTestCases);
     setSelectedIds([]);
   }
 
   function addTagToSelected() {
-    setTestCases((current) =>
-      current.map((tc) =>
+    const nextTestCases = testCases.map((tc) =>
         selectedIds.includes(tc.id) && !tc.tags.includes("bulk")
           ? { ...tc, tags: [...tc.tags, "bulk"], updatedAtLabel: "방금 전" }
           : tc,
-      ),
     );
+    setTestCases(nextTestCases);
+    saveMockTestCases(nextTestCases);
   }
 
   function moveSelectedFolder() {
-    setTestCases((current) =>
-      current.map((tc) =>
+    const nextTestCases = testCases.map((tc) =>
         selectedIds.includes(tc.id)
           ? { ...tc, folderId: "payment-checkout", updatedAtLabel: "방금 전" }
           : tc,
-      ),
     );
+    setTestCases(nextTestCases);
+    saveMockTestCases(nextTestCases);
   }
 
   return (
@@ -875,32 +824,6 @@ function PreviewItem({
       {text}
     </div>
   );
-}
-
-function createTc(
-  id: string,
-  title: string,
-  priority: Priority,
-  status: TcStatus,
-  folderId: string,
-  tags: string[],
-  author: string,
-  updatedAtLabel: string,
-): TestCase {
-  return {
-    id,
-    title,
-    priority,
-    status,
-    folderId,
-    tags,
-    author,
-    updatedAtLabel,
-    description: `${title}에 대한 검증 시나리오입니다.`,
-    preconditions: "- 테스트 계정으로 로그인되어 있다.\n- 테스트 데이터가 준비되어 있다.",
-    steps: ["대상 화면에 진입한다.", "필수 값을 입력한다.", "결과를 확인한다."],
-    expectedResult: "사용자에게 올바른 결과와 안내 메시지가 표시된다.",
-  };
 }
 
 function isInFolder(testCaseFolderId: string, selectedFolderId: string) {

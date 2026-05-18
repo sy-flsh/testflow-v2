@@ -16,31 +16,12 @@ import {
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { EmptyState } from "@/components/common/empty-state";
+import type { Project, ProjectStatus } from "@/lib/domain/types";
+import { projectStatusLabels as statusLabels } from "@/lib/domain/labels";
+import { loadMockProjects, saveMockProjects } from "@/lib/mock/mock-store";
 import { cn } from "@/lib/utils";
 
-type ProjectStatus = "active" | "completed" | "archived";
 type ViewMode = "card" | "table";
-
-type Project = {
-  id: string;
-  name: string;
-  description: string;
-  color: string;
-  status: ProjectStatus;
-  progress: number;
-  testCaseCount: number;
-  passCount: number;
-  failCount: number;
-  members: string[];
-  updatedAtLabel: string;
-  createdAtOrder: number;
-};
-
-const statusLabels: Record<ProjectStatus, string> = {
-  active: "진행중",
-  completed: "완료",
-  archived: "보관됨",
-};
 
 const colorOptions = [
   "#2563EB",
@@ -52,138 +33,9 @@ const colorOptions = [
   "#EF4444",
 ];
 
-const initialProjects: Project[] = [
-  {
-    id: "demo-project",
-    name: "결제 시스템 v2",
-    description: "결제 모듈 개편",
-    color: "#2563EB",
-    status: "active",
-    progress: 72,
-    testCaseCount: 145,
-    passCount: 89,
-    failCount: 5,
-    members: ["홍", "김", "이", "박", "최", "정"],
-    updatedAtLabel: "2시간 전",
-    createdAtOrder: 9,
-  },
-  {
-    id: "signup-flow",
-    name: "회원가입 플로우",
-    description: "신규 가입 개선",
-    color: "#10B981",
-    status: "active",
-    progress: 95,
-    testCaseCount: 56,
-    passCount: 53,
-    failCount: 1,
-    members: ["김", "이", "박"],
-    updatedAtLabel: "어제",
-    createdAtOrder: 8,
-  },
-  {
-    id: "checkout-improvement",
-    name: "체크아웃 개선",
-    description: "장바구니 UX",
-    color: "#8B5CF6",
-    status: "active",
-    progress: 30,
-    testCaseCount: 42,
-    passCount: 12,
-    failCount: 0,
-    members: ["홍", "최"],
-    updatedAtLabel: "3시간 전",
-    createdAtOrder: 7,
-  },
-  {
-    id: "mobile-app-v3",
-    name: "모바일 앱 v3",
-    description: "iOS/Android 동시",
-    color: "#F59E0B",
-    status: "active",
-    progress: 60,
-    testCaseCount: 88,
-    passCount: 50,
-    failCount: 3,
-    members: ["홍", "김", "박", "최"],
-    updatedAtLabel: "5시간 전",
-    createdAtOrder: 6,
-  },
-  {
-    id: "admin-console",
-    name: "관리자 페이지",
-    description: "내부 도구 개편",
-    color: "#EC4899",
-    status: "active",
-    progress: 15,
-    testCaseCount: 23,
-    passCount: 3,
-    failCount: 1,
-    members: ["이", "박"],
-    updatedAtLabel: "1일 전",
-    createdAtOrder: 5,
-  },
-  {
-    id: "notification-system",
-    name: "알림 시스템",
-    description: "Push/SMS 통합",
-    color: "#14B8A6",
-    status: "completed",
-    progress: 100,
-    testCaseCount: 34,
-    passCount: 34,
-    failCount: 0,
-    members: ["홍", "김", "이"],
-    updatedAtLabel: "2일 전",
-    createdAtOrder: 4,
-  },
-  {
-    id: "api-v2-migration",
-    name: "API v2 마이그레이션",
-    description: "REST에서 GraphQL 전환",
-    color: "#EF4444",
-    status: "active",
-    progress: 45,
-    testCaseCount: 67,
-    passCount: 28,
-    failCount: 2,
-    members: ["박", "최", "정"],
-    updatedAtLabel: "4시간 전",
-    createdAtOrder: 3,
-  },
-  {
-    id: "search-rebuild",
-    name: "검색 기능 개편",
-    description: "Elasticsearch 도입",
-    color: "#CA8A04",
-    status: "active",
-    progress: 80,
-    testCaseCount: 39,
-    passCount: 30,
-    failCount: 1,
-    members: ["홍", "정"],
-    updatedAtLabel: "6시간 전",
-    createdAtOrder: 2,
-  },
-  {
-    id: "dark-mode",
-    name: "다크모드 도입",
-    description: "전체 UI 다크 테마",
-    color: "#64748B",
-    status: "archived",
-    progress: 25,
-    testCaseCount: 18,
-    passCount: 4,
-    failCount: 0,
-    members: ["김", "최"],
-    updatedAtLabel: "1일 전",
-    createdAtOrder: 1,
-  },
-];
-
 export function ProjectList() {
   const router = useRouter();
-  const [projects, setProjects] = useState(initialProjects);
+  const [projects, setProjects] = useState(() => loadMockProjects());
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<ProjectStatus | "all">("all");
   const [sortBy, setSortBy] = useState<"updated" | "name" | "created">(
@@ -241,7 +93,9 @@ export function ProjectList() {
       createdAtOrder: projects.length + 1,
     };
 
-    setProjects((current) => [nextProject, ...current]);
+    const nextProjects = [nextProject, ...projects];
+    setProjects(nextProjects);
+    saveMockProjects(nextProjects);
     setCreateOpen(false);
   }
 
@@ -250,9 +104,9 @@ export function ProjectList() {
       return;
     }
 
-    setProjects((current) =>
-      current.filter((project) => project.id !== deleteTarget.id),
-    );
+    const nextProjects = projects.filter((project) => project.id !== deleteTarget.id);
+    setProjects(nextProjects);
+    saveMockProjects(nextProjects);
     setDeleteTarget(null);
   }
 

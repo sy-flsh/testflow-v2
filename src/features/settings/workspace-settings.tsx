@@ -16,19 +16,11 @@ import {
   Users,
   X,
 } from "lucide-react";
+import type { Member, MemberRole } from "@/lib/domain/types";
+import { mockMembers, mockPendingInvites } from "@/lib/mock/mock-data";
 import { cn } from "@/lib/utils";
 
 type SettingsTab = "general" | "members" | "roles" | "danger";
-type MemberRole = "Admin" | "Member" | "Viewer";
-
-type Member = {
-  id: string;
-  name: string;
-  email: string;
-  role: MemberRole;
-  status: "active" | "pending";
-  lastActive: string;
-};
 
 const workspaceName = "TestFlow QA";
 
@@ -37,60 +29,6 @@ const tabs: Array<{ id: SettingsTab; label: string; description: string; icon: L
   { id: "members", label: "멤버", description: "멤버와 초대 관리", icon: Users },
   { id: "roles", label: "역할 및 권한", description: "MVP 권한 정책 보기", icon: Crown },
   { id: "danger", label: "위험구역", description: "삭제 등 위험 작업", icon: AlertTriangle },
-];
-
-const initialMembers: Member[] = [
-  {
-    id: "mem-1",
-    name: "김QA",
-    email: "qa.lead@testflow.local",
-    role: "Admin",
-    status: "active",
-    lastActive: "방금 전",
-  },
-  {
-    id: "mem-2",
-    name: "박개발",
-    email: "backend@testflow.local",
-    role: "Member",
-    status: "active",
-    lastActive: "오늘 10:12",
-  },
-  {
-    id: "mem-3",
-    name: "이프론트",
-    email: "frontend@testflow.local",
-    role: "Member",
-    status: "active",
-    lastActive: "어제",
-  },
-  {
-    id: "mem-4",
-    name: "정PM",
-    email: "pm@testflow.local",
-    role: "Viewer",
-    status: "active",
-    lastActive: "3일 전",
-  },
-];
-
-const pendingInvites: Member[] = [
-  {
-    id: "inv-1",
-    name: "초대 대기",
-    email: "new.qa@testflow.local",
-    role: "Member",
-    status: "pending",
-    lastActive: "2026-05-18 발송",
-  },
-  {
-    id: "inv-2",
-    name: "초대 대기",
-    email: "viewer@testflow.local",
-    role: "Viewer",
-    status: "pending",
-    lastActive: "2026-05-17 발송",
-  },
 ];
 
 const roleCards: Array<{
@@ -148,7 +86,7 @@ export function WorkspaceSettings() {
 
   const filteredMembers = useMemo(() => {
     const lowered = memberQuery.trim().toLowerCase();
-    return initialMembers.filter((member) => {
+    return mockMembers.filter((member) => {
       const matchesQuery =
         !lowered ||
         member.name.toLowerCase().includes(lowered) ||
@@ -228,7 +166,7 @@ export function WorkspaceSettings() {
         {activeTab === "members" && (
           <MembersTab
             members={filteredMembers}
-            pendingInvites={pendingInvites}
+            pendingInvites={mockPendingInvites}
             query={memberQuery}
             roleFilter={roleFilter}
             onQueryChange={setMemberQuery}
