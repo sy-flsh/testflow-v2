@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   BarChart3,
   Bug,
@@ -17,6 +17,24 @@ import {
 import { EmptyState } from "@/components/common/empty-state";
 import { PriorityBadge } from "@/components/common/priority-badge";
 import { StatusBadge } from "@/components/common/status-badge";
+import { priorityLabels } from "@/lib/domain/labels";
+import type { Defect, TestRun } from "@/lib/domain/types";
+import {
+  calculatePassRate,
+  countResults,
+  flattenRunResults,
+  summarizeByAssignee,
+  summarizeByFolder,
+  summarizeByRunDate,
+  summarizeDefectTrend,
+  summarizeTopFailedTestCases,
+  type DailyResultSummary,
+  type DefectTrendSummary,
+  type GroupedResultSummary,
+  type TopFailedTestCase,
+} from "@/lib/domain/summary";
+import { mockDefects, mockTestFolders, mockTestRuns } from "@/lib/mock/mock-data";
+import { loadMockDefects, loadMockRuns } from "@/lib/mock/mock-store";
 
 type ReportFilter = {
   period: "7d" | "14d" | "30d" | "custom";
@@ -25,114 +43,16 @@ type ReportFilter = {
   environment: string;
 };
 
-type DailyTrend = {
-  date: string;
-  total: number;
-  passed: number;
-  failed: number;
-  blocked: number;
-  skipped: number;
+const resultRatioColors = {
+  passed: "#10B981",
+  failed: "#EF4444",
+  blocked: "#F59E0B",
+  skipped: "#64748B",
 };
-
-type TopFailedCase = {
-  id: string;
-  title: string;
-  folder: string;
-  failCount: number;
-  blockCount: number;
-  linkedDefects: number;
-  priority: "high" | "medium" | "low";
-  lastFailedAt: string;
-};
-
-const plans = ["전체 플랜", "Sprint 12 회귀 테스트", "결제 모듈 Smoke Test", "출시 전 최종 검증"];
-const assignees = ["전체 담당자", "김QA", "홍길동", "정QA"];
-const environments = ["전체 환경", "QA Server", "Staging", "Prod Mirror"];
-
-const dailyTrends: DailyTrend[] = [
-  { date: "05/12", total: 18, passed: 14, failed: 2, blocked: 1, skipped: 1 },
-  { date: "05/13", total: 24, passed: 18, failed: 3, blocked: 2, skipped: 1 },
-  { date: "05/14", total: 31, passed: 22, failed: 5, blocked: 3, skipped: 1 },
-  { date: "05/15", total: 27, passed: 20, failed: 4, blocked: 2, skipped: 1 },
-  { date: "05/16", total: 34, passed: 27, failed: 4, blocked: 2, skipped: 1 },
-  { date: "05/17", total: 42, passed: 33, failed: 5, blocked: 2, skipped: 2 },
-  { date: "05/18", total: 29, passed: 23, failed: 3, blocked: 2, skipped: 1 },
-];
-
-const resultRatio = [
-  { label: "Pass", value: 157, color: "#10B981" },
-  { label: "Fail", value: 26, color: "#EF4444" },
-  { label: "Block", value: 14, color: "#F59E0B" },
-  { label: "Skip", value: 8, color: "#64748B" },
-];
-
-const assigneeResults = [
-  { name: "김QA", pass: 64, fail: 10, block: 5, skip: 3 },
-  { name: "홍길동", pass: 48, fail: 7, block: 4, skip: 2 },
-  { name: "정QA", pass: 45, fail: 9, block: 5, skip: 3 },
-];
-
-const categoryResults = [
-  { name: "결제하기", pass: 54, fail: 13, block: 6 },
-  { name: "환불", pass: 33, fail: 5, block: 3 },
-  { name: "회원가입", pass: 38, fail: 4, block: 2 },
-  { name: "마이페이지", pass: 32, fail: 4, block: 3 },
-];
-
-const defectTrend = [
-  { date: "05/12", open: 3, resolved: 1 },
-  { date: "05/13", open: 5, resolved: 2 },
-  { date: "05/14", open: 9, resolved: 3 },
-  { date: "05/15", open: 8, resolved: 5 },
-  { date: "05/16", open: 7, resolved: 6 },
-  { date: "05/17", open: 6, resolved: 8 },
-  { date: "05/18", open: 5, resolved: 10 },
-];
-
-const topFailedCases: TopFailedCase[] = [
-  {
-    id: "TC-002",
-    title: "잔액 부족 시 결제 실패 처리",
-    folder: "결제하기",
-    failCount: 5,
-    blockCount: 1,
-    linkedDefects: 2,
-    priority: "high",
-    lastFailedAt: "2026-05-18",
-  },
-  {
-    id: "TC-005",
-    title: "결제 중 네트워크 단절 시 복구",
-    folder: "결제하기",
-    failCount: 4,
-    blockCount: 2,
-    linkedDefects: 1,
-    priority: "high",
-    lastFailedAt: "2026-05-17",
-  },
-  {
-    id: "TC-003",
-    title: "환불 요청 후 영수증 발행 확인",
-    folder: "환불",
-    failCount: 3,
-    blockCount: 1,
-    linkedDefects: 1,
-    priority: "medium",
-    lastFailedAt: "2026-05-16",
-  },
-  {
-    id: "TC-008",
-    title: "검색어 자동완성 결과 표시",
-    folder: "검색",
-    failCount: 2,
-    blockCount: 0,
-    linkedDefects: 1,
-    priority: "low",
-    lastFailedAt: "2026-05-15",
-  },
-];
 
 export function ReportDashboard() {
+  const [runs, setRuns] = useState<TestRun[]>(mockTestRuns);
+  const [defects, setDefects] = useState<Defect[]>(mockDefects);
   const [filter, setFilter] = useState<ReportFilter>({
     period: "7d",
     plan: "전체 플랜",
@@ -146,21 +66,79 @@ export function ReportDashboard() {
   const [passwordProtected, setPasswordProtected] = useState(true);
   const [includeDefects, setIncludeDefects] = useState(true);
 
-  const hasData = filter.plan !== "출시 전 최종 검증";
+  useEffect(() => {
+    setRuns(loadMockRuns());
+    setDefects(loadMockDefects());
+  }, []);
+
+  const plans = useMemo(() => ["전체 플랜", ...runs.map((run) => run.title)], [runs]);
+  const assignees = useMemo(
+    () => ["전체 담당자", ...Array.from(new Set(runs.map((run) => run.assignee)))],
+    [runs],
+  );
+  const environments = useMemo(
+    () => ["전체 환경", ...Array.from(new Set(runs.map((run) => run.environment)))],
+    [runs],
+  );
+  const filteredRuns = useMemo(
+    () =>
+      runs.filter((run) => {
+        const matchesPlan = filter.plan === "전체 플랜" || run.title === filter.plan;
+        const matchesAssignee = filter.assignee === "전체 담당자" || run.assignee === filter.assignee;
+        const matchesEnvironment = filter.environment === "전체 환경" || run.environment === filter.environment;
+        return matchesPlan && matchesAssignee && matchesEnvironment;
+      }),
+    [filter.assignee, filter.environment, filter.plan, runs],
+  );
+  const filteredResultIds = useMemo(
+    () => new Set(flattenRunResults(filteredRuns).map((result) => result.id)),
+    [filteredRuns],
+  );
+  const filteredDefects = useMemo(() => {
+    if (filter.plan === "전체 플랜" && filter.assignee === "전체 담당자" && filter.environment === "전체 환경") {
+      return defects;
+    }
+
+    return defects.filter((defect) => defect.linkedRunResultId && filteredResultIds.has(defect.linkedRunResultId));
+  }, [defects, filter.assignee, filter.environment, filter.plan, filteredResultIds]);
+  const results = useMemo(() => flattenRunResults(filteredRuns), [filteredRuns]);
+  const resultCounts = useMemo(() => countResults(results), [results]);
+  const dailyTrends = useMemo(() => summarizeByRunDate(filteredRuns), [filteredRuns]);
+  const resultRatio = useMemo(
+    () => [
+      { label: "Pass", value: resultCounts.passed, color: resultRatioColors.passed },
+      { label: "Fail", value: resultCounts.failed, color: resultRatioColors.failed },
+      { label: "Block", value: resultCounts.blocked, color: resultRatioColors.blocked },
+      { label: "Skip", value: resultCounts.skipped, color: resultRatioColors.skipped },
+    ],
+    [resultCounts],
+  );
+  const assigneeResults = useMemo(() => summarizeByAssignee(filteredRuns), [filteredRuns]);
+  const categoryResults = useMemo(() => summarizeByFolder(results, mockTestFolders), [results]);
+  const defectTrend = useMemo(() => summarizeDefectTrend(filteredDefects), [filteredDefects]);
+  const topFailedCases = useMemo(
+    () => summarizeTopFailedTestCases(filteredRuns, filteredDefects, mockTestFolders),
+    [filteredDefects, filteredRuns],
+  );
+  const hasData = results.length > 0;
 
   const kpis = useMemo(() => {
-    const total = dailyTrends.reduce((sum, item) => sum + item.total, 0);
-    const passed = dailyTrends.reduce((sum, item) => sum + item.passed, 0);
-    const defects = resultRatio.find((item) => item.label === "Fail")?.value ?? 0;
-    const passRate = total > 0 ? Math.round((passed / total) * 100) : 0;
+    const total = results.length;
+    const passRate = calculatePassRate(results);
+    const criticalCount = filteredDefects.filter((defect) => defect.severity === "critical").length;
 
     return [
-      { label: "총 실행", value: total.toLocaleString("ko-KR"), detail: "최근 7일 기준", icon: BarChart3 },
-      { label: "Pass 비율", value: `${passRate}%`, detail: "전주 대비 +4.2%", icon: CheckCircle2 },
-      { label: "발견 결함", value: defects.toString(), detail: "Critical 3건 포함", icon: Bug },
-      { label: "평균 실행 시간", value: "4분 18초", detail: "TC 1건 평균", icon: Timer },
+      { label: "총 실행", value: total.toLocaleString("ko-KR"), detail: "선택 조건 Result 기준", icon: BarChart3 },
+      { label: "Pass 비율", value: `${passRate}%`, detail: "Pending 제외 계산", icon: CheckCircle2 },
+      {
+        label: "발견 결함",
+        value: filteredDefects.length.toString(),
+        detail: `Critical ${criticalCount}건 포함`,
+        icon: Bug,
+      },
+      { label: "평균 실행 시간", value: "4분 18초", detail: "실측 데이터 연결 전 mock 값", icon: Timer },
     ];
-  }, []);
+  }, [filteredDefects, results]);
 
   function updateFilter<Key extends keyof ReportFilter>(key: Key, value: ReportFilter[Key]) {
     setFilter((current) => ({ ...current, [key]: value }));
@@ -278,7 +256,7 @@ export function ReportDashboard() {
               <DailyExecutionChart data={dailyTrends} />
             </ChartCard>
             <ChartCard title="결과 비율" description="Pass / Fail / Block / Skip 구성">
-              <DonutChart />
+              <DonutChart data={resultRatio} />
             </ChartCard>
           </section>
 
@@ -287,15 +265,15 @@ export function ReportDashboard() {
               <StackedBars data={assigneeResults} />
             </ChartCard>
             <ChartCard title="카테고리별 결과" description="업무 영역별 품질 신호">
-              <CategoryBars />
+              <CategoryBars data={categoryResults} />
             </ChartCard>
           </section>
 
           <section className="grid gap-5 xl:grid-cols-[0.95fr_1.25fr]">
             <ChartCard title="결함 트렌드" description="일별 Open / Resolved 변화">
-              <DefectTrendChart />
+              <DefectTrendChart data={defectTrend} />
             </ChartCard>
-            <TopFailedTable />
+            <TopFailedTable data={topFailedCases} />
           </section>
         </>
       )}
@@ -439,8 +417,8 @@ function ChartCard({
   );
 }
 
-function DailyExecutionChart({ data }: { data: DailyTrend[] }) {
-  const maxTotal = Math.max(...data.map((item) => item.total));
+function DailyExecutionChart({ data }: { data: DailyResultSummary[] }) {
+  const maxTotal = Math.max(...data.map((item) => item.total), 1);
 
   return (
     <div className="flex h-64 items-end gap-3">
@@ -459,16 +437,20 @@ function DailyExecutionChart({ data }: { data: DailyTrend[] }) {
   );
 }
 
-function DonutChart() {
-  const total = resultRatio.reduce((sum, item) => sum + item.value, 0);
+function DonutChart({
+  data,
+}: {
+  data: Array<{ label: string; value: number; color: string }>;
+}) {
+  const total = data.reduce((sum, item) => sum + item.value, 0);
   let offset = 25;
 
   return (
     <div className="flex flex-col items-center gap-5 md:flex-row md:justify-center">
       <svg viewBox="0 0 44 44" className="h-44 w-44 -rotate-90">
         <circle cx="22" cy="22" r="15.9155" fill="transparent" stroke="#E2E8F0" strokeWidth="6" />
-        {resultRatio.map((item) => {
-          const dash = (item.value / total) * 100;
+        {data.map((item) => {
+          const dash = total > 0 ? (item.value / total) * 100 : 0;
           const circle = (
             <circle
               key={item.label}
@@ -487,7 +469,7 @@ function DonutChart() {
         })}
       </svg>
       <div className="space-y-2">
-        {resultRatio.map((item) => (
+        {data.map((item) => (
           <div key={item.label} className="flex items-center justify-between gap-8 text-sm">
             <span className="flex items-center gap-2 text-[var(--text-secondary)]">
               <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: item.color }} />
@@ -504,7 +486,7 @@ function DonutChart() {
 function StackedBars({
   data,
 }: {
-  data: Array<{ name: string; pass: number; fail: number; block: number; skip: number }>;
+  data: GroupedResultSummary[];
 }) {
   return (
     <div className="space-y-4">
@@ -517,10 +499,10 @@ function StackedBars({
               <span className="text-[var(--text-tertiary)]">{total}건</span>
             </div>
             <div className="flex h-4 overflow-hidden rounded-full bg-[var(--surface-muted)]">
-              <div className="bg-emerald-500" style={{ width: `${(item.pass / total) * 100}%` }} />
-              <div className="bg-red-500" style={{ width: `${(item.fail / total) * 100}%` }} />
-              <div className="bg-amber-500" style={{ width: `${(item.block / total) * 100}%` }} />
-              <div className="bg-slate-400" style={{ width: `${(item.skip / total) * 100}%` }} />
+              <div className="bg-emerald-500" style={{ width: `${total > 0 ? (item.pass / total) * 100 : 0}%` }} />
+              <div className="bg-red-500" style={{ width: `${total > 0 ? (item.fail / total) * 100 : 0}%` }} />
+              <div className="bg-amber-500" style={{ width: `${total > 0 ? (item.block / total) * 100 : 0}%` }} />
+              <div className="bg-slate-400" style={{ width: `${total > 0 ? (item.skip / total) * 100 : 0}%` }} />
             </div>
           </div>
         );
@@ -529,13 +511,13 @@ function StackedBars({
   );
 }
 
-function CategoryBars() {
-  const max = Math.max(...categoryResults.map((item) => item.pass + item.fail + item.block));
+function CategoryBars({ data }: { data: GroupedResultSummary[] }) {
+  const max = Math.max(...data.map((item) => item.pass + item.fail + item.block + item.skip), 1);
 
   return (
     <div className="space-y-4">
-      {categoryResults.map((item) => {
-        const total = item.pass + item.fail + item.block;
+      {data.map((item) => {
+        const total = item.pass + item.fail + item.block + item.skip;
         return (
           <div key={item.name} className="grid grid-cols-[88px_1fr_44px] items-center gap-3">
             <span className="text-sm font-medium text-[var(--text-primary)]">{item.name}</span>
@@ -555,12 +537,12 @@ function CategoryBars() {
   );
 }
 
-function DefectTrendChart() {
-  const max = Math.max(...defectTrend.flatMap((item) => [item.open, item.resolved]));
+function DefectTrendChart({ data }: { data: DefectTrendSummary[] }) {
+  const max = Math.max(...data.flatMap((item) => [item.open, item.resolved]), 1);
 
   return (
     <div className="space-y-4">
-      {defectTrend.map((item) => (
+      {data.map((item) => (
         <div key={item.date} className="grid grid-cols-[52px_1fr] items-center gap-3">
           <span className="text-xs text-[var(--text-tertiary)]">{item.date}</span>
           <div className="space-y-1.5">
@@ -590,7 +572,7 @@ function DefectTrendChart() {
   );
 }
 
-function TopFailedTable() {
+function TopFailedTable({ data }: { data: TopFailedTestCase[] }) {
   return (
     <section className="tf-card overflow-hidden">
       <div className="border-b border-[var(--border-subtle)] p-5">
@@ -613,7 +595,7 @@ function TopFailedTable() {
             </tr>
           </thead>
           <tbody className="divide-y divide-[var(--border-subtle)]">
-            {topFailedCases.map((testCase) => (
+            {data.map((testCase) => (
               <tr key={testCase.id} className="hover:bg-blue-50/40">
                 <td className="px-4 py-3">
                   <div className="font-semibold text-[var(--brand-primary)]">{testCase.id}</div>
@@ -625,7 +607,7 @@ function TopFailedTable() {
                 <td className="px-4 py-3">
                   <PriorityBadge
                     priority={testCase.priority}
-                    label={testCase.priority === "high" ? "High" : testCase.priority === "medium" ? "Medium" : "Low"}
+                    label={priorityLabels[testCase.priority]}
                   />
                 </td>
                 <td className="px-4 py-3 text-right font-semibold text-red-600">{testCase.failCount}</td>
