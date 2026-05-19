@@ -12,14 +12,18 @@ import {
   Trash2,
   XCircle,
 } from "lucide-react";
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { EmptyState } from "@/components/common/empty-state";
 import { DialogShell } from "@/components/common/dialog-shell";
 import { FormField, TextAreaField, TextInput } from "@/components/common/form-field";
 import type { Project, ProjectStatus } from "@/lib/domain/types";
 import { projectStatusLabels as statusLabels } from "@/lib/domain/labels";
-import { loadMockProjects, saveMockProjects } from "@/lib/mock/mock-store";
+import {
+  loadMockProjects,
+  loadProjectBackupSnapshot,
+  saveProjectBackupSnapshot,
+} from "@/lib/mock/mock-store";
 import { cn } from "@/lib/utils";
 
 type ViewMode = "card" | "table";
@@ -36,7 +40,14 @@ const colorOptions = [
 
 export function ProjectList() {
   const router = useRouter();
-  const [projects, setProjects] = useState(() => loadMockProjects());
+  const [projects, setProjects] = useState<Project[]>(() => {
+    const snapshot = loadProjectBackupSnapshot();
+    return snapshot?.projects ?? [];
+  });
+  const [isLoading, setIsLoading] = useState(true);
+  const [isBackupMode, setIsBackupMode] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [actionError, setActionError] = useState("");
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<ProjectStatus | "all">("all");
   const [sortBy, setSortBy] = useState<"updated" | "name" | "created">(
@@ -45,6 +56,59 @@ export function ProjectList() {
   const [viewMode, setViewMode] = useState<ViewMode>("card");
   const [isCreateOpen, setCreateOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadProjects() {
+      setIsLoading(true);
+      setNotice("");
+      setActionError("");
+
+      try {
+        const apiProjects = await requestData<Project[]>("/api/projects");
+
+        if (!active) {
+          return;
+        }
+
+        setProjects(apiProjects);
+        saveProjectBackupSnapshot(apiProjects);
+        setIsBackupMode(false);
+      } catch {
+        if (!active) {
+          return;
+        }
+
+        const snapshot = loadProjectBackupSnapshot();
+
+        if (snapshot) {
+          setProjects(snapshot.projects);
+          setIsBackupMode(true);
+          setNotice(
+            `백업 데이터 표시 중입니다. 마지막 백업: ${formatBackupTime(snapshot.savedAt)}`,
+          );
+          setActionError("");
+        } else {
+          const legacyFallback = loadMockProjects();
+          setProjects(legacyFallback);
+          setIsBackupMode(true);
+          setNotice("API 연결에 실패해 기존 mock fallback 데이터를 표시 중입니다.");
+          setActionError("");
+        }
+      } finally {
+        if (active) {
+          setIsLoading(false);
+        }
+      }
+    }
+
+    void loadProjects();
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const visibleProjects = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -73,46 +137,79 @@ export function ProjectList() {
       });
   }, [projects, query, sortBy, statusFilter]);
 
-  function handleCreate(input: {
+  async function handleCreate(input: {
     name: string;
     description: string;
     color: string;
   }) {
-    const id = toProjectId(input.name);
-    const nextProject: Project = {
-      id,
-      name: input.name,
-      description: input.description || "새 프로젝트 설명",
-      color: input.color,
-      status: "active",
-      progress: 0,
-      testCaseCount: 0,
-      passCount: 0,
-      failCount: 0,
-      members: ["홍"],
-      updatedAtLabel: "방금 전",
-      createdAtOrder: projects.length + 1,
-    };
+    setActionError("");
 
-    const nextProjects = [nextProject, ...projects];
-    setProjects(nextProjects);
-    saveMockProjects(nextProjects);
-    setCreateOpen(false);
+    try {
+      const createdProject = await requestData<Project>("/api/projects", {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+
+      setProjects((currentProjects) => {
+        const nextProjects = [
+          createdProject,
+          ...currentProjects.filter((project) => project.id !== createdProject.id),
+        ];
+        saveProjectBackupSnapshot(nextProjects);
+        return nextProjects;
+      });
+      setIsBackupMode(false);
+      setNotice("");
+      setCreateOpen(false);
+      return true;
+    } catch (error) {
+      setActionError(getErrorMessage(error));
+      return false;
+    }
   }
 
-  function handleDelete() {
+  async function handleDelete() {
     if (!deleteTarget) {
       return;
     }
 
-    const nextProjects = projects.filter((project) => project.id !== deleteTarget.id);
-    setProjects(nextProjects);
-    saveMockProjects(nextProjects);
-    setDeleteTarget(null);
+    setActionError("");
+
+    try {
+      await requestData<{ id: string }>(`/api/projects/${deleteTarget.id}`, {
+        method: "DELETE",
+      });
+
+      setProjects((currentProjects) => {
+        const nextProjects = currentProjects.filter(
+          (project) => project.id !== deleteTarget.id,
+        );
+        saveProjectBackupSnapshot(nextProjects);
+        return nextProjects;
+      });
+      setDeleteTarget(null);
+    } catch (error) {
+      setActionError(getErrorMessage(error));
+    }
   }
 
   return (
     <>
+      {(isLoading || isBackupMode || actionError) && (
+        <div
+          className={cn(
+            "mb-4 rounded-lg border px-4 py-3 text-sm",
+            actionError
+              ? "border-[var(--danger-border)] bg-[var(--danger-bg)] text-[var(--danger-text)]"
+              : "border-[var(--border-default)] bg-[var(--bg-subtle)] text-[var(--text-secondary)]",
+          )}
+        >
+          {isLoading
+            ? "프로젝트 목록을 불러오는 중입니다."
+            : actionError || notice}
+        </div>
+      )}
+
       <div className="mb-5 flex flex-col gap-3 rounded-lg border border-[var(--border-default)] bg-white p-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex flex-1 flex-col gap-3 md:flex-row">
           <label className="relative block min-w-64 flex-1">
@@ -206,6 +303,7 @@ export function ProjectList() {
         <CreateProjectDialog
           onClose={() => setCreateOpen(false)}
           onSubmit={handleCreate}
+          submitError={actionError}
         />
       )}
 
@@ -214,6 +312,7 @@ export function ProjectList() {
           project={deleteTarget}
           onClose={() => setDeleteTarget(null)}
           onConfirm={handleDelete}
+          submitError={actionError}
         />
       )}
     </>
@@ -389,44 +488,53 @@ function ProjectTable({
 function CreateProjectDialog({
   onClose,
   onSubmit,
+  submitError,
 }: {
   onClose: () => void;
-  onSubmit: (input: { name: string; description: string; color: string }) => void;
+  onSubmit: (input: {
+    name: string;
+    description: string;
+    color: string;
+  }) => Promise<boolean>;
+  submitError?: string;
 }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [selectedColor, setSelectedColor] = useState(colorOptions[0]);
   const [submitted, setSubmitted] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const nameError = submitted && name.trim().length === 0;
 
-  function submitProject() {
+  async function submitProject() {
     setSubmitted(true);
 
     if (!name.trim()) {
       return;
     }
 
-    onSubmit({
+    setIsSubmitting(true);
+    await onSubmit({
       name: name.trim(),
       description: description.trim(),
       color: selectedColor,
     });
+    setIsSubmitting(false);
   }
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSubmitted(true);
 
     if (!name.trim()) {
       return;
     }
-    submitProject();
+    await submitProject();
   }
 
   return (
     <DialogShell
       title="새 프로젝트 만들기"
-      description="프로젝트 정보를 입력해 mock 목록에 추가합니다."
+      description="프로젝트 정보를 입력해 DB에 추가합니다."
       onClose={onClose}
       maxWidth="max-w-lg"
       footer={
@@ -441,9 +549,10 @@ function CreateProjectDialog({
           <button
             type="button"
             onClick={submitProject}
-            className="h-9 rounded-md bg-[var(--brand-primary)] px-3 text-sm font-medium text-white hover:bg-[var(--brand-primary-hover)]"
+            disabled={isSubmitting}
+            className="h-9 rounded-md bg-[var(--brand-primary)] px-3 text-sm font-medium text-white hover:bg-[var(--brand-primary-hover)] disabled:cursor-not-allowed disabled:opacity-60"
           >
-            프로젝트 생성
+            {isSubmitting ? "생성 중..." : "프로젝트 생성"}
           </button>
         </div>
       }
@@ -493,6 +602,12 @@ function CreateProjectDialog({
             멤버 초대는 후속 Phase에서 연결합니다.
           </div>
         </div>
+
+        {submitError && (
+          <div className="rounded-md border border-[var(--danger-border)] bg-[var(--danger-bg)] px-3 py-2 text-sm text-[var(--danger-text)]">
+            {submitError}
+          </div>
+        )}
       </form>
     </DialogShell>
   );
@@ -502,18 +617,18 @@ function DeleteProjectDialog({
   project,
   onClose,
   onConfirm,
+  submitError,
 }: {
   project: Project;
   onClose: () => void;
-  onConfirm: () => void;
+  onConfirm: () => Promise<void>;
+  submitError?: string;
 }) {
   return (
     <DialogShell
       title="프로젝트 삭제"
       description={
-        <>
-          <span className="font-medium">{project.name}</span> 프로젝트를 mock 목록에서 삭제할까요?
-        </>
+        <><span className="font-medium">{project.name}</span> 프로젝트를 삭제할까요?</>
       }
       onClose={onClose}
       maxWidth="max-w-md"
@@ -534,7 +649,14 @@ function DeleteProjectDialog({
         </div>
       }
     >
-      <div className="text-sm text-[var(--text-secondary)]">이 작업은 mock 목록에서만 제거됩니다.</div>
+      <div className="space-y-2 text-sm text-[var(--text-secondary)]">
+        <p>이 작업은 DB의 프로젝트 레코드를 삭제합니다.</p>
+        {submitError && (
+          <p className="rounded-md border border-[var(--danger-border)] bg-[var(--danger-bg)] px-3 py-2 text-[var(--danger-text)]">
+            {submitError}
+          </p>
+        )}
+      </div>
     </DialogShell>
   );
 }
@@ -582,12 +704,39 @@ function StatItem({
   );
 }
 
-function toProjectId(name: string) {
-  const normalized = name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9가-힣]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+async function requestData<T>(url: string, init?: RequestInit) {
+  const response = await fetch(url, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...init?.headers,
+    },
+  });
 
-  return normalized || `project-${Date.now()}`;
+  const payload = (await response.json().catch(() => null)) as
+    | { data?: T; error?: { message?: string } }
+    | null;
+
+  if (!response.ok || !payload?.data) {
+    throw new Error(payload?.error?.message || "API 요청에 실패했습니다.");
+  }
+
+  return payload.data;
+}
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "요청 처리 중 오류가 발생했습니다.";
+}
+
+function formatBackupTime(value: string) {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "알 수 없음";
+  }
+
+  return new Intl.DateTimeFormat("ko-KR", {
+    dateStyle: "short",
+    timeStyle: "short",
+  }).format(date);
 }

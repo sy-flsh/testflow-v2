@@ -1,0 +1,15 @@
+services:
+  testflow-postgres:
+    image: postgres:16
+    container_name: testflow-v2-postgres
+    environment:
+      POSTGRES_USER: testflow
+      POSTGRES_PASSWORD: testflow
+      POSTGRES_DB: testflow_v2
+    ports:
+      - "5433:5432"
+    volumes:
+      - testflow-v2-postgres-data:/var/lib/postgresql/data
+
+volumes:
+  testflow-v2-postgres-data:

@@ -4,12 +4,19 @@ import type { Defect, Project, TestCase, TestRun, TestRunResult } from "@/lib/do
 import { mockDefects, mockProjects, mockTestCases, mockTestRuns } from "@/lib/mock/mock-data";
 
 const MOCK_VERSION = "v1";
+const API_BACKUP_VERSION = "v2";
 
 export const mockStorageKeys = {
   projects: `testflow-v2:${MOCK_VERSION}:projects`,
   testCases: `testflow-v2:${MOCK_VERSION}:test-cases`,
   testRuns: `testflow-v2:${MOCK_VERSION}:test-runs`,
   defects: `testflow-v2:${MOCK_VERSION}:defects`,
+  projectApiBackup: `testflow-v2:${API_BACKUP_VERSION}:backup:projects`,
+};
+
+export type ProjectBackupSnapshot = {
+  savedAt: string;
+  projects: Project[];
 };
 
 export function loadMockProjects() {
@@ -18,6 +25,38 @@ export function loadMockProjects() {
 
 export function saveMockProjects(projects: Project[]) {
   saveCollection(mockStorageKeys.projects, projects);
+}
+
+export function loadProjectBackupSnapshot() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const raw = window.localStorage.getItem(mockStorageKeys.projectApiBackup);
+
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(raw) as ProjectBackupSnapshot;
+  } catch {
+    window.localStorage.removeItem(mockStorageKeys.projectApiBackup);
+    return null;
+  }
+}
+
+export function saveProjectBackupSnapshot(projects: Project[]) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const snapshot: ProjectBackupSnapshot = {
+    savedAt: new Date().toISOString(),
+    projects,
+  };
+
+  window.localStorage.setItem(mockStorageKeys.projectApiBackup, JSON.stringify(snapshot));
 }
 
 export function loadMockTestCases() {
