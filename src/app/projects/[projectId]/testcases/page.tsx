@@ -27,7 +27,7 @@ export default async function TestCasesPage({
         title="테스트케이스"
         description="Folder Tree, TC Table, CSV Import, TC Drawer가 들어갈 화면입니다."
       />
-      <TestCaseManager />
+      <TestCaseManager projectId={projectId} />
     </AppShell>
   );
 }

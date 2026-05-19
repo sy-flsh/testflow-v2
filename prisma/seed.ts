@@ -62,6 +62,31 @@ const projects = [
   },
 ];
 
+const testFolders = [
+  { slug: "payment", name: "결제 모듈", parentSlug: null, sortOrder: 10 },
+  { slug: "payment-checkout", name: "결제하기", parentSlug: "payment", sortOrder: 20 },
+  { slug: "refund", name: "환불", parentSlug: "payment", sortOrder: 30 },
+  { slug: "payment-method", name: "결제수단", parentSlug: "payment", sortOrder: 40 },
+  { slug: "signup", name: "회원가입", parentSlug: null, sortOrder: 50 },
+  { slug: "mypage", name: "마이페이지", parentSlug: null, sortOrder: 60 },
+  { slug: "search", name: "검색", parentSlug: null, sortOrder: 70 },
+];
+
+const testCases = [
+  createTestCaseSeed("TC-001", "정상 카드 결제 성공 시나리오", "HIGH", "READY", "payment-checkout", ["smoke", "payment"], "홍길동", "정상 카드 결제 경로를 검증합니다.", "테스트 계정으로 로그인되어 있다.\n장바구니에 상품 1개가 담겨 있다.", ["결제 페이지에 진입한다.", "카드 정보를 입력한다.", "결제하기 버튼을 클릭한다."], "결제가 완료되고 주문 완료 화면이 표시된다."),
+  createTestCaseSeed("TC-002", "잔액 부족 시 결제 실패 처리", "HIGH", "READY", "payment-checkout", ["payment", "error"], "홍길동", "잔액 부족 카드 결제 실패 처리를 검증합니다.", "잔액 부족 테스트 카드가 준비되어 있다.", ["결제 페이지에 진입한다.", "잔액 부족 카드를 입력한다.", "결제를 시도한다."], "결제 실패 메시지가 표시되고 주문은 생성되지 않는다."),
+  createTestCaseSeed("TC-003", "환불 요청 후 영수증 발행 확인", "MEDIUM", "READY", "refund", ["refund"], "김QA", "환불 완료 후 영수증 발행 가능 여부를 확인합니다.", "결제 완료 주문이 존재한다.", ["주문 상세로 이동한다.", "환불을 요청한다.", "영수증 메뉴를 확인한다."], "환불 영수증이 정상적으로 발행된다."),
+  createTestCaseSeed("TC-004", "결제 수단 변경 후 재결제", "MEDIUM", "DRAFT", "payment-method", ["payment"], "김QA", "실패 주문에서 결제 수단 변경 후 재결제를 확인합니다.", "결제 실패 주문이 존재한다.", ["결제 수단 변경을 선택한다.", "새 카드를 등록한다.", "재결제를 실행한다."], "새 결제 수단으로 결제가 완료된다."),
+  createTestCaseSeed("TC-005", "결제 중 네트워크 단절 시 복구", "HIGH", "READY", "payment-checkout", ["payment", "edge"], "홍길동", "결제 중 네트워크 단절 복구를 확인합니다.", "결제 진행 중 네트워크를 제어할 수 있다.", ["결제를 시작한다.", "네트워크를 끊는다.", "네트워크를 복구한다."], "결제 상태가 중복 없이 복구되고 안내 메시지가 표시된다."),
+  createTestCaseSeed("TC-006", "카드 한도 초과 메시지 표시", "MEDIUM", "READY", "payment-checkout", ["card", "limit"], "이PM", "카드 한도 초과 시 안내 메시지를 검증합니다.", "한도 초과 테스트 카드가 준비되어 있다.", ["결제 페이지에 진입한다.", "한도 초과 카드를 입력한다.", "결제를 시도한다."], "한도 초과 안내가 표시되고 주문은 생성되지 않는다."),
+  createTestCaseSeed("TC-007", "3D 인증 실패 후 재시도", "HIGH", "DRAFT", "payment-method", ["3ds", "payment"], "박개발", "3D 인증 실패 후 재시도 흐름을 확인합니다.", "3D 인증 테스트 카드가 준비되어 있다.", ["결제 페이지에 진입한다.", "3D 인증을 실패 처리한다.", "재시도를 선택한다."], "사용자가 인증을 다시 시도할 수 있다."),
+  createTestCaseSeed("TC-008", "부분 환불 금액 계산 확인", "MEDIUM", "READY", "refund", ["refund", "amount"], "김QA", "부분 환불 금액 계산을 검증합니다.", "부분 환불 가능한 주문이 존재한다.", ["주문 상세로 이동한다.", "일부 상품을 선택한다.", "환불 예상 금액을 확인한다."], "환불 금액이 선택 상품 기준으로 정확히 계산된다."),
+  createTestCaseSeed("TC-009", "신규 회원 가입 정상 플로우", "HIGH", "READY", "signup", ["signup", "smoke"], "최QA", "신규 회원 가입 정상 경로를 확인합니다.", "미가입 이메일이 준비되어 있다.", ["회원가입 화면에 진입한다.", "필수 정보를 입력한다.", "가입하기를 클릭한다."], "가입이 완료되고 대시보드로 이동한다."),
+  createTestCaseSeed("TC-010", "약관 미동의 시 가입 차단", "MEDIUM", "READY", "signup", ["signup", "terms"], "최QA", "필수 약관 미동의 시 가입 차단을 확인합니다.", "회원가입 화면에 진입할 수 있다.", ["필수 정보를 입력한다.", "필수 약관을 선택하지 않는다.", "가입하기를 클릭한다."], "가입이 차단되고 약관 동의 안내가 표시된다."),
+  createTestCaseSeed("TC-011", "마이페이지 주문 내역 조회", "MEDIUM", "READY", "mypage", ["mypage", "order"], "홍길동", "마이페이지 주문 내역 조회를 확인합니다.", "주문 이력이 있는 계정으로 로그인되어 있다.", ["마이페이지에 진입한다.", "주문 내역 탭을 선택한다.", "주문 상세를 연다."], "주문 목록과 상세 정보가 정확히 표시된다."),
+  createTestCaseSeed("TC-012", "검색어 자동완성 결과 표시", "LOW", "DRAFT", "search", ["search"], "이PM", "검색어 자동완성 결과를 확인합니다.", "검색 인덱스가 준비되어 있다.", ["검색창에 키워드를 입력한다.", "자동완성 목록을 확인한다."], "관련 검색어가 우선순위에 따라 표시된다."),
+];
+
 async function main() {
   const workspace = await prisma.workspace.upsert({
     where: { slug: workspaceSeed.slug },
@@ -119,6 +144,124 @@ async function main() {
       },
     });
   }
+
+  const demoProject = await prisma.project.findUniqueOrThrow({
+    where: {
+      workspaceId_slug: {
+        workspaceId: workspace.id,
+        slug: "demo-project",
+      },
+    },
+  });
+
+  const folderBySlug = new Map<string, string>();
+
+  for (const folderSeed of testFolders.filter((folder) => !folder.parentSlug)) {
+    const folder = await prisma.testFolder.upsert({
+      where: {
+        projectId_slug: {
+          projectId: demoProject.id,
+          slug: folderSeed.slug,
+        },
+      },
+      update: {
+        name: folderSeed.name,
+        sortOrder: folderSeed.sortOrder,
+        parentId: null,
+        deletedAt: null,
+      },
+      create: {
+        projectId: demoProject.id,
+        slug: folderSeed.slug,
+        name: folderSeed.name,
+        sortOrder: folderSeed.sortOrder,
+      },
+    });
+
+    folderBySlug.set(folder.slug, folder.id);
+  }
+
+  for (const folderSeed of testFolders.filter((folder) => folder.parentSlug)) {
+    const parentId = folderBySlug.get(folderSeed.parentSlug ?? "");
+
+    const folder = await prisma.testFolder.upsert({
+      where: {
+        projectId_slug: {
+          projectId: demoProject.id,
+          slug: folderSeed.slug,
+        },
+      },
+      update: {
+        name: folderSeed.name,
+        sortOrder: folderSeed.sortOrder,
+        parentId,
+        deletedAt: null,
+      },
+      create: {
+        projectId: demoProject.id,
+        parentId,
+        slug: folderSeed.slug,
+        name: folderSeed.name,
+        sortOrder: folderSeed.sortOrder,
+      },
+    });
+
+    folderBySlug.set(folder.slug, folder.id);
+  }
+
+  for (const testCaseSeed of testCases) {
+    const folderId = folderBySlug.get(testCaseSeed.folderSlug);
+
+    if (!folderId) {
+      throw new Error(`Seed folder not found: ${testCaseSeed.folderSlug}`);
+    }
+
+    const testCase = await prisma.testCase.upsert({
+      where: {
+        projectId_code: {
+          projectId: demoProject.id,
+          code: testCaseSeed.code,
+        },
+      },
+      update: {
+        folderId,
+        title: testCaseSeed.title,
+        priority: testCaseSeed.priority,
+        status: testCaseSeed.status,
+        tags: testCaseSeed.tags,
+        authorName: testCaseSeed.authorName,
+        description: testCaseSeed.description,
+        preconditions: testCaseSeed.preconditions,
+        expectedResult: testCaseSeed.expectedResult,
+        deletedAt: null,
+      },
+      create: {
+        projectId: demoProject.id,
+        folderId,
+        code: testCaseSeed.code,
+        title: testCaseSeed.title,
+        priority: testCaseSeed.priority,
+        status: testCaseSeed.status,
+        tags: testCaseSeed.tags,
+        authorName: testCaseSeed.authorName,
+        description: testCaseSeed.description,
+        preconditions: testCaseSeed.preconditions,
+        expectedResult: testCaseSeed.expectedResult,
+      },
+    });
+
+    await prisma.testStep.deleteMany({
+      where: { testCaseId: testCase.id },
+    });
+
+    await prisma.testStep.createMany({
+      data: testCaseSeed.steps.map((step, index) => ({
+        testCaseId: testCase.id,
+        order: index + 1,
+        action: step,
+      })),
+    });
+  }
 }
 
 main()
@@ -130,3 +273,31 @@ main()
     await prisma.$disconnect();
     process.exit(1);
   });
+
+function createTestCaseSeed(
+  code: string,
+  title: string,
+  priority: "HIGH" | "MEDIUM" | "LOW",
+  status: "READY" | "DRAFT" | "DEPRECATED",
+  folderSlug: string,
+  tags: string[],
+  authorName: string,
+  description: string,
+  preconditions: string,
+  steps: string[],
+  expectedResult: string,
+) {
+  return {
+    code,
+    title,
+    priority,
+    status,
+    folderSlug,
+    tags,
+    authorName,
+    description,
+    preconditions,
+    steps,
+    expectedResult,
+  };
+}

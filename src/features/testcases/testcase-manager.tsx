@@ -12,7 +12,7 @@ import {
   Tag,
   Upload,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { EmptyState } from "@/components/common/empty-state";
 import { DialogShell } from "@/components/common/dialog-shell";
 import { DrawerShell } from "@/components/common/drawer-shell";
@@ -25,7 +25,11 @@ import {
   testCaseStatusLabels as statusLabels,
 } from "@/lib/domain/labels";
 import { mockTestFolders } from "@/lib/mock/mock-data";
-import { loadMockTestCases, saveMockTestCases } from "@/lib/mock/mock-store";
+import {
+  loadMockTestCases,
+  loadTestCaseBackupSnapshot,
+  saveTestCaseBackupSnapshot,
+} from "@/lib/mock/mock-store";
 import { cn } from "@/lib/utils";
 
 type Draft = {
@@ -40,10 +44,21 @@ type Draft = {
   expectedResult: string;
 };
 
-const folders: TestFolder[] = mockTestFolders;
+const allFolder: TestFolder = { id: "all", label: "전체" };
 
-export function TestCaseManager() {
-  const [testCases, setTestCases] = useState(() => loadMockTestCases());
+export function TestCaseManager({ projectId }: { projectId: string }) {
+  const [folders, setFolders] = useState<TestFolder[]>(() => {
+    const snapshot = loadTestCaseBackupSnapshot(projectId);
+    return snapshot?.folders ?? [];
+  });
+  const [testCases, setTestCases] = useState<TestCase[]>(() => {
+    const snapshot = loadTestCaseBackupSnapshot(projectId);
+    return snapshot?.testCases ?? [];
+  });
+  const [isLoading, setIsLoading] = useState(true);
+  const [isBackupMode, setIsBackupMode] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [actionError, setActionError] = useState("");
   const [selectedFolderId, setSelectedFolderId] = useState("all");
   const [query, setQuery] = useState("");
   const [tagFilter, setTagFilter] = useState("all");
@@ -53,6 +68,65 @@ export function TestCaseManager() {
   const [submitted, setSubmitted] = useState(false);
   const [isUploadOpen, setUploadOpen] = useState(false);
   const [downloadNotice, setDownloadNotice] = useState(false);
+
+  const apiBase = `/api/projects/${encodeURIComponent(projectId)}`;
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadData() {
+      setIsLoading(true);
+      setActionError("");
+      setNotice("");
+
+      try {
+        const [apiFolders, apiTestCases] = await Promise.all([
+          requestData<TestFolder[]>(`${apiBase}/test-folders`),
+          requestData<TestCase[]>(`${apiBase}/test-cases`),
+        ]);
+
+        if (!active) {
+          return;
+        }
+
+        const nextFolders = withAllFolder(apiFolders);
+        setFolders(nextFolders);
+        setTestCases(apiTestCases);
+        saveTestCaseBackupSnapshot(projectId, nextFolders, apiTestCases);
+        setIsBackupMode(false);
+      } catch {
+        if (!active) {
+          return;
+        }
+
+        const snapshot = loadTestCaseBackupSnapshot(projectId);
+
+        if (snapshot) {
+          setFolders(withAllFolder(snapshot.folders));
+          setTestCases(snapshot.testCases);
+          setNotice(
+            `백업 데이터 표시 중입니다. 마지막 백업: ${formatBackupTime(snapshot.savedAt)}`,
+          );
+        } else {
+          setFolders(mockTestFolders);
+          setTestCases(loadMockTestCases());
+          setNotice("API 연결에 실패해 기존 mock fallback 데이터를 표시 중입니다.");
+        }
+
+        setIsBackupMode(true);
+      } finally {
+        if (active) {
+          setIsLoading(false);
+        }
+      }
+    }
+
+    void loadData();
+
+    return () => {
+      active = false;
+    };
+  }, [apiBase, projectId]);
 
   const allTags = useMemo(
     () => Array.from(new Set(testCases.flatMap((tc) => tc.tags))).sort(),
@@ -65,20 +139,20 @@ export function TestCaseManager() {
     for (const folder of folders) {
       if (folder.id !== "all") {
         counts[folder.id] = testCases.filter((tc) =>
-          isInFolder(tc.folderId, folder.id),
+          isInFolder(tc.folderId, folder.id, folders),
         ).length;
       }
     }
 
     return counts;
-  }, [testCases]);
+  }, [folders, testCases]);
 
   const visibleTestCases = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
 
     return testCases.filter((tc) => {
       const matchesFolder =
-        selectedFolderId === "all" || isInFolder(tc.folderId, selectedFolderId);
+        selectedFolderId === "all" || isInFolder(tc.folderId, selectedFolderId, folders);
       const matchesQuery =
         !normalizedQuery ||
         tc.id.toLowerCase().includes(normalizedQuery) ||
@@ -89,7 +163,7 @@ export function TestCaseManager() {
 
       return matchesFolder && matchesQuery && matchesTag && matchesStatus;
     });
-  }, [query, selectedFolderId, statusFilter, tagFilter, testCases]);
+  }, [folders, query, selectedFolderId, statusFilter, tagFilter, testCases]);
 
   const allVisibleSelected =
     visibleTestCases.length > 0 &&
@@ -97,10 +171,11 @@ export function TestCaseManager() {
 
   function openNewDrawer() {
     setSubmitted(false);
+    setActionError("");
     setDrawerDraft({
       title: "",
       priority: "medium",
-      folderId: selectedFolderId === "all" ? "payment-checkout" : selectedFolderId,
+      folderId: selectedFolderId === "all" ? getDefaultFolderId(folders) : selectedFolderId,
       tagsText: "",
       description: "",
       preconditions: "",
@@ -111,6 +186,7 @@ export function TestCaseManager() {
 
   function openEditDrawer(tc: TestCase) {
     setSubmitted(false);
+    setActionError("");
     setDrawerDraft({
       id: tc.id,
       title: tc.title,
@@ -124,7 +200,7 @@ export function TestCaseManager() {
     });
   }
 
-  function saveDrawerDraft() {
+  async function saveDrawerDraft() {
     if (!drawerDraft) {
       return;
     }
@@ -135,60 +211,53 @@ export function TestCaseManager() {
       return;
     }
 
-    const tags = drawerDraft.tagsText
-      .split(",")
-      .map((tag) => tag.trim().replace(/^#/, ""))
-      .filter(Boolean);
-    const steps = drawerDraft.stepsText
-      .split("\n")
-      .map((step) => step.trim())
-      .filter(Boolean);
+    const payload = {
+      title: drawerDraft.title.trim(),
+      priority: drawerDraft.priority,
+      folderId: drawerDraft.folderId,
+      tags: drawerDraft.tagsText
+        .split(",")
+        .map((tag) => tag.trim().replace(/^#/, ""))
+        .filter(Boolean),
+      description: drawerDraft.description,
+      preconditions: drawerDraft.preconditions,
+      steps: drawerDraft.stepsText
+        .split("\n")
+        .map((step) => step.trim())
+        .filter(Boolean),
+      expectedResult: drawerDraft.expectedResult,
+    };
 
-    if (drawerDraft.id) {
-      const nextTestCases = testCases.map((tc) =>
-        tc.id === drawerDraft.id
-          ? {
-              ...tc,
-              title: drawerDraft.title.trim(),
-              priority: drawerDraft.priority,
-              folderId: drawerDraft.folderId,
-              tags,
-              description: drawerDraft.description,
-              preconditions: drawerDraft.preconditions,
-              steps,
-              expectedResult: drawerDraft.expectedResult,
-              updatedAtLabel: "방금 전",
-            }
-          : tc,
-      );
-      setTestCases(nextTestCases);
-      saveMockTestCases(nextTestCases);
-    } else {
-      const nextIndex = testCases.length + 1;
-      const nextId = `TC-${String(nextIndex).padStart(3, "0")}`;
+    setActionError("");
 
-      const nextTestCases: TestCase[] = [
-        {
-          id: nextId,
-          title: drawerDraft.title.trim(),
-          priority: drawerDraft.priority,
-          status: "draft" as const,
-          folderId: drawerDraft.folderId,
-          tags,
-          author: "홍길동",
-          updatedAtLabel: "방금 전",
-          description: drawerDraft.description,
-          preconditions: drawerDraft.preconditions,
-          steps,
-          expectedResult: drawerDraft.expectedResult,
-        },
-        ...testCases,
-      ];
-      setTestCases(nextTestCases);
-      saveMockTestCases(nextTestCases);
+    try {
+      if (drawerDraft.id) {
+        const updatedTestCase = await requestData<TestCase>(
+          `${apiBase}/test-cases/${encodeURIComponent(drawerDraft.id)}`,
+          {
+            method: "PATCH",
+            body: JSON.stringify(payload),
+          },
+        );
+        const nextTestCases = testCases.map((tc) =>
+          tc.id === updatedTestCase.id ? updatedTestCase : tc,
+        );
+        setTestCases(nextTestCases);
+        saveTestCaseBackupSnapshot(projectId, folders, nextTestCases);
+      } else {
+        const createdTestCase = await requestData<TestCase>(`${apiBase}/test-cases`, {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        const nextTestCases = [createdTestCase, ...testCases];
+        setTestCases(nextTestCases);
+        saveTestCaseBackupSnapshot(projectId, folders, nextTestCases);
+      }
+
+      setDrawerDraft(null);
+    } catch (error) {
+      setActionError(getErrorMessage(error));
     }
-
-    setDrawerDraft(null);
   }
 
   function toggleSelection(id: string) {
@@ -212,35 +281,82 @@ export function TestCaseManager() {
     );
   }
 
-  function deleteSelected() {
-    const nextTestCases = testCases.filter((tc) => !selectedIds.includes(tc.id));
-    setTestCases(nextTestCases);
-    saveMockTestCases(nextTestCases);
-    setSelectedIds([]);
+  async function deleteSelected() {
+    setActionError("");
+
+    try {
+      await Promise.all(
+        selectedIds.map((id) =>
+          requestData<{ id: string }>(`${apiBase}/test-cases/${encodeURIComponent(id)}`, {
+            method: "DELETE",
+          }),
+        ),
+      );
+      const nextTestCases = testCases.filter((tc) => !selectedIds.includes(tc.id));
+      setTestCases(nextTestCases);
+      saveTestCaseBackupSnapshot(projectId, folders, nextTestCases);
+      setSelectedIds([]);
+    } catch (error) {
+      setActionError(getErrorMessage(error));
+    }
   }
 
-  function addTagToSelected() {
-    const nextTestCases = testCases.map((tc) =>
-        selectedIds.includes(tc.id) && !tc.tags.includes("bulk")
-          ? { ...tc, tags: [...tc.tags, "bulk"], updatedAtLabel: "방금 전" }
-          : tc,
-    );
-    setTestCases(nextTestCases);
-    saveMockTestCases(nextTestCases);
+  async function addTagToSelected() {
+    setActionError("");
+
+    try {
+      const updatedTestCases = await requestData<TestCase[]>(`${apiBase}/test-cases/bulk`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          ids: selectedIds,
+          tags: ["bulk"],
+          tagsAction: "append",
+        }),
+      });
+      const nextTestCases = mergeUpdatedTestCases(testCases, updatedTestCases);
+      setTestCases(nextTestCases);
+      saveTestCaseBackupSnapshot(projectId, folders, nextTestCases);
+    } catch (error) {
+      setActionError(getErrorMessage(error));
+    }
   }
 
-  function moveSelectedFolder() {
-    const nextTestCases = testCases.map((tc) =>
-        selectedIds.includes(tc.id)
-          ? { ...tc, folderId: "payment-checkout", updatedAtLabel: "방금 전" }
-          : tc,
-    );
-    setTestCases(nextTestCases);
-    saveMockTestCases(nextTestCases);
+  async function moveSelectedFolder() {
+    setActionError("");
+
+    try {
+      const updatedTestCases = await requestData<TestCase[]>(`${apiBase}/test-cases/bulk`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          ids: selectedIds,
+          folderId: "payment-checkout",
+        }),
+      });
+      const nextTestCases = mergeUpdatedTestCases(testCases, updatedTestCases);
+      setTestCases(nextTestCases);
+      saveTestCaseBackupSnapshot(projectId, folders, nextTestCases);
+    } catch (error) {
+      setActionError(getErrorMessage(error));
+    }
   }
 
   return (
     <>
+      {(isLoading || isBackupMode || actionError) && (
+        <div
+          className={cn(
+            "mb-4 rounded-lg border px-4 py-3 text-sm",
+            actionError
+              ? "border-[var(--danger-border)] bg-[var(--danger-bg)] text-[var(--danger-text)]"
+              : "border-[var(--border-default)] bg-[var(--bg-subtle)] text-[var(--text-secondary)]",
+          )}
+        >
+          {isLoading
+            ? "테스트케이스 데이터를 불러오는 중입니다."
+            : actionError || notice}
+        </div>
+      )}
+
       <div className="mb-5 rounded-lg border border-[var(--border-default)] bg-white p-4">
         <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
           <div className="flex flex-1 flex-col gap-3 md:flex-row">
@@ -316,6 +432,7 @@ export function TestCaseManager() {
 
       <div className="grid min-h-[560px] grid-cols-1 overflow-hidden rounded-lg border border-[var(--border-default)] bg-white lg:grid-cols-[240px_minmax(0,1fr)]">
         <FolderTree
+          folders={folders}
           selectedFolderId={selectedFolderId}
           counts={folderCounts}
           onSelect={(folderId) => {
@@ -356,8 +473,10 @@ export function TestCaseManager() {
 
       {drawerDraft && (
         <TestCaseDrawer
+          folders={folders}
           draft={drawerDraft}
           submitted={submitted}
+          submitError={actionError}
           onChange={setDrawerDraft}
           onClose={() => setDrawerDraft(null)}
           onSave={saveDrawerDraft}
@@ -370,10 +489,12 @@ export function TestCaseManager() {
 }
 
 function FolderTree({
+  folders,
   selectedFolderId,
   counts,
   onSelect,
 }: {
+  folders: TestFolder[];
   selectedFolderId: string;
   counts: Record<string, number>;
   onSelect: (folderId: string) => void;
@@ -519,14 +640,18 @@ function TestCaseTable({
 }
 
 function TestCaseDrawer({
+  folders,
   draft,
   submitted,
+  submitError,
   onChange,
   onClose,
   onSave,
 }: {
+  folders: TestFolder[];
   draft: Draft;
   submitted: boolean;
+  submitError?: string;
   onChange: (draft: Draft) => void;
   onClose: () => void;
   onSave: () => void;
@@ -648,6 +773,12 @@ function TestCaseDrawer({
             첨부 파일 업로드는 후속 단계에서 구현합니다.
           </p>
         </div>
+
+        {submitError && (
+          <div className="rounded-md border border-[var(--danger-border)] bg-[var(--danger-bg)] px-3 py-2 text-sm text-[var(--danger-text)]">
+            {submitError}
+          </div>
+        )}
       </div>
     </DrawerShell>
   );
@@ -749,7 +880,11 @@ function PreviewItem({
   );
 }
 
-function isInFolder(testCaseFolderId: string, selectedFolderId: string) {
+function isInFolder(
+  testCaseFolderId: string,
+  selectedFolderId: string,
+  folders: TestFolder[],
+) {
   if (testCaseFolderId === selectedFolderId) {
     return true;
   }
@@ -758,4 +893,60 @@ function isInFolder(testCaseFolderId: string, selectedFolderId: string) {
     (folder) =>
       folder.id === testCaseFolderId && folder.parentId === selectedFolderId,
   );
+}
+
+function withAllFolder(folders: TestFolder[]) {
+  return folders.some((folder) => folder.id === "all")
+    ? folders
+    : [allFolder, ...folders];
+}
+
+function getDefaultFolderId(folders: TestFolder[]) {
+  return folders.find((folder) => folder.id !== "all")?.id ?? "payment-checkout";
+}
+
+function mergeUpdatedTestCases(
+  currentTestCases: TestCase[],
+  updatedTestCases: TestCase[],
+) {
+  const updatedById = new Map(updatedTestCases.map((testCase) => [testCase.id, testCase]));
+
+  return currentTestCases.map((testCase) => updatedById.get(testCase.id) ?? testCase);
+}
+
+async function requestData<T>(url: string, init?: RequestInit) {
+  const response = await fetch(url, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...init?.headers,
+    },
+  });
+
+  const payload = (await response.json().catch(() => null)) as
+    | { data?: T; error?: { message?: string } }
+    | null;
+
+  if (!response.ok || payload?.data === undefined) {
+    throw new Error(payload?.error?.message || "API 요청에 실패했습니다.");
+  }
+
+  return payload.data;
+}
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "요청 처리 중 오류가 발생했습니다.";
+}
+
+function formatBackupTime(value: string) {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "알 수 없음";
+  }
+
+  return new Intl.DateTimeFormat("ko-KR", {
+    dateStyle: "short",
+    timeStyle: "short",
+  }).format(date);
 }

@@ -1,6 +1,13 @@
 "use client";
 
-import type { Defect, Project, TestCase, TestRun, TestRunResult } from "@/lib/domain/types";
+import type {
+  Defect,
+  Project,
+  TestCase,
+  TestFolder,
+  TestRun,
+  TestRunResult,
+} from "@/lib/domain/types";
 import { mockDefects, mockProjects, mockTestCases, mockTestRuns } from "@/lib/mock/mock-data";
 
 const MOCK_VERSION = "v1";
@@ -12,11 +19,18 @@ export const mockStorageKeys = {
   testRuns: `testflow-v2:${MOCK_VERSION}:test-runs`,
   defects: `testflow-v2:${MOCK_VERSION}:defects`,
   projectApiBackup: `testflow-v2:${API_BACKUP_VERSION}:backup:projects`,
+  testCaseApiBackup: `testflow-v2:${API_BACKUP_VERSION}:backup:test-cases`,
 };
 
 export type ProjectBackupSnapshot = {
   savedAt: string;
   projects: Project[];
+};
+
+export type TestCaseBackupSnapshot = {
+  savedAt: string;
+  folders: TestFolder[];
+  testCases: TestCase[];
 };
 
 export function loadMockProjects() {
@@ -57,6 +71,43 @@ export function saveProjectBackupSnapshot(projects: Project[]) {
   };
 
   window.localStorage.setItem(mockStorageKeys.projectApiBackup, JSON.stringify(snapshot));
+}
+
+export function loadTestCaseBackupSnapshot(projectId: string) {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const raw = window.localStorage.getItem(getTestCaseBackupKey(projectId));
+
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(raw) as TestCaseBackupSnapshot;
+  } catch {
+    window.localStorage.removeItem(getTestCaseBackupKey(projectId));
+    return null;
+  }
+}
+
+export function saveTestCaseBackupSnapshot(
+  projectId: string,
+  folders: TestFolder[],
+  testCases: TestCase[],
+) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const snapshot: TestCaseBackupSnapshot = {
+    savedAt: new Date().toISOString(),
+    folders,
+    testCases,
+  };
+
+  window.localStorage.setItem(getTestCaseBackupKey(projectId), JSON.stringify(snapshot));
 }
 
 export function loadMockTestCases() {
@@ -151,4 +202,8 @@ function saveCollection<T>(key: string, value: T[]) {
   }
 
   window.localStorage.setItem(key, JSON.stringify(value));
+}
+
+function getTestCaseBackupKey(projectId: string) {
+  return `${mockStorageKeys.testCaseApiBackup}:${projectId}`;
 }
