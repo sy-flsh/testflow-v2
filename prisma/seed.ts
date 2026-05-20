@@ -87,6 +87,62 @@ const testCases = [
   createTestCaseSeed("TC-012", "검색어 자동완성 결과 표시", "LOW", "DRAFT", "search", ["search"], "이PM", "검색어 자동완성 결과를 확인합니다.", "검색 인덱스가 준비되어 있다.", ["검색창에 키워드를 입력한다.", "자동완성 목록을 확인한다."], "관련 검색어가 우선순위에 따라 표시된다."),
 ];
 
+const testRuns = [
+  createRunSeed(
+    "sprint-12-regression",
+    "Sprint 12 회귀 테스트",
+    "결제와 회원가입 주요 플로우 회귀 검증",
+    "김QA",
+    "QA Server",
+    "2026-05-14",
+    "2026-05-17",
+    "IN_PROGRESS",
+    [
+      ["TC-001", "PASSED"],
+      ["TC-002", "PASSED"],
+      ["TC-003", "FAILED"],
+      ["TC-004", "BLOCKED"],
+      ["TC-005", "PENDING"],
+    ],
+  ),
+  createRunSeed(
+    "payment-smoke",
+    "결제 모듈 Smoke Test",
+    "릴리즈 전 결제 핵심 경로 검증",
+    "홍길동",
+    "Staging",
+    "2026-05-12",
+    "2026-05-12",
+    "COMPLETED",
+    [
+      ["TC-001", "PASSED"],
+      ["TC-002", "PASSED"],
+      ["TC-003", "FAILED"],
+      ["TC-004", "PASSED"],
+    ],
+  ),
+  createRunSeed(
+    "release-final-check",
+    "출시 전 최종 검증",
+    "출시 후보 빌드 최종 확인",
+    "김QA",
+    "Prod Mirror",
+    "2026-05-20",
+    "2026-05-21",
+    "PLANNED",
+    [
+      ["TC-001", "PENDING"],
+      ["TC-002", "PENDING"],
+      ["TC-003", "PENDING"],
+      ["TC-004", "PENDING"],
+      ["TC-005", "PENDING"],
+      ["TC-006", "PENDING"],
+      ["TC-007", "PENDING"],
+      ["TC-008", "PENDING"],
+    ],
+  ),
+];
+
 async function main() {
   const workspace = await prisma.workspace.upsert({
     where: { slug: workspaceSeed.slug },
@@ -262,6 +318,80 @@ async function main() {
       })),
     });
   }
+
+  const testCaseByCode = new Map(
+    await prisma.testCase
+      .findMany({
+        where: {
+          projectId: demoProject.id,
+          deletedAt: null,
+        },
+        select: { id: true, code: true },
+      })
+      .then((items) => items.map((item) => [item.code, item.id] as const)),
+  );
+
+  for (const runSeed of testRuns) {
+    const run = await prisma.testRun.upsert({
+      where: {
+        projectId_slug: {
+          projectId: demoProject.id,
+          slug: runSeed.slug,
+        },
+      },
+      update: {
+        title: runSeed.title,
+        description: runSeed.description,
+        assigneeName: runSeed.assigneeName,
+        environment: runSeed.environment,
+        startDate: toUtcDate(runSeed.startDate),
+        dueDate: toUtcDate(runSeed.dueDate),
+        status: runSeed.status,
+        deletedAt: null,
+      },
+      create: {
+        projectId: demoProject.id,
+        slug: runSeed.slug,
+        title: runSeed.title,
+        description: runSeed.description,
+        assigneeName: runSeed.assigneeName,
+        environment: runSeed.environment,
+        startDate: toUtcDate(runSeed.startDate),
+        dueDate: toUtcDate(runSeed.dueDate),
+        status: runSeed.status,
+      },
+    });
+
+    await prisma.testRunResult.deleteMany({
+      where: { runId: run.id },
+    });
+
+    for (const [testCaseCode, status] of runSeed.results) {
+      const testCaseId = testCaseByCode.get(testCaseCode);
+
+      if (!testCaseId) {
+        throw new Error(`Seed test case not found: ${testCaseCode}`);
+      }
+
+      await prisma.testRunResult.create({
+        data: {
+          runId: run.id,
+          testCaseId,
+          code: `${runSeed.slug}-${testCaseCode}`,
+          status,
+          actualResult:
+            status === "PASSED"
+              ? "기대 결과와 동일하게 동작함"
+              : status === "FAILED"
+                ? "실행 중 오류 재현됨"
+                : status === "BLOCKED"
+                  ? "환경 이슈로 실행 차단"
+                  : "",
+          defectCount: status === "FAILED" || status === "BLOCKED" ? 1 : 0,
+        },
+      });
+    }
+  }
 }
 
 main()
@@ -300,4 +430,35 @@ function createTestCaseSeed(
     steps,
     expectedResult,
   };
+}
+
+function createRunSeed(
+  slug: string,
+  title: string,
+  description: string,
+  assigneeName: string,
+  environment: string,
+  startDate: string,
+  dueDate: string,
+  status: "PLANNED" | "IN_PROGRESS" | "PAUSED" | "COMPLETED",
+  results: Array<[
+    string,
+    "PENDING" | "PASSED" | "FAILED" | "BLOCKED" | "SKIPPED",
+  ]>,
+) {
+  return {
+    slug,
+    title,
+    description,
+    assigneeName,
+    environment,
+    startDate,
+    dueDate,
+    status,
+    results,
+  };
+}
+
+function toUtcDate(value: string) {
+  return new Date(`${value}T00:00:00.000Z`);
 }

@@ -40,10 +40,7 @@ const colorOptions = [
 
 export function ProjectList() {
   const router = useRouter();
-  const [projects, setProjects] = useState<Project[]>(() => {
-    const snapshot = loadProjectBackupSnapshot();
-    return snapshot?.projects ?? [];
-  });
+  const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isBackupMode, setIsBackupMode] = useState(false);
   const [notice, setNotice] = useState("");

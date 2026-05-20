@@ -28,7 +28,7 @@ export default async function TestRunDetailPage({
         title="테스트 실행 상세"
         description="테스터가 TC를 하나씩 확인하며 결과를 기록하는 실행 화면입니다."
       />
-      <TestRunRunner runId={runId} />
+      <TestRunRunner projectId={projectId} runId={runId} />
     </AppShell>
   );
 }

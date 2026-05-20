@@ -9,23 +9,20 @@ import {
   Plus,
   Search,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { EmptyState } from "@/components/common/empty-state";
 import { DialogShell } from "@/components/common/dialog-shell";
 import { FormField, SelectField, TextAreaField } from "@/components/common/form-field";
 import { StatusBadge } from "@/components/common/status-badge";
 import { cn } from "@/lib/utils";
+import type { RunStatus, TestCase, TestRun } from "@/lib/domain/types";
 import {
-  createRun,
   loadMockRuns,
-  mockTestCases,
-  saveMockRuns,
-  summarizeRun,
-  toRunId,
-  type MockTestRun,
-  type RunStatus,
-} from "@/features/test-runs/mock-test-run-store";
+  loadTestRunBackupSnapshot,
+  saveTestRunBackupSnapshot,
+} from "@/lib/mock/mock-store";
+import { mockTestCases } from "@/features/test-runs/mock-test-run-store";
 
 const runStatusLabels: Record<RunStatus, string> = {
   planned: "예정",
@@ -41,12 +38,85 @@ const runStatusBadge: Record<RunStatus, "pending" | "blocked" | "closed" | "pass
   completed: "passed",
 };
 
+type CreateRunInput = {
+  title: string;
+  description: string;
+  assignee: string;
+  environment: string;
+  startDate: string;
+  dueDate: string;
+  testCaseIds: string[];
+  startNow: boolean;
+};
+
 export function TestRunList({ projectId }: { projectId: string }) {
   const router = useRouter();
-  const [runs, setRuns] = useState<MockTestRun[]>(() => loadMockRuns());
+  const [runs, setRuns] = useState<TestRun[]>([]);
+  const [testCases, setTestCases] = useState<TestCase[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isBackupMode, setIsBackupMode] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [actionError, setActionError] = useState("");
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<RunStatus | "all">("all");
   const [isCreateOpen, setCreateOpen] = useState(false);
+
+  const apiBase = `/api/projects/${encodeURIComponent(projectId)}`;
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadData() {
+      setIsLoading(true);
+      setNotice("");
+      setActionError("");
+
+      try {
+        const [apiRuns, apiTestCases] = await Promise.all([
+          requestData<TestRun[]>(`${apiBase}/runs`),
+          requestData<TestCase[]>(`${apiBase}/test-cases`),
+        ]);
+
+        if (!active) {
+          return;
+        }
+
+        setRuns(apiRuns);
+        setTestCases(apiTestCases);
+        saveTestRunBackupSnapshot(projectId, apiRuns);
+        setIsBackupMode(false);
+      } catch {
+        if (!active) {
+          return;
+        }
+
+        const snapshot = loadTestRunBackupSnapshot(projectId);
+
+        if (snapshot) {
+          setRuns(snapshot.runs);
+          setNotice(
+            `백업 데이터 표시 중입니다. 마지막 백업: ${formatBackupTime(snapshot.savedAt)}`,
+          );
+        } else {
+          setRuns(loadMockRuns());
+          setNotice("API 연결에 실패해 기존 mock fallback 데이터를 표시 중입니다.");
+        }
+
+        setTestCases(mockTestCases);
+        setIsBackupMode(true);
+      } finally {
+        if (active) {
+          setIsLoading(false);
+        }
+      }
+    }
+
+    void loadData();
+
+    return () => {
+      active = false;
+    };
+  }, [apiBase, projectId]);
 
   const visibleRuns = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -63,23 +133,48 @@ export function TestRunList({ projectId }: { projectId: string }) {
     });
   }, [query, runs, statusFilter]);
 
-  function persist(nextRuns: MockTestRun[]) {
-    setRuns(nextRuns);
-    saveMockRuns(nextRuns);
-  }
+  async function handleCreate(input: CreateRunInput) {
+    setActionError("");
 
-  function handleCreate(run: MockTestRun, startNow: boolean) {
-    const nextRuns = [run, ...runs];
-    persist(nextRuns);
-    setCreateOpen(false);
+    try {
+      const createdRun = await requestData<TestRun>(`${apiBase}/runs`, {
+        method: "POST",
+        body: JSON.stringify({
+          ...input,
+          status: input.startNow ? "in_progress" : "planned",
+        }),
+      });
+      const nextRuns = [createdRun, ...runs];
+      setRuns(nextRuns);
+      saveTestRunBackupSnapshot(projectId, nextRuns);
+      setCreateOpen(false);
 
-    if (startNow) {
-      router.push(`/projects/${projectId}/runs/${run.id}`);
+      if (input.startNow) {
+        router.push(`/projects/${projectId}/runs/${createdRun.id}`);
+      }
+
+      return true;
+    } catch (error) {
+      setActionError(getErrorMessage(error));
+      return false;
     }
   }
 
   return (
     <>
+      {(isLoading || isBackupMode || actionError) && (
+        <div
+          className={cn(
+            "mb-4 rounded-lg border px-4 py-3 text-sm",
+            actionError
+              ? "border-[var(--danger-border)] bg-[var(--danger-bg)] text-[var(--danger-text)]"
+              : "border-[var(--border-default)] bg-[var(--bg-subtle)] text-[var(--text-secondary)]",
+          )}
+        >
+          {isLoading ? "테스트 실행 목록을 불러오는 중입니다." : actionError || notice}
+        </div>
+      )}
+
       <div className="mb-5 flex flex-col gap-3 rounded-lg border border-[var(--border-default)] bg-white p-4 md:flex-row md:items-center md:justify-between">
         <div className="flex flex-1 flex-col gap-3 md:flex-row">
           <label className="relative block min-w-64 flex-1">
@@ -135,6 +230,8 @@ export function TestRunList({ projectId }: { projectId: string }) {
 
       {isCreateOpen && (
         <CreateRunDialog
+          testCases={testCases}
+          submitError={actionError}
           onClose={() => setCreateOpen(false)}
           onCreate={handleCreate}
         />
@@ -143,7 +240,7 @@ export function TestRunList({ projectId }: { projectId: string }) {
   );
 }
 
-function RunCard({ run, onOpen }: { run: MockTestRun; onOpen: () => void }) {
+function RunCard({ run, onOpen }: { run: TestRun; onOpen: () => void }) {
   const summary = summarizeRun(run);
 
   return (
@@ -216,11 +313,15 @@ function RunCard({ run, onOpen }: { run: MockTestRun; onOpen: () => void }) {
 }
 
 function CreateRunDialog({
+  testCases,
+  submitError,
   onClose,
   onCreate,
 }: {
+  testCases: TestCase[];
+  submitError?: string;
   onClose: () => void;
-  onCreate: (run: MockTestRun, startNow: boolean) => void;
+  onCreate: (input: CreateRunInput) => Promise<boolean>;
 }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -230,36 +331,33 @@ function CreateRunDialog({
   const [dueDate, setDueDate] = useState("2026-05-21");
   const [selectedCaseIds, setSelectedCaseIds] = useState<string[]>([]);
   const [submitted, setSubmitted] = useState(false);
+  const [isSubmitting, setSubmitting] = useState(false);
   const titleError = submitted && !title.trim();
   const selectionError = submitted && selectedCaseIds.length === 0;
 
-  function buildRun() {
-    const id = toRunId(title);
-
-    return createRun({
-      id,
-      title: title.trim(),
-      description: description.trim() || "새 테스트 플랜",
-      assignee,
-      environment,
-      startDate,
-      dueDate,
-      status: "in_progress",
-      createdLabel: "방금 전",
-      cases: mockTestCases.filter((testCase) =>
-        selectedCaseIds.includes(testCase.id),
-      ),
-    });
-  }
-
-  function handleSubmit(startNow: boolean) {
+  async function handleSubmit(startNow: boolean) {
     setSubmitted(true);
 
     if (!title.trim() || selectedCaseIds.length === 0) {
       return;
     }
 
-    onCreate(buildRun(), startNow);
+    setSubmitting(true);
+    const created = await onCreate({
+      title: title.trim(),
+      description: description.trim(),
+      assignee,
+      environment,
+      startDate,
+      dueDate,
+      testCaseIds: selectedCaseIds,
+      startNow,
+    });
+    setSubmitting(false);
+
+    if (created && !startNow) {
+      onClose();
+    }
   }
 
   function toggleCase(id: string) {
@@ -273,7 +371,7 @@ function CreateRunDialog({
   return (
     <DialogShell
       title="새 테스트 플랜 만들기"
-      description="실행 대상 테스트케이스를 선택해 mock 테스트 플랜을 생성합니다."
+      description="실행 대상 테스트케이스를 선택해 테스트 플랜을 생성합니다."
       onClose={onClose}
       maxWidth="max-w-5xl"
       footer={
@@ -286,13 +384,15 @@ function CreateRunDialog({
           </button>
           <button
             onClick={() => handleSubmit(false)}
-            className="h-9 rounded-md border border-[var(--border-default)] bg-white px-3 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
+            disabled={isSubmitting}
+            className="h-9 rounded-md border border-[var(--border-default)] bg-white px-3 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-60"
           >
             임시저장
           </button>
           <button
             onClick={() => handleSubmit(true)}
-            className="h-9 rounded-md bg-[var(--brand-primary)] px-3 text-sm font-medium text-white hover:bg-[var(--brand-primary-hover)]"
+            disabled={isSubmitting}
+            className="h-9 rounded-md bg-[var(--brand-primary)] px-3 text-sm font-medium text-white hover:bg-[var(--brand-primary-hover)] disabled:cursor-not-allowed disabled:opacity-60"
           >
             플랜 생성 & 실행 시작
           </button>
@@ -300,122 +400,127 @@ function CreateRunDialog({
       }
     >
       <div className="space-y-6">
-          <section>
-            <h3 className="mb-3 text-sm font-semibold">기본 정보</h3>
-            <div className="grid gap-4 md:grid-cols-2">
-              <FormField label="플랜 이름" required error={titleError ? "플랜 이름을 입력하세요." : undefined} className="md:col-span-2">
-                <input
-                  value={title}
-                  onChange={(event) => setTitle(event.target.value)}
-                  className={cn(
-                    "h-10 w-full rounded-md border px-3 text-sm outline-none focus:border-[var(--brand-primary)]",
-                    titleError ? "border-[var(--status-fail)]" : "border-[var(--border-default)]",
-                  )}
-                  placeholder="Sprint 13 회귀 테스트"
-                />
-              </FormField>
-              <FormField label="설명" className="md:col-span-2">
-                <TextAreaField
-                  value={description}
-                  onChange={(event) => setDescription(event.target.value)}
-                  rows={3}
-                />
-              </FormField>
-              <FormField label="담당자">
-                <SelectField value={assignee} onChange={(event) => setAssignee(event.target.value)}>
-                  <option value="김QA">김QA</option>
-                  <option value="홍길동">홍길동</option>
-                  <option value="이PM">이PM</option>
-                  <option value="박개발">박개발</option>
-                </SelectField>
-              </FormField>
-              <FormField label="실행 환경">
-                <SelectField value={environment} onChange={(event) => setEnvironment(event.target.value)}>
-                  <option value="Dev">Dev</option>
-                  <option value="QA Server">QA Server</option>
-                  <option value="Staging">Staging</option>
-                  <option value="Prod">Prod</option>
-                </SelectField>
-              </FormField>
-              <DateField label="시작일" value={startDate} onChange={setStartDate} />
-              <DateField label="마감일" value={dueDate} onChange={setDueDate} />
-            </div>
-          </section>
+        <section>
+          <h3 className="mb-3 text-sm font-semibold">기본 정보</h3>
+          <div className="grid gap-4 md:grid-cols-2">
+            <FormField label="플랜 이름" required error={titleError ? "플랜 이름을 입력하세요." : undefined} className="md:col-span-2">
+              <input
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+                className={cn(
+                  "h-10 w-full rounded-md border px-3 text-sm outline-none focus:border-[var(--brand-primary)]",
+                  titleError ? "border-[var(--status-fail)]" : "border-[var(--border-default)]",
+                )}
+                placeholder="Sprint 13 회귀 테스트"
+              />
+            </FormField>
+            <FormField label="설명" className="md:col-span-2">
+              <TextAreaField
+                value={description}
+                onChange={(event) => setDescription(event.target.value)}
+                rows={3}
+              />
+            </FormField>
+            <FormField label="담당자">
+              <SelectField value={assignee} onChange={(event) => setAssignee(event.target.value)}>
+                <option value="김QA">김QA</option>
+                <option value="홍길동">홍길동</option>
+                <option value="이PM">이PM</option>
+                <option value="박개발">박개발</option>
+              </SelectField>
+            </FormField>
+            <FormField label="실행 환경">
+              <SelectField value={environment} onChange={(event) => setEnvironment(event.target.value)}>
+                <option value="Dev">Dev</option>
+                <option value="QA Server">QA Server</option>
+                <option value="Staging">Staging</option>
+                <option value="Prod">Prod</option>
+              </SelectField>
+            </FormField>
+            <DateField label="시작일" value={startDate} onChange={setStartDate} />
+            <DateField label="마감일" value={dueDate} onChange={setDueDate} />
+          </div>
+        </section>
 
-          <section>
-            <div className="mb-3 flex items-center justify-between">
-              <h3 className="text-sm font-semibold">테스트케이스 선택</h3>
-              <span className="text-sm text-[var(--text-secondary)]">
-                현재 {selectedCaseIds.length}/{mockTestCases.length}개 선택됨
-              </span>
-            </div>
-            {selectionError && (
-              <p className="mb-2 text-sm text-[var(--status-fail)]">
-                실행할 테스트케이스를 1개 이상 선택하세요.
-              </p>
-            )}
-            <div className="max-h-72 overflow-y-auto rounded-lg border border-[var(--border-default)]">
-              {mockTestCases.length === 0 ? (
-                <div className="p-4">
-                  <EmptyState
-                    icon={Clock}
-                    title="선택할 테스트케이스가 없습니다"
-                    description="테스트케이스를 먼저 생성한 뒤 테스트 플랜을 만들 수 있습니다."
-                  />
-                </div>
-              ) : (
-                <table className="w-full border-collapse text-sm">
-                  <thead className="sticky top-0 bg-[var(--bg-subtle)] text-left text-[var(--text-secondary)]">
-                    <tr>
-                      <th className="w-10 px-4 py-3">
+        <section>
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="text-sm font-semibold">테스트케이스 선택</h3>
+            <span className="text-sm text-[var(--text-secondary)]">
+              현재 {selectedCaseIds.length}/{testCases.length}개 선택됨
+            </span>
+          </div>
+          {selectionError && (
+            <p className="mb-2 text-sm text-[var(--status-fail)]">
+              실행할 테스트케이스를 1개 이상 선택하세요.
+            </p>
+          )}
+          <div className="max-h-72 overflow-y-auto rounded-lg border border-[var(--border-default)]">
+            {testCases.length === 0 ? (
+              <div className="p-4">
+                <EmptyState
+                  icon={Clock}
+                  title="선택할 테스트케이스가 없습니다"
+                  description="테스트케이스를 먼저 생성한 뒤 테스트 플랜을 만들 수 있습니다."
+                />
+              </div>
+            ) : (
+              <table className="w-full border-collapse text-sm">
+                <thead className="sticky top-0 bg-[var(--bg-subtle)] text-left text-[var(--text-secondary)]">
+                  <tr>
+                    <th className="w-10 px-4 py-3">
+                      <input
+                        type="checkbox"
+                        checked={selectedCaseIds.length === testCases.length}
+                        onChange={() =>
+                          setSelectedCaseIds((current) =>
+                            current.length === testCases.length
+                              ? []
+                              : testCases.map((testCase) => testCase.id),
+                          )
+                        }
+                      />
+                    </th>
+                    <th className="px-4 py-3 font-medium">ID</th>
+                    <th className="px-4 py-3 font-medium">제목</th>
+                    <th className="px-4 py-3 font-medium">우선순위</th>
+                    <th className="px-4 py-3 font-medium">태그</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {testCases.map((testCase) => (
+                    <tr
+                      key={testCase.id}
+                      className="border-t border-[var(--border-default)] hover:bg-[var(--bg-subtle)]"
+                    >
+                      <td className="px-4 py-3">
                         <input
                           type="checkbox"
-                          checked={selectedCaseIds.length === mockTestCases.length}
-                          onChange={() =>
-                            setSelectedCaseIds((current) =>
-                              current.length === mockTestCases.length
-                                ? []
-                                : mockTestCases.map((testCase) => testCase.id),
-                            )
-                          }
+                          checked={selectedCaseIds.includes(testCase.id)}
+                          onChange={() => toggleCase(testCase.id)}
                         />
-                      </th>
-                      <th className="px-4 py-3 font-medium">ID</th>
-                      <th className="px-4 py-3 font-medium">제목</th>
-                      <th className="px-4 py-3 font-medium">우선순위</th>
-                      <th className="px-4 py-3 font-medium">태그</th>
+                      </td>
+                      <td className="px-4 py-3 font-mono text-xs text-[var(--text-secondary)]">
+                        {testCase.id}
+                      </td>
+                      <td className="px-4 py-3 font-medium">{testCase.title}</td>
+                      <td className="px-4 py-3 text-[var(--text-secondary)]">
+                        {testCase.priority}
+                      </td>
+                      <td className="px-4 py-3 text-[var(--text-secondary)]">
+                        {testCase.tags.map((tag) => `#${tag}`).join(" ")}
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {mockTestCases.map((testCase) => (
-                      <tr
-                        key={testCase.id}
-                        className="border-t border-[var(--border-default)] hover:bg-[var(--bg-subtle)]"
-                      >
-                        <td className="px-4 py-3">
-                          <input
-                            type="checkbox"
-                            checked={selectedCaseIds.includes(testCase.id)}
-                            onChange={() => toggleCase(testCase.id)}
-                          />
-                        </td>
-                        <td className="px-4 py-3 font-mono text-xs text-[var(--text-secondary)]">
-                          {testCase.id}
-                        </td>
-                        <td className="px-4 py-3 font-medium">{testCase.title}</td>
-                        <td className="px-4 py-3 text-[var(--text-secondary)]">
-                          {testCase.priority}
-                        </td>
-                        <td className="px-4 py-3 text-[var(--text-secondary)]">
-                          {testCase.tags.map((tag) => `#${tag}`).join(" ")}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          </section>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+          {submitError && (
+            <p className="mt-3 rounded-md border border-[var(--danger-border)] bg-[var(--danger-bg)] px-3 py-2 text-sm text-[var(--danger-text)]">
+              {submitError}
+            </p>
+          )}
+        </section>
       </div>
     </DialogShell>
   );
@@ -458,4 +563,53 @@ function DateField({
       />
     </label>
   );
+}
+
+function summarizeRun(run: TestRun) {
+  const total = run.results.length;
+  const pass = run.results.filter((result) => result.status === "passed").length;
+  const fail = run.results.filter((result) => result.status === "failed").length;
+  const block = run.results.filter((result) => result.status === "blocked").length;
+  const skip = run.results.filter((result) => result.status === "skipped").length;
+  const done = run.results.filter((result) => result.status !== "pending").length;
+  const progress = total > 0 ? Math.round((done / total) * 100) : 0;
+
+  return { total, done, pass, fail, block, skip, progress };
+}
+
+async function requestData<T>(url: string, init?: RequestInit) {
+  const response = await fetch(url, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...init?.headers,
+    },
+  });
+
+  const payload = (await response.json().catch(() => null)) as
+    | { data?: T; error?: { message?: string } }
+    | null;
+
+  if (!response.ok || payload?.data === undefined) {
+    throw new Error(payload?.error?.message || "API 요청에 실패했습니다.");
+  }
+
+  return payload.data;
+}
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "요청 처리 중 오류가 발생했습니다.";
+}
+
+function formatBackupTime(value: string) {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "알 수 없음";
+  }
+
+  return new Intl.DateTimeFormat("ko-KR", {
+    dateStyle: "short",
+    timeStyle: "short",
+  }).format(date);
 }

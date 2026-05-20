@@ -47,14 +47,8 @@ type Draft = {
 const allFolder: TestFolder = { id: "all", label: "전체" };
 
 export function TestCaseManager({ projectId }: { projectId: string }) {
-  const [folders, setFolders] = useState<TestFolder[]>(() => {
-    const snapshot = loadTestCaseBackupSnapshot(projectId);
-    return snapshot?.folders ?? [];
-  });
-  const [testCases, setTestCases] = useState<TestCase[]>(() => {
-    const snapshot = loadTestCaseBackupSnapshot(projectId);
-    return snapshot?.testCases ?? [];
-  });
+  const [folders, setFolders] = useState<TestFolder[]>([allFolder]);
+  const [testCases, setTestCases] = useState<TestCase[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isBackupMode, setIsBackupMode] = useState(false);
   const [notice, setNotice] = useState("");

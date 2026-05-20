@@ -20,6 +20,8 @@ export const mockStorageKeys = {
   defects: `testflow-v2:${MOCK_VERSION}:defects`,
   projectApiBackup: `testflow-v2:${API_BACKUP_VERSION}:backup:projects`,
   testCaseApiBackup: `testflow-v2:${API_BACKUP_VERSION}:backup:test-cases`,
+  testRunApiBackup: `testflow-v2:${API_BACKUP_VERSION}:backup:test-runs`,
+  testRunDetailApiBackup: `testflow-v2:${API_BACKUP_VERSION}:backup:test-run-detail`,
 };
 
 export type ProjectBackupSnapshot = {
@@ -31,6 +33,16 @@ export type TestCaseBackupSnapshot = {
   savedAt: string;
   folders: TestFolder[];
   testCases: TestCase[];
+};
+
+export type TestRunBackupSnapshot = {
+  savedAt: string;
+  runs: TestRun[];
+};
+
+export type TestRunDetailBackupSnapshot = {
+  savedAt: string;
+  run: TestRun;
 };
 
 export function loadMockProjects() {
@@ -108,6 +120,77 @@ export function saveTestCaseBackupSnapshot(
   };
 
   window.localStorage.setItem(getTestCaseBackupKey(projectId), JSON.stringify(snapshot));
+}
+
+export function loadTestRunBackupSnapshot(projectId: string) {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const raw = window.localStorage.getItem(getTestRunBackupKey(projectId));
+
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(raw) as TestRunBackupSnapshot;
+  } catch {
+    window.localStorage.removeItem(getTestRunBackupKey(projectId));
+    return null;
+  }
+}
+
+export function saveTestRunBackupSnapshot(projectId: string, runs: TestRun[]) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const snapshot: TestRunBackupSnapshot = {
+    savedAt: new Date().toISOString(),
+    runs,
+  };
+
+  window.localStorage.setItem(getTestRunBackupKey(projectId), JSON.stringify(snapshot));
+}
+
+export function loadTestRunDetailBackupSnapshot(projectId: string, runId: string) {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const raw = window.localStorage.getItem(getTestRunDetailBackupKey(projectId, runId));
+
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(raw) as TestRunDetailBackupSnapshot;
+  } catch {
+    window.localStorage.removeItem(getTestRunDetailBackupKey(projectId, runId));
+    return null;
+  }
+}
+
+export function saveTestRunDetailBackupSnapshot(
+  projectId: string,
+  runId: string,
+  run: TestRun,
+) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const snapshot: TestRunDetailBackupSnapshot = {
+    savedAt: new Date().toISOString(),
+    run,
+  };
+
+  window.localStorage.setItem(
+    getTestRunDetailBackupKey(projectId, runId),
+    JSON.stringify(snapshot),
+  );
 }
 
 export function loadMockTestCases() {
@@ -206,4 +289,12 @@ function saveCollection<T>(key: string, value: T[]) {
 
 function getTestCaseBackupKey(projectId: string) {
   return `${mockStorageKeys.testCaseApiBackup}:${projectId}`;
+}
+
+function getTestRunBackupKey(projectId: string) {
+  return `${mockStorageKeys.testRunApiBackup}:${projectId}`;
+}
+
+function getTestRunDetailBackupKey(projectId: string, runId: string) {
+  return `${mockStorageKeys.testRunDetailApiBackup}:${projectId}:${runId}`;
 }

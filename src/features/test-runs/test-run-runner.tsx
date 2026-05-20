@@ -11,22 +11,20 @@ import {
   Play,
   XCircle,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { DialogShell } from "@/components/common/dialog-shell";
 import { EmptyState } from "@/components/common/empty-state";
 import { PriorityBadge } from "@/components/common/priority-badge";
 import { FormField, SelectField, TextAreaField } from "@/components/common/form-field";
 import { StatusBadge } from "@/components/common/status-badge";
-import { addMockDefectFromRunResult } from "@/lib/mock/mock-store";
-import { cn } from "@/lib/utils";
 import {
+  addMockDefectFromRunResult,
   loadMockRuns,
-  saveMockRuns,
-  summarizeRun,
-  type MockRunResult,
-  type MockTestRun,
-  type ResultStatus,
-} from "@/features/test-runs/mock-test-run-store";
+  loadTestRunDetailBackupSnapshot,
+  saveTestRunDetailBackupSnapshot,
+} from "@/lib/mock/mock-store";
+import { cn } from "@/lib/utils";
+import type { ResultStatus, TestRun, TestRunResult } from "@/lib/domain/types";
 
 const resultGroups: Array<{
   status: ResultStatus;
@@ -40,13 +38,75 @@ const resultGroups: Array<{
   { status: "skipped", label: "Skip", badge: "skipped" },
 ];
 
-export function TestRunRunner({ runId }: { runId: string }) {
-  const [runs, setRuns] = useState<MockTestRun[]>(() => loadMockRuns());
+export function TestRunRunner({
+  projectId,
+  runId,
+}: {
+  projectId: string;
+  runId: string;
+}) {
+  const [run, setRun] = useState<TestRun | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isBackupMode, setIsBackupMode] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [actionError, setActionError] = useState("");
   const [activeResultId, setActiveResultId] = useState<string | null>(null);
-  const [defectTarget, setDefectTarget] = useState<MockRunResult | null>(null);
+  const [defectTarget, setDefectTarget] = useState<TestRunResult | null>(null);
   const [actualResult, setActualResult] = useState("");
 
-  const run = runs.find((item) => item.id === runId) ?? runs[0];
+  const apiBase = `/api/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}`;
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadRun() {
+      setIsLoading(true);
+      setActionError("");
+      setNotice("");
+
+      try {
+        const apiRun = await requestData<TestRun>(apiBase);
+
+        if (!active) {
+          return;
+        }
+
+        setRun(apiRun);
+        saveTestRunDetailBackupSnapshot(projectId, runId, apiRun);
+        setIsBackupMode(false);
+      } catch {
+        if (!active) {
+          return;
+        }
+
+        const snapshot = loadTestRunDetailBackupSnapshot(projectId, runId);
+
+        if (snapshot) {
+          setRun(snapshot.run);
+          setNotice(
+            `백업 데이터 표시 중입니다. 마지막 백업: ${formatBackupTime(snapshot.savedAt)}`,
+          );
+        } else {
+          const fallbackRun = loadMockRuns().find((item) => item.id === runId) ?? null;
+          setRun(fallbackRun);
+          setNotice("API 연결에 실패해 기존 mock fallback 데이터를 표시 중입니다.");
+        }
+
+        setIsBackupMode(true);
+      } finally {
+        if (active) {
+          setIsLoading(false);
+        }
+      }
+    }
+
+    void loadRun();
+
+    return () => {
+      active = false;
+    };
+  }, [apiBase, projectId, runId]);
+
   const summary = run ? summarizeRun(run) : null;
   const activeResult =
     run?.results.find((result) => result.id === activeResultId) ??
@@ -54,9 +114,18 @@ export function TestRunRunner({ runId }: { runId: string }) {
     run?.results[0] ??
     null;
 
+  useEffect(() => {
+    if (!activeResult) {
+      return;
+    }
+
+    setActiveResultId(activeResult.id);
+    setActualResult(activeResult.actualResult);
+  }, [activeResult]);
+
   const groupedResults = useMemo(() => {
     if (!run) {
-      return new Map<ResultStatus, MockRunResult[]>();
+      return new Map<ResultStatus, TestRunResult[]>();
     }
 
     return resultGroups.reduce((map, group) => {
@@ -65,51 +134,51 @@ export function TestRunRunner({ runId }: { runId: string }) {
         run.results.filter((result) => result.status === group.status),
       );
       return map;
-    }, new Map<ResultStatus, MockRunResult[]>());
+    }, new Map<ResultStatus, TestRunResult[]>());
   }, [run]);
 
-  function persist(nextRuns: MockTestRun[]) {
-    setRuns(nextRuns);
-    saveMockRuns(nextRuns);
-  }
-
-  function updateResult(status: ResultStatus) {
+  async function updateResult(status: ResultStatus) {
     if (!run || !activeResult) {
       return;
     }
 
-    const nextRuns = runs.map((item) =>
-      item.id === run.id
-        ? {
-            ...item,
-            status: item.status === "planned" ? "in_progress" : item.status,
-            results: item.results.map((result) =>
-              result.id === activeResult.id
-                ? {
-                    ...result,
-                    status,
-                    actualResult,
-                  }
-                : result,
-            ),
-          }
-        : item,
-    );
+    setActionError("");
 
-    persist(nextRuns);
+    try {
+      const updatedResult = await requestData<TestRunResult>(
+        `${apiBase}/results/${encodeURIComponent(activeResult.id)}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            status,
+            actualResult,
+          }),
+        },
+      );
+      const nextRun: TestRun = {
+        ...run,
+        status: run.status === "planned" ? "in_progress" : run.status,
+        results: run.results.map((result) =>
+          result.id === updatedResult.id ? updatedResult : result,
+        ),
+      };
+      setRun(nextRun);
+      saveTestRunDetailBackupSnapshot(projectId, runId, nextRun);
 
-    const nextRun = nextRuns.find((item) => item.id === run.id);
-    const nextPending = nextRun?.results.find(
-      (result) => result.status === "pending" && result.id !== activeResult.id,
-    );
+      const nextPending = nextRun.results.find(
+        (result) => result.status === "pending" && result.id !== updatedResult.id,
+      );
 
-    if (status === "failed" || status === "blocked") {
-      setDefectTarget({ ...activeResult, status });
-    }
+      if (status === "failed" || status === "blocked") {
+        setDefectTarget(updatedResult);
+      }
 
-    if (nextPending) {
-      setActiveResultId(nextPending.id);
-      setActualResult(nextPending.actualResult);
+      if (nextPending) {
+        setActiveResultId(nextPending.id);
+        setActualResult(nextPending.actualResult);
+      }
+    } catch (error) {
+      setActionError(getErrorMessage(error));
     }
   }
 
@@ -134,29 +203,36 @@ export function TestRunRunner({ runId }: { runId: string }) {
 
     addMockDefectFromRunResult({ result: defectTarget, title });
 
-    const nextRuns = runs.map((item) =>
-      item.id === run.id
-        ? {
-            ...item,
-            results: item.results.map((result) =>
-              result.id === defectTarget.id
-                ? { ...result, defectCount: result.defectCount + 1 }
-                : result,
-            ),
-          }
-        : item,
-    );
-    persist(nextRuns);
+    const nextRun: TestRun = {
+      ...run,
+      results: run.results.map((result) =>
+        result.id === defectTarget.id
+          ? { ...result, defectCount: result.defectCount + 1 }
+          : result,
+      ),
+    };
+    setRun(nextRun);
+    saveTestRunDetailBackupSnapshot(projectId, runId, nextRun);
     setDefectTarget(null);
   }
 
   if (!run || !summary) {
     return (
-      <EmptyState
-        icon={Play}
-        title="테스트 실행을 찾을 수 없습니다"
-        description="목록에서 테스트 실행을 선택하거나 새 테스트 플랜을 생성하세요."
-      />
+      <>
+        {(isLoading || isBackupMode || actionError) && (
+          <RunNotice
+            isLoading={isLoading}
+            isBackupMode={isBackupMode}
+            notice={notice}
+            actionError={actionError}
+          />
+        )}
+        <EmptyState
+          icon={Play}
+          title="테스트 실행을 찾을 수 없습니다"
+          description="목록에서 테스트 실행을 선택하거나 새 테스트 플랜을 생성하세요."
+        />
+      </>
     );
   }
 
@@ -172,6 +248,15 @@ export function TestRunRunner({ runId }: { runId: string }) {
 
   return (
     <>
+      {(isLoading || isBackupMode || actionError) && (
+        <RunNotice
+          isLoading={isLoading}
+          isBackupMode={isBackupMode}
+          notice={notice}
+          actionError={actionError}
+        />
+      )}
+
       <section className="tf-card mb-5 p-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
@@ -366,6 +451,30 @@ export function TestRunRunner({ runId }: { runId: string }) {
   );
 }
 
+function RunNotice({
+  isLoading,
+  notice,
+  actionError,
+}: {
+  isLoading: boolean;
+  isBackupMode: boolean;
+  notice: string;
+  actionError: string;
+}) {
+  return (
+    <div
+      className={cn(
+        "mb-4 rounded-lg border px-4 py-3 text-sm",
+        actionError
+          ? "border-[var(--danger-border)] bg-[var(--danger-bg)] text-[var(--danger-text)]"
+          : "border-[var(--border-default)] bg-[var(--bg-subtle)] text-[var(--text-secondary)]",
+      )}
+    >
+      {isLoading ? "테스트 실행 데이터를 불러오는 중입니다." : actionError || notice}
+    </div>
+  );
+}
+
 function InfoBox({
   title,
   items,
@@ -430,7 +539,7 @@ function DefectDialog({
   onClose,
   onSubmit,
 }: {
-  result: MockRunResult;
+  result: TestRunResult;
   onClose: () => void;
   onSubmit: (title: string) => void;
 }) {
@@ -506,4 +615,53 @@ function DefectDialog({
       </div>
     </DialogShell>
   );
+}
+
+function summarizeRun(run: TestRun) {
+  const total = run.results.length;
+  const pass = run.results.filter((result) => result.status === "passed").length;
+  const fail = run.results.filter((result) => result.status === "failed").length;
+  const block = run.results.filter((result) => result.status === "blocked").length;
+  const skip = run.results.filter((result) => result.status === "skipped").length;
+  const done = run.results.filter((result) => result.status !== "pending").length;
+  const progress = total > 0 ? Math.round((done / total) * 100) : 0;
+
+  return { total, done, pass, fail, block, skip, progress };
+}
+
+async function requestData<T>(url: string, init?: RequestInit) {
+  const response = await fetch(url, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...init?.headers,
+    },
+  });
+
+  const payload = (await response.json().catch(() => null)) as
+    | { data?: T; error?: { message?: string } }
+    | null;
+
+  if (!response.ok || payload?.data === undefined) {
+    throw new Error(payload?.error?.message || "API 요청에 실패했습니다.");
+  }
+
+  return payload.data;
+}
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "요청 처리 중 오류가 발생했습니다.";
+}
+
+function formatBackupTime(value: string) {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "알 수 없음";
+  }
+
+  return new Intl.DateTimeFormat("ko-KR", {
+    dateStyle: "short",
+    timeStyle: "short",
+  }).format(date);
 }
