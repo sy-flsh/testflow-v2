@@ -22,6 +22,7 @@ export const mockStorageKeys = {
   testCaseApiBackup: `testflow-v2:${API_BACKUP_VERSION}:backup:test-cases`,
   testRunApiBackup: `testflow-v2:${API_BACKUP_VERSION}:backup:test-runs`,
   testRunDetailApiBackup: `testflow-v2:${API_BACKUP_VERSION}:backup:test-run-detail`,
+  defectApiBackup: `testflow-v2:${API_BACKUP_VERSION}:backup:defects`,
 };
 
 export type ProjectBackupSnapshot = {
@@ -43,6 +44,11 @@ export type TestRunBackupSnapshot = {
 export type TestRunDetailBackupSnapshot = {
   savedAt: string;
   run: TestRun;
+};
+
+export type DefectBackupSnapshot = {
+  savedAt: string;
+  defects: Defect[];
 };
 
 export function loadMockProjects() {
@@ -193,6 +199,38 @@ export function saveTestRunDetailBackupSnapshot(
   );
 }
 
+export function loadDefectBackupSnapshot(projectId: string) {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const raw = window.localStorage.getItem(getDefectBackupKey(projectId));
+
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(raw) as DefectBackupSnapshot;
+  } catch {
+    window.localStorage.removeItem(getDefectBackupKey(projectId));
+    return null;
+  }
+}
+
+export function saveDefectBackupSnapshot(projectId: string, defects: Defect[]) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const snapshot: DefectBackupSnapshot = {
+    savedAt: new Date().toISOString(),
+    defects,
+  };
+
+  window.localStorage.setItem(getDefectBackupKey(projectId), JSON.stringify(snapshot));
+}
+
 export function loadMockTestCases() {
   return loadCollection(mockStorageKeys.testCases, mockTestCases);
 }
@@ -297,4 +335,8 @@ function getTestRunBackupKey(projectId: string) {
 
 function getTestRunDetailBackupKey(projectId: string, runId: string) {
   return `${mockStorageKeys.testRunDetailApiBackup}:${projectId}:${runId}`;
+}
+
+function getDefectBackupKey(projectId: string) {
+  return `${mockStorageKeys.defectApiBackup}:${projectId}`;
 }

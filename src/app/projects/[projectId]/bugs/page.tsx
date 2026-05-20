@@ -27,7 +27,7 @@ export default async function BugsPage({
         title="결함"
         description="결함을 등록하고 상태, 심각도, 우선순위, 연관 테스트케이스를 관리합니다."
       />
-      <DefectManager />
+      <DefectManager projectId={projectId} />
     </AppShell>
   );
 }

@@ -18,13 +18,19 @@ import { PriorityBadge } from "@/components/common/priority-badge";
 import { FormField, SelectField, TextAreaField } from "@/components/common/form-field";
 import { StatusBadge } from "@/components/common/status-badge";
 import {
-  addMockDefectFromRunResult,
   loadMockRuns,
   loadTestRunDetailBackupSnapshot,
   saveTestRunDetailBackupSnapshot,
 } from "@/lib/mock/mock-store";
 import { cn } from "@/lib/utils";
 import type { ResultStatus, TestRun, TestRunResult } from "@/lib/domain/types";
+
+type DefectDialogInput = {
+  title: string;
+  severity: string;
+  priority: string;
+  reproductionSteps: string;
+};
 
 const resultGroups: Array<{
   status: ResultStatus;
@@ -195,25 +201,36 @@ export function TestRunRunner({
     }
   }
 
-  function registerDefect(title: string) {
+  async function registerDefect(input: DefectDialogInput) {
     if (!run || !defectTarget) {
       setDefectTarget(null);
       return;
     }
 
-    addMockDefectFromRunResult({ result: defectTarget, title });
+    setActionError("");
 
-    const nextRun: TestRun = {
-      ...run,
-      results: run.results.map((result) =>
-        result.id === defectTarget.id
-          ? { ...result, defectCount: result.defectCount + 1 }
-          : result,
-      ),
-    };
-    setRun(nextRun);
-    saveTestRunDetailBackupSnapshot(projectId, runId, nextRun);
-    setDefectTarget(null);
+    try {
+      const payload = await requestData<{ result: TestRunResult | null }>(
+        `${apiBase}/results/${encodeURIComponent(defectTarget.id)}/defects`,
+        {
+          method: "POST",
+          body: JSON.stringify(input),
+        },
+      );
+      const updatedResult =
+        payload.result ?? { ...defectTarget, defectCount: defectTarget.defectCount + 1 };
+      const nextRun: TestRun = {
+        ...run,
+        results: run.results.map((result) =>
+          result.id === updatedResult.id ? updatedResult : result,
+        ),
+      };
+      setRun(nextRun);
+      saveTestRunDetailBackupSnapshot(projectId, runId, nextRun);
+      setDefectTarget(null);
+    } catch (error) {
+      setActionError(getErrorMessage(error));
+    }
   }
 
   if (!run || !summary) {
@@ -444,7 +461,7 @@ export function TestRunRunner({
         <DefectDialog
           result={defectTarget}
           onClose={() => setDefectTarget(null)}
-          onSubmit={registerDefect}
+          onSubmit={(input) => void registerDefect(input)}
         />
       )}
     </>
@@ -541,9 +558,14 @@ function DefectDialog({
 }: {
   result: TestRunResult;
   onClose: () => void;
-  onSubmit: (title: string) => void;
+  onSubmit: (input: DefectDialogInput) => void;
 }) {
   const [title, setTitle] = useState(`${result.testCase.title} 실패`);
+  const [severity, setSeverity] = useState(result.status === "blocked" ? "major" : "critical");
+  const [priority, setPriority] = useState("high");
+  const [reproductionSteps, setReproductionSteps] = useState(
+    result.testCase.steps.map((step, index) => `${index + 1}. ${step}`).join("\n"),
+  );
   const [submitted, setSubmitted] = useState(false);
 
   function handleSubmit() {
@@ -551,7 +573,12 @@ function DefectDialog({
     if (!title.trim()) {
       return;
     }
-    onSubmit(title);
+    onSubmit({
+      title: title.trim(),
+      severity,
+      priority,
+      reproductionSteps,
+    });
   }
 
   return (
@@ -591,24 +618,25 @@ function DefectDialog({
         </FormField>
         <div className="grid gap-3 md:grid-cols-2">
           <FormField label="심각도">
-            <SelectField defaultValue="Critical">
-              <option>Critical</option>
-              <option>Major</option>
-              <option>Minor</option>
-              <option>Trivial</option>
+            <SelectField value={severity} onChange={(event) => setSeverity(event.target.value)}>
+              <option value="critical">Critical</option>
+              <option value="major">Major</option>
+              <option value="minor">Minor</option>
+              <option value="trivial">Trivial</option>
             </SelectField>
           </FormField>
           <FormField label="우선순위">
-            <SelectField defaultValue="High">
-              <option>High</option>
-              <option>Medium</option>
-              <option>Low</option>
+            <SelectField value={priority} onChange={(event) => setPriority(event.target.value)}>
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
             </SelectField>
           </FormField>
         </div>
         <FormField label="재현 단계">
           <TextAreaField
-            defaultValue={result.testCase.steps.map((step, index) => `${index + 1}. ${step}`).join("\n")}
+            value={reproductionSteps}
+            onChange={(event) => setReproductionSteps(event.target.value)}
             rows={5}
           />
         </FormField>

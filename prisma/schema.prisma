@@ -50,6 +50,20 @@ enum ResultStatus {
   SKIPPED
 }
 
+enum DefectStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum DefectSeverity {
+  CRITICAL
+  MAJOR
+  MINOR
+  TRIVIAL
+}
+
 model User {
   id        String            @id @default(cuid())
   email     String            @unique
@@ -105,6 +119,7 @@ model Project {
   testFolders TestFolder[]
   testCases   TestCase[]
   testRuns    TestRun[]
+  defects     Defect[]
 
   @@unique([workspaceId, slug])
   @@index([workspaceId, status])
@@ -153,6 +168,7 @@ model TestCase {
   folder         TestFolder      @relation(fields: [folderId], references: [id], onDelete: Restrict)
   steps          TestStep[]
   runResults     TestRunResult[]
+  defectLinks    DefectLink[]
 
   @@unique([projectId, code])
   @@index([projectId, status])
@@ -211,10 +227,55 @@ model TestRunResult {
   updatedAt    DateTime     @updatedAt
   run          TestRun      @relation(fields: [runId], references: [id], onDelete: Cascade)
   testCase     TestCase     @relation(fields: [testCaseId], references: [id], onDelete: Restrict)
+  defectLinks  DefectLink[]
 
   @@unique([runId, testCaseId])
   @@unique([runId, code])
   @@index([testCaseId])
   @@index([runId, status])
   @@map("test_run_results")
+}
+
+model Defect {
+  id                String         @id @default(cuid())
+  projectId         String
+  code              String
+  title             String
+  description       String         @default("")
+  reproductionSteps String         @default("")
+  checklist         String[]       @default([])
+  severity          DefectSeverity @default(MAJOR)
+  priority          Priority       @default(MEDIUM)
+  status            DefectStatus   @default(OPEN)
+  assigneeName      String         @default("미지정")
+  reporterName      String         @default("김QA")
+  attachmentCount   Int            @default(0)
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  deletedAt         DateTime?
+  project           Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  links             DefectLink[]
+
+  @@unique([projectId, code])
+  @@index([projectId, status])
+  @@index([projectId, severity])
+  @@index([projectId, deletedAt])
+  @@map("defects")
+}
+
+model DefectLink {
+  id              String         @id @default(cuid())
+  defectId        String
+  testCaseId      String?
+  testRunResultId String?
+  createdAt       DateTime       @default(now())
+  defect          Defect         @relation(fields: [defectId], references: [id], onDelete: Cascade)
+  testCase        TestCase?      @relation(fields: [testCaseId], references: [id], onDelete: Cascade)
+  testRunResult   TestRunResult? @relation(fields: [testRunResultId], references: [id], onDelete: Cascade)
+
+  @@unique([defectId, testCaseId])
+  @@unique([defectId, testRunResultId])
+  @@index([testCaseId])
+  @@index([testRunResultId])
+  @@map("defect_links")
 }

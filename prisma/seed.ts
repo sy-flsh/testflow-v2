@@ -143,6 +143,84 @@ const testRuns = [
   ),
 ];
 
+const defects = [
+  createDefectSeed(
+    "BUG-001",
+    "환불 완료 후 영수증 발행 버튼이 비활성화됨",
+    "환불 완료 상태에서 영수증 발행 버튼이 간헐적으로 비활성화됩니다.",
+    "1. 환불 완료 주문 상세 진입\n2. 영수증 영역 확인\n3. 새로고침 후 버튼 상태 비교",
+    ["환불 상태 매핑 확인", "영수증 권한 조건 확인"],
+    "MAJOR",
+    "MEDIUM",
+    "IN_PROGRESS",
+    "이프론트",
+    "김QA",
+    ["TC-003"],
+    ["sprint-12-regression-TC-003", "payment-smoke-TC-003"],
+    1,
+  ),
+  createDefectSeed(
+    "BUG-002",
+    "결제 수단 변경 후 재결제 환경 차단",
+    "QA Server에서 재결제 인증 모듈이 간헐적으로 응답하지 않습니다.",
+    "1. 결제 실패 주문 진입\n2. 결제 수단 변경 선택\n3. 새 카드 등록 후 재결제 실행",
+    ["인증 모듈 상태 확인", "환경 변수 재확인", "재시도 로그 수집"],
+    "CRITICAL",
+    "HIGH",
+    "OPEN",
+    "박개발",
+    "김QA",
+    ["TC-004"],
+    ["sprint-12-regression-TC-004"],
+    2,
+  ),
+  createDefectSeed(
+    "BUG-003",
+    "잔액 부족 결제 실패 메시지 문구 불일치",
+    "잔액 부족 카드 결제 실패 시 화면과 API 메시지가 서로 다르게 표시됩니다.",
+    "1. 잔액 부족 테스트 카드 입력\n2. 결제 시도\n3. 오류 메시지 비교",
+    ["프론트 메시지 키 확인", "PG 응답 코드 매핑 확인"],
+    "MINOR",
+    "MEDIUM",
+    "RESOLVED",
+    "이프론트",
+    "홍길동",
+    ["TC-002"],
+    [],
+    0,
+  ),
+  createDefectSeed(
+    "BUG-004",
+    "3D 인증 재시도 버튼 포커스 스타일 누락",
+    "키보드 탐색 시 3D 인증 재시도 버튼의 포커스 상태가 명확하지 않습니다.",
+    "1. 3D 인증 실패 상태 진입\n2. Tab으로 재시도 버튼 이동\n3. 포커스 스타일 확인",
+    ["접근성 포커스 링 적용", "키보드 탐색 회귀 확인"],
+    "TRIVIAL",
+    "LOW",
+    "CLOSED",
+    "최검색",
+    "정PM",
+    ["TC-007"],
+    [],
+    0,
+  ),
+  createDefectSeed(
+    "BUG-005",
+    "부분 환불 금액 계산 시 쿠폰 할인 반영 누락",
+    "부분 환불 금액 계산에서 쿠폰 할인 금액이 일부 케이스에 반영되지 않습니다.",
+    "1. 쿠폰 적용 주문 생성\n2. 일부 상품 환불 선택\n3. 환불 예상 금액 확인",
+    ["쿠폰 할인 배분 로직 확인", "부분 환불 단위 테스트 추가"],
+    "MAJOR",
+    "HIGH",
+    "OPEN",
+    "박개발",
+    "김QA",
+    ["TC-008"],
+    [],
+    1,
+  ),
+];
+
 async function main() {
   const workspace = await prisma.workspace.upsert({
     where: { slug: workspaceSeed.slug },
@@ -392,6 +470,117 @@ async function main() {
       });
     }
   }
+
+  const testRunResultByCode = new Map(
+    await prisma.testRunResult
+      .findMany({
+        where: {
+          run: {
+            projectId: demoProject.id,
+            deletedAt: null,
+          },
+        },
+        select: { id: true, code: true },
+      })
+      .then((items) => items.map((item) => [item.code, item.id] as const)),
+  );
+
+  for (const defectSeed of defects) {
+    const defect = await prisma.defect.upsert({
+      where: {
+        projectId_code: {
+          projectId: demoProject.id,
+          code: defectSeed.code,
+        },
+      },
+      update: {
+        title: defectSeed.title,
+        description: defectSeed.description,
+        reproductionSteps: defectSeed.reproductionSteps,
+        checklist: defectSeed.checklist,
+        severity: defectSeed.severity,
+        priority: defectSeed.priority,
+        status: defectSeed.status,
+        assigneeName: defectSeed.assigneeName,
+        reporterName: defectSeed.reporterName,
+        attachmentCount: defectSeed.attachmentCount,
+        deletedAt: null,
+      },
+      create: {
+        projectId: demoProject.id,
+        code: defectSeed.code,
+        title: defectSeed.title,
+        description: defectSeed.description,
+        reproductionSteps: defectSeed.reproductionSteps,
+        checklist: defectSeed.checklist,
+        severity: defectSeed.severity,
+        priority: defectSeed.priority,
+        status: defectSeed.status,
+        assigneeName: defectSeed.assigneeName,
+        reporterName: defectSeed.reporterName,
+        attachmentCount: defectSeed.attachmentCount,
+      },
+    });
+
+    await prisma.defectLink.deleteMany({
+      where: { defectId: defect.id },
+    });
+
+    const linkInputs = [
+      ...defectSeed.testCaseCodes.map((code) => ({
+        defectId: defect.id,
+        testCaseId: testCaseByCode.get(code),
+      })),
+      ...defectSeed.resultCodes.map((code) => ({
+        defectId: defect.id,
+        testRunResultId: testRunResultByCode.get(code),
+      })),
+    ];
+
+    for (const linkInput of linkInputs) {
+      if ("testCaseId" in linkInput && !linkInput.testCaseId) {
+        throw new Error(`Seed defect test case not found: ${defectSeed.code}`);
+      }
+
+      if ("testRunResultId" in linkInput && !linkInput.testRunResultId) {
+        throw new Error(`Seed defect run result not found: ${defectSeed.code}`);
+      }
+    }
+
+    await prisma.defectLink.createMany({
+      data: linkInputs.map((linkInput) => ({
+        defectId: linkInput.defectId,
+        testCaseId: "testCaseId" in linkInput ? linkInput.testCaseId : undefined,
+        testRunResultId: "testRunResultId" in linkInput ? linkInput.testRunResultId : undefined,
+      })),
+    });
+  }
+
+  const runResults = await prisma.testRunResult.findMany({
+    where: {
+      run: {
+        projectId: demoProject.id,
+        deletedAt: null,
+      },
+    },
+    select: { id: true },
+  });
+
+  for (const result of runResults) {
+    const defectCount = await prisma.defectLink.count({
+      where: {
+        testRunResultId: result.id,
+        defect: {
+          deletedAt: null,
+        },
+      },
+    });
+
+    await prisma.testRunResult.update({
+      where: { id: result.id },
+      data: { defectCount },
+    });
+  }
 }
 
 main()
@@ -456,6 +645,38 @@ function createRunSeed(
     dueDate,
     status,
     results,
+  };
+}
+
+function createDefectSeed(
+  code: string,
+  title: string,
+  description: string,
+  reproductionSteps: string,
+  checklist: string[],
+  severity: "CRITICAL" | "MAJOR" | "MINOR" | "TRIVIAL",
+  priority: "HIGH" | "MEDIUM" | "LOW",
+  status: "OPEN" | "IN_PROGRESS" | "RESOLVED" | "CLOSED",
+  assigneeName: string,
+  reporterName: string,
+  testCaseCodes: string[],
+  resultCodes: string[],
+  attachmentCount: number,
+) {
+  return {
+    code,
+    title,
+    description,
+    reproductionSteps,
+    checklist,
+    severity,
+    priority,
+    status,
+    assigneeName,
+    reporterName,
+    testCaseCodes,
+    resultCodes,
+    attachmentCount,
   };
 }
 
