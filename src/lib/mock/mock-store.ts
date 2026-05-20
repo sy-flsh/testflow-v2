@@ -23,6 +23,8 @@ export const mockStorageKeys = {
   testRunApiBackup: `testflow-v2:${API_BACKUP_VERSION}:backup:test-runs`,
   testRunDetailApiBackup: `testflow-v2:${API_BACKUP_VERSION}:backup:test-run-detail`,
   defectApiBackup: `testflow-v2:${API_BACKUP_VERSION}:backup:defects`,
+  dashboardSummaryApiBackup: `testflow-v2:${API_BACKUP_VERSION}:backup:dashboard-summary`,
+  reportSummaryApiBackup: `testflow-v2:${API_BACKUP_VERSION}:backup:report-summary`,
 };
 
 export type ProjectBackupSnapshot = {
@@ -49,6 +51,11 @@ export type TestRunDetailBackupSnapshot = {
 export type DefectBackupSnapshot = {
   savedAt: string;
   defects: Defect[];
+};
+
+export type ApiBackupSnapshot<T> = {
+  savedAt: string;
+  data: T;
 };
 
 export function loadMockProjects() {
@@ -231,6 +238,22 @@ export function saveDefectBackupSnapshot(projectId: string, defects: Defect[]) {
   window.localStorage.setItem(getDefectBackupKey(projectId), JSON.stringify(snapshot));
 }
 
+export function loadDashboardSummaryBackupSnapshot<T>() {
+  return loadApiBackupSnapshot<T>(mockStorageKeys.dashboardSummaryApiBackup);
+}
+
+export function saveDashboardSummaryBackupSnapshot<T>(data: T) {
+  saveApiBackupSnapshot(mockStorageKeys.dashboardSummaryApiBackup, data);
+}
+
+export function loadReportSummaryBackupSnapshot<T>(projectId: string) {
+  return loadApiBackupSnapshot<T>(getReportSummaryBackupKey(projectId));
+}
+
+export function saveReportSummaryBackupSnapshot<T>(projectId: string, data: T) {
+  saveApiBackupSnapshot(getReportSummaryBackupKey(projectId), data);
+}
+
 export function loadMockTestCases() {
   return loadCollection(mockStorageKeys.testCases, mockTestCases);
 }
@@ -325,6 +348,38 @@ function saveCollection<T>(key: string, value: T[]) {
   window.localStorage.setItem(key, JSON.stringify(value));
 }
 
+function loadApiBackupSnapshot<T>(key: string) {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const raw = window.localStorage.getItem(key);
+
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(raw) as ApiBackupSnapshot<T>;
+  } catch {
+    window.localStorage.removeItem(key);
+    return null;
+  }
+}
+
+function saveApiBackupSnapshot<T>(key: string, data: T) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const snapshot: ApiBackupSnapshot<T> = {
+    savedAt: new Date().toISOString(),
+    data,
+  };
+
+  window.localStorage.setItem(key, JSON.stringify(snapshot));
+}
+
 function getTestCaseBackupKey(projectId: string) {
   return `${mockStorageKeys.testCaseApiBackup}:${projectId}`;
 }
@@ -339,4 +394,8 @@ function getTestRunDetailBackupKey(projectId: string, runId: string) {
 
 function getDefectBackupKey(projectId: string) {
   return `${mockStorageKeys.defectApiBackup}:${projectId}`;
+}
+
+function getReportSummaryBackupKey(projectId: string) {
+  return `${mockStorageKeys.reportSummaryApiBackup}:${projectId}`;
 }

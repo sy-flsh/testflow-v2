@@ -19,23 +19,17 @@ import { PriorityBadge } from "@/components/common/priority-badge";
 import { StatusBadge } from "@/components/common/status-badge";
 import { FormField, SelectField } from "@/components/common/form-field";
 import { priorityLabels } from "@/lib/domain/labels";
-import type { Defect, TestRun } from "@/lib/domain/types";
-import {
-  calculatePassRate,
-  countResults,
-  flattenRunResults,
-  summarizeByAssignee,
-  summarizeByFolder,
-  summarizeByRunDate,
-  summarizeDefectTrend,
-  summarizeTopFailedTestCases,
-  type DailyResultSummary,
-  type DefectTrendSummary,
-  type GroupedResultSummary,
-  type TopFailedTestCase,
+import type {
+  DailyResultSummary,
+  DefectTrendSummary,
+  GroupedResultSummary,
+  TopFailedTestCase,
 } from "@/lib/domain/summary";
-import { mockDefects, mockTestFolders, mockTestRuns } from "@/lib/mock/mock-data";
-import { loadMockDefects, loadMockRuns } from "@/lib/mock/mock-store";
+import type { ProjectReportSummaryResponse } from "@/lib/reports/report-summary";
+import {
+  loadReportSummaryBackupSnapshot,
+  saveReportSummaryBackupSnapshot,
+} from "@/lib/mock/mock-store";
 
 type ReportFilter = {
   period: "7d" | "14d" | "30d" | "custom";
@@ -44,16 +38,10 @@ type ReportFilter = {
   environment: string;
 };
 
-const resultRatioColors = {
-  passed: "#10B981",
-  failed: "#EF4444",
-  blocked: "#F59E0B",
-  skipped: "#64748B",
-};
-
-export function ReportDashboard() {
-  const [runs, setRuns] = useState<TestRun[]>(mockTestRuns);
-  const [defects, setDefects] = useState<Defect[]>(mockDefects);
+export function ReportDashboard({ projectId }: { projectId: string }) {
+  const [summary, setSummary] = useState<ProjectReportSummaryResponse | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [notice, setNotice] = useState("");
   const [filter, setFilter] = useState<ReportFilter>({
     period: "7d",
     plan: "전체 플랜",
@@ -68,78 +56,99 @@ export function ReportDashboard() {
   const [includeDefects, setIncludeDefects] = useState(true);
 
   useEffect(() => {
-    setRuns(loadMockRuns());
-    setDefects(loadMockDefects());
-  }, []);
+    let ignore = false;
 
-  const plans = useMemo(() => ["전체 플랜", ...runs.map((run) => run.title)], [runs]);
-  const assignees = useMemo(
-    () => ["전체 담당자", ...Array.from(new Set(runs.map((run) => run.assignee)))],
-    [runs],
-  );
-  const environments = useMemo(
-    () => ["전체 환경", ...Array.from(new Set(runs.map((run) => run.environment)))],
-    [runs],
-  );
-  const filteredRuns = useMemo(
-    () =>
-      runs.filter((run) => {
-        const matchesPlan = filter.plan === "전체 플랜" || run.title === filter.plan;
-        const matchesAssignee = filter.assignee === "전체 담당자" || run.assignee === filter.assignee;
-        const matchesEnvironment = filter.environment === "전체 환경" || run.environment === filter.environment;
-        return matchesPlan && matchesAssignee && matchesEnvironment;
-      }),
-    [filter.assignee, filter.environment, filter.plan, runs],
-  );
-  const filteredResultIds = useMemo(
-    () => new Set(flattenRunResults(filteredRuns).map((result) => result.id)),
-    [filteredRuns],
-  );
-  const filteredDefects = useMemo(() => {
-    if (filter.plan === "전체 플랜" && filter.assignee === "전체 담당자" && filter.environment === "전체 환경") {
-      return defects;
+    async function loadSummary() {
+      setIsLoading(true);
+      setNotice("");
+
+      const params = new URLSearchParams({
+        period: filter.period,
+        plan: filter.plan,
+        assignee: filter.assignee,
+        environment: filter.environment,
+      });
+
+      try {
+        const response = await fetch(`/api/projects/${projectId}/reports/summary?${params.toString()}`, {
+          cache: "no-store",
+        });
+        const payload = (await response.json()) as {
+          data?: ProjectReportSummaryResponse;
+          error?: { message?: string };
+        };
+
+        if (!response.ok || !payload.data) {
+          throw new Error(payload.error?.message || "보고서 요약을 불러오지 못했습니다.");
+        }
+
+        if (ignore) {
+          return;
+        }
+
+        setSummary(payload.data);
+        saveReportSummaryBackupSnapshot(projectId, payload.data);
+      } catch (error) {
+        if (ignore) {
+          return;
+        }
+
+        const backup = loadReportSummaryBackupSnapshot<ProjectReportSummaryResponse>(projectId);
+
+        if (backup) {
+          setSummary(backup.data);
+          setNotice(`API 연결 실패로 ${formatBackupTime(backup.savedAt)} 백업 데이터를 표시 중입니다.`);
+        } else {
+          setSummary(null);
+          setNotice(error instanceof Error ? error.message : "보고서 요약을 불러오지 못했습니다.");
+        }
+      } finally {
+        if (!ignore) {
+          setIsLoading(false);
+        }
+      }
     }
 
-    return defects.filter((defect) => defect.linkedRunResultId && filteredResultIds.has(defect.linkedRunResultId));
-  }, [defects, filter.assignee, filter.environment, filter.plan, filteredResultIds]);
-  const results = useMemo(() => flattenRunResults(filteredRuns), [filteredRuns]);
-  const resultCounts = useMemo(() => countResults(results), [results]);
-  const dailyTrends = useMemo(() => summarizeByRunDate(filteredRuns), [filteredRuns]);
-  const resultRatio = useMemo(
+    void loadSummary();
+
+    return () => {
+      ignore = true;
+    };
+  }, [filter.assignee, filter.environment, filter.period, filter.plan, projectId]);
+
+  const plans = summary?.filters.plans ?? ["전체 플랜"];
+  const assignees = summary?.filters.assignees ?? ["전체 담당자"];
+  const environments = summary?.filters.environments ?? ["전체 환경"];
+  const kpis = useMemo(
     () => [
-      { label: "Pass", value: resultCounts.passed, color: resultRatioColors.passed },
-      { label: "Fail", value: resultCounts.failed, color: resultRatioColors.failed },
-      { label: "Block", value: resultCounts.blocked, color: resultRatioColors.blocked },
-      { label: "Skip", value: resultCounts.skipped, color: resultRatioColors.skipped },
-    ],
-    [resultCounts],
-  );
-  const assigneeResults = useMemo(() => summarizeByAssignee(filteredRuns), [filteredRuns]);
-  const categoryResults = useMemo(() => summarizeByFolder(results, mockTestFolders), [results]);
-  const defectTrend = useMemo(() => summarizeDefectTrend(filteredDefects), [filteredDefects]);
-  const topFailedCases = useMemo(
-    () => summarizeTopFailedTestCases(filteredRuns, filteredDefects, mockTestFolders),
-    [filteredDefects, filteredRuns],
-  );
-  const hasData = results.length > 0;
-
-  const kpis = useMemo(() => {
-    const total = results.length;
-    const passRate = calculatePassRate(results);
-    const criticalCount = filteredDefects.filter((defect) => defect.severity === "critical").length;
-
-    return [
-      { label: "총 실행", value: total.toLocaleString("ko-KR"), detail: "선택 조건 Result 기준", icon: BarChart3 },
-      { label: "Pass 비율", value: `${passRate}%`, detail: "Pending 제외 계산", icon: CheckCircle2 },
+      {
+        label: "총 실행",
+        value: (summary?.kpis.totalResults ?? 0).toLocaleString("ko-KR"),
+        detail: "선택 조건 Result 기준",
+        icon: BarChart3,
+      },
+      {
+        label: "Pass 비율",
+        value: `${summary?.kpis.passRate ?? 0}%`,
+        detail: "Pending 제외 계산",
+        icon: CheckCircle2,
+      },
       {
         label: "발견 결함",
-        value: filteredDefects.length.toString(),
-        detail: `Critical ${criticalCount}건 포함`,
+        value: (summary?.kpis.defectCount ?? 0).toString(),
+        detail: `Critical ${summary?.kpis.criticalDefectCount ?? 0}건 포함`,
         icon: Bug,
       },
-      { label: "평균 실행 시간", value: "4분 18초", detail: "실측 데이터 연결 전 mock 값", icon: Timer },
-    ];
-  }, [filteredDefects, results]);
+      {
+        label: "평균 실행 시간",
+        value: summary?.kpis.averageExecutionTimeLabel ?? "0분",
+        detail: "실측 duration 필드 연결 전 임시 표시",
+        icon: Timer,
+      },
+    ],
+    [summary],
+  );
+  const hasData = Boolean(summary?.hasData);
 
   function updateFilter<Key extends keyof ReportFilter>(key: Key, value: ReportFilter[Key]) {
     setFilter((current) => ({ ...current, [key]: value }));
@@ -164,13 +173,13 @@ export function ReportDashboard() {
                 <option value="7d">최근 7일</option>
                 <option value="14d">최근 14일</option>
                 <option value="30d">최근 30일</option>
-                <option value="custom">사용자 지정</option>
+                <option value="custom">전체 기간</option>
               </SelectField>
             </FormField>
             <FormField label="플랜">
               <SelectField value={filter.plan} onChange={(event) => updateFilter("plan", event.target.value)}>
-                {plans.map((plan) => (
-                  <option key={plan} value={plan}>
+                {plans.map((plan, index) => (
+                  <option key={`${plan}-${index}`} value={plan}>
                     {plan}
                   </option>
                 ))}
@@ -178,8 +187,8 @@ export function ReportDashboard() {
             </FormField>
             <FormField label="담당자">
               <SelectField value={filter.assignee} onChange={(event) => updateFilter("assignee", event.target.value)}>
-                {assignees.map((assignee) => (
-                  <option key={assignee} value={assignee}>
+                {assignees.map((assignee, index) => (
+                  <option key={`${assignee}-${index}`} value={assignee}>
                     {assignee}
                   </option>
                 ))}
@@ -187,8 +196,8 @@ export function ReportDashboard() {
             </FormField>
             <FormField label="환경">
               <SelectField value={filter.environment} onChange={(event) => updateFilter("environment", event.target.value)}>
-                {environments.map((environment) => (
-                  <option key={environment} value={environment}>
+                {environments.map((environment, index) => (
+                  <option key={`${environment}-${index}`} value={environment}>
                     {environment}
                   </option>
                 ))}
@@ -230,13 +239,22 @@ export function ReportDashboard() {
             {exportNotice}
           </div>
         )}
+        {notice && (
+          <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            {notice}
+          </div>
+        )}
       </section>
 
-      {!hasData ? (
+      {isLoading && !summary ? (
+        <div className="tf-card p-6 text-sm text-[var(--text-secondary)]">
+          보고서 데이터를 불러오는 중입니다.
+        </div>
+      ) : !hasData ? (
         <EmptyState
           icon={BarChart3}
           title="선택한 조건의 보고서 데이터가 없습니다"
-          description="다른 테스트 플랜이나 기간을 선택하면 mock 보고서 데이터를 확인할 수 있습니다."
+          description="다른 테스트 플랜이나 기간을 선택하면 DB에 저장된 보고서 데이터를 확인할 수 있습니다."
         />
       ) : (
         <>
@@ -260,27 +278,27 @@ export function ReportDashboard() {
 
           <section className="grid gap-5 xl:grid-cols-[1.35fr_0.9fr]">
             <ChartCard title="일별 실행 추이" description="일자별 실행 건수와 Pass 결과">
-              <DailyExecutionChart data={dailyTrends} />
+              <DailyExecutionChart data={summary?.dailyTrends ?? []} />
             </ChartCard>
             <ChartCard title="결과 비율" description="Pass / Fail / Block / Skip 구성">
-              <DonutChart data={resultRatio} />
+              <DonutChart data={summary?.resultRatio ?? []} />
             </ChartCard>
           </section>
 
           <section className="grid gap-5 xl:grid-cols-2">
             <ChartCard title="담당자별 결과" description="담당자별 실행 결과 분포">
-              <StackedBars data={assigneeResults} />
+              <StackedBars data={summary?.assigneeResults ?? []} />
             </ChartCard>
             <ChartCard title="카테고리별 결과" description="업무 영역별 품질 신호">
-              <CategoryBars data={categoryResults} />
+              <CategoryBars data={summary?.categoryResults ?? []} />
             </ChartCard>
           </section>
 
           <section className="grid gap-5 xl:grid-cols-[0.95fr_1.25fr]">
             <ChartCard title="결함 트렌드" description="일별 Open / Resolved 변화">
-              <DefectTrendChart data={defectTrend} />
+              <DefectTrendChart data={summary?.defectTrend ?? []} />
             </ChartCard>
-            <TopFailedTable data={topFailedCases} />
+            <TopFailedTable data={summary?.topFailedCases ?? []} />
           </section>
         </>
       )}
@@ -621,4 +639,19 @@ function ToggleRow({
       />
     </label>
   );
+}
+
+function formatBackupTime(value: string) {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "최근";
+  }
+
+  return date.toLocaleString("ko-KR", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }

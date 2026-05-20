@@ -27,7 +27,7 @@ export default async function ReportsPage({
         title="보고서"
         description="테스트 실행 결과, 결함 추이, 실패가 잦은 테스트케이스를 한 화면에서 확인합니다."
       />
-      <ReportDashboard />
+      <ReportDashboard projectId={projectId} />
     </AppShell>
   );
 }
