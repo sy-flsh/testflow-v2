@@ -1,4 +1,4 @@
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import { apiError } from "@/lib/api/response";
 import { findProjectForTestCaseApi } from "@/lib/testcases/testcase-api";
 
@@ -51,18 +51,19 @@ export async function GET(_request: Request, context: RouteContext) {
       return apiError("프로젝트를 찾을 수 없습니다.", 404, "PROJECT_NOT_FOUND");
     }
 
-    const workbook = XLSX.utils.book_new();
-    const worksheet = XLSX.utils.json_to_sheet(exampleRows, { header: headers });
-    worksheet["!cols"] = headers.map((header) => ({
-      wch: Math.max(header.length + 2, 18),
-    }));
-    XLSX.utils.book_append_sheet(workbook, worksheet, "TestCases");
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet("TestCases");
 
-    const buffer = XLSX.write(workbook, {
-      type: "buffer",
-      bookType: "xlsx",
-      compression: true,
-    }) as Buffer;
+    worksheet.columns = headers.map((header) => ({
+      header,
+      key: header,
+      width: Math.max(header.length + 2, 18),
+    }));
+    worksheet.addRows(exampleRows);
+    worksheet.getRow(1).font = { bold: true };
+    worksheet.views = [{ state: "frozen", ySplit: 1 }];
+
+    const buffer = await workbook.xlsx.writeBuffer();
 
     return new Response(new Uint8Array(buffer), {
       headers: {
