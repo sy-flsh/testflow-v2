@@ -9,6 +9,7 @@ import {
   Paperclip,
   Plus,
   Search,
+  Sparkles,
   Tag,
   Upload,
 } from "lucide-react";
@@ -32,6 +33,12 @@ import {
 } from "@/lib/mock/mock-store";
 import { cn } from "@/lib/utils";
 import type { TestCaseImportPreview, TestCaseImportPreviewRow } from "@/lib/testcases/import-api";
+import type {
+  AiDraftDto,
+  AiDraftInput,
+  AiDraftItem,
+  AiDraftTestType,
+} from "@/lib/testcases/ai-draft-types";
 
 type Draft = {
   id?: string;
@@ -63,6 +70,7 @@ export function TestCaseManager({ projectId }: { projectId: string }) {
   const [drawerDraft, setDrawerDraft] = useState<Draft | null>(null);
   const [submitted, setSubmitted] = useState(false);
   const [isUploadOpen, setUploadOpen] = useState(false);
+  const [isAiOpen, setAiOpen] = useState(false);
 
   const apiBase = `/api/projects/${encodeURIComponent(projectId)}`;
 
@@ -413,6 +421,13 @@ export function TestCaseManager({ projectId }: { projectId: string }) {
 
           <div className="flex flex-wrap items-center gap-2">
             <button
+              onClick={() => setAiOpen(true)}
+              className="inline-flex h-9 items-center gap-2 rounded-md border border-violet-200 bg-violet-50 px-3 text-sm font-medium text-violet-700 hover:bg-violet-100"
+            >
+              <Sparkles className="h-4 w-4" />
+              AI 초안 생성
+            </button>
+            <button
               onClick={() => setUploadOpen(true)}
               className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--brand-primary)] bg-blue-50 px-3 text-sm font-medium text-[var(--brand-primary)] hover:bg-blue-100"
             >
@@ -495,6 +510,18 @@ export function TestCaseManager({ projectId }: { projectId: string }) {
         <ExcelUploadModal
           apiBase={apiBase}
           onClose={() => setUploadOpen(false)}
+          onImported={async () => {
+            await reloadFromApi({ fallback: false });
+          }}
+        />
+      )}
+
+      {isAiOpen && (
+        <AiDraftModal
+          apiBase={apiBase}
+          folders={folders}
+          selectedFolderId={selectedFolderId}
+          onClose={() => setAiOpen(false)}
           onImported={async () => {
             await reloadFromApi({ fallback: false });
           }}
@@ -1032,6 +1059,313 @@ function ImportPreviewTable({ rows }: { rows: TestCaseImportPreviewRow[] }) {
         </tbody>
       </table>
     </div>
+  );
+}
+
+function AiDraftModal({
+  apiBase,
+  folders,
+  selectedFolderId,
+  onClose,
+  onImported,
+}: {
+  apiBase: string;
+  folders: TestFolder[];
+  selectedFolderId: string;
+  onClose: () => void;
+  onImported: () => Promise<void>;
+}) {
+  const defaultFolderId =
+    selectedFolderId === "all" ? getDefaultFolderId(folders) : selectedFolderId;
+  const [featureName, setFeatureName] = useState("");
+  const [requirementText, setRequirementText] = useState("");
+  const [targetFolderId, setTargetFolderId] = useState(defaultFolderId);
+  const [priority, setPriority] = useState<Priority>("medium");
+  const [scenarioCount, setScenarioCount] = useState("4");
+  const [testType, setTestType] = useState<AiDraftTestType>("normal");
+  const [draft, setDraft] = useState<AiDraftDto | null>(null);
+  const [selectedIndexes, setSelectedIndexes] = useState<number[]>([]);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  async function generateDraft() {
+    setError("");
+    setNotice("");
+
+    if (!requirementText.trim()) {
+      setError("요구사항을 입력하세요.");
+      return;
+    }
+
+    setIsGenerating(true);
+
+    try {
+      const payload = await requestData<{
+        draft: AiDraftDto;
+        fallbackUsed: boolean;
+        message: string;
+      }>(`${apiBase}/test-cases/ai-drafts`, {
+        method: "POST",
+        body: JSON.stringify({
+          featureName,
+          requirementText,
+          targetFolderId,
+          priority,
+          scenarioCount: Number(scenarioCount),
+          testType,
+        } satisfies AiDraftInput),
+      });
+      setDraft(payload.draft);
+      setSelectedIndexes(payload.draft.items.map((_item, index) => index));
+      setNotice(payload.message);
+    } catch (generateError) {
+      setError(getErrorMessage(generateError));
+    } finally {
+      setIsGenerating(false);
+    }
+  }
+
+  async function saveSelectedDrafts() {
+    if (!draft || selectedIndexes.length === 0) {
+      return;
+    }
+
+    setIsSaving(true);
+    setError("");
+    setNotice("");
+
+    try {
+      const result = await requestData<{ savedCount: number }>(
+        `${apiBase}/test-cases/ai-drafts/${encodeURIComponent(draft.id)}/save`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            itemIndexes: selectedIndexes,
+            targetFolderId,
+          }),
+        },
+      );
+      await onImported();
+      setNotice(`${result.savedCount}개 AI 초안을 테스트케이스로 저장했습니다.`);
+    } catch (saveError) {
+      setError(getErrorMessage(saveError));
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  function toggleIndex(index: number) {
+    setSelectedIndexes((current) =>
+      current.includes(index)
+        ? current.filter((item) => item !== index)
+        : [...current, index].sort((a, b) => a - b),
+    );
+  }
+
+  return (
+    <DialogShell
+      title="AI 테스트케이스 초안 생성"
+      description="요구사항을 입력하면 저장 전 검토 가능한 테스트케이스 초안을 생성합니다."
+      onClose={onClose}
+      maxWidth="max-w-5xl"
+      footer={
+        <div className="flex flex-wrap justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="h-9 rounded-md border border-[var(--border-default)] bg-white px-3 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
+          >
+            닫기
+          </button>
+          <button
+            onClick={generateDraft}
+            disabled={isGenerating}
+            className="inline-flex h-9 items-center gap-2 rounded-md border border-violet-200 bg-violet-50 px-3 text-sm font-medium text-violet-700 hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <Sparkles className="h-4 w-4" />
+            {isGenerating ? "생성 중..." : "초안 생성"}
+          </button>
+          <button
+            onClick={saveSelectedDrafts}
+            disabled={!draft || selectedIndexes.length === 0 || isSaving}
+            className="h-9 rounded-md bg-[var(--brand-primary)] px-3 text-sm font-medium text-white hover:bg-[var(--brand-primary-hover)] disabled:cursor-not-allowed disabled:bg-[var(--status-pending)]"
+          >
+            {isSaving ? "저장 중..." : `선택 초안 저장 ${selectedIndexes.length || ""}`}
+          </button>
+        </div>
+      }
+    >
+      <div className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
+        <section className="space-y-4">
+          <FormField label="기능명">
+            <TextInput
+              value={featureName}
+              onChange={(event) => setFeatureName(event.target.value)}
+              placeholder="예: 쿠폰 적용 결제"
+            />
+          </FormField>
+          <FormField label="요구사항" required>
+            <TextAreaField
+              value={requirementText}
+              onChange={(event) => setRequirementText(event.target.value)}
+              rows={8}
+              placeholder="기능 요구사항, 예외 조건, 검증하고 싶은 사용자 흐름을 입력하세요."
+            />
+          </FormField>
+          <div className="grid gap-3 md:grid-cols-2">
+            <FormField label="저장 폴더">
+              <SelectField value={targetFolderId} onChange={(event) => setTargetFolderId(event.target.value)}>
+                {folders
+                  .filter((folder) => folder.id !== "all")
+                  .map((folder) => (
+                    <option key={folder.id} value={folder.id}>
+                      {folder.parentId ? "ㄴ " : ""}
+                      {folder.label}
+                    </option>
+                  ))}
+              </SelectField>
+            </FormField>
+            <FormField label="기본 우선순위">
+              <SelectField value={priority} onChange={(event) => setPriority(event.target.value as Priority)}>
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+                <option value="low">Low</option>
+              </SelectField>
+            </FormField>
+            <FormField label="생성 개수">
+              <SelectField value={scenarioCount} onChange={(event) => setScenarioCount(event.target.value)}>
+                <option value="3">3개</option>
+                <option value="4">4개</option>
+                <option value="5">5개</option>
+              </SelectField>
+            </FormField>
+            <FormField label="테스트 유형">
+              <SelectField value={testType} onChange={(event) => setTestType(event.target.value as AiDraftTestType)}>
+                <option value="normal">Normal</option>
+                <option value="edge">Edge</option>
+                <option value="negative">Negative</option>
+                <option value="regression">Regression</option>
+              </SelectField>
+            </FormField>
+          </div>
+        </section>
+
+        <section className="min-h-[420px] rounded-lg border border-[var(--border-default)] bg-[var(--bg-subtle)] p-4">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold">생성 결과 Preview</h3>
+              <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                선택한 초안만 DB 테스트케이스로 저장됩니다.
+              </p>
+            </div>
+            {draft && (
+              <span className="rounded-full bg-white px-2 py-1 text-xs font-medium text-[var(--text-secondary)]">
+                {draft.status === "fallback" ? "Fallback" : "AI"}
+              </span>
+            )}
+          </div>
+
+          {!draft ? (
+            <EmptyState
+              icon={Sparkles}
+              title="아직 생성된 초안이 없습니다"
+              description="요구사항을 입력한 뒤 초안 생성을 실행하세요."
+            />
+          ) : (
+            <div className="max-h-[520px] space-y-3 overflow-y-auto pr-1">
+              {draft.items.map((item, index) => (
+                <AiDraftPreviewCard
+                  key={`${draft.id}-${index}-${item.title}`}
+                  index={index}
+                  item={item}
+                  checked={selectedIndexes.includes(index)}
+                  onToggle={() => toggleIndex(index)}
+                />
+              ))}
+            </div>
+          )}
+        </section>
+      </div>
+
+      {notice && (
+        <div
+          className={cn(
+            "mt-4 rounded-md border px-3 py-2 text-sm",
+            draft?.status === "fallback"
+              ? "border-amber-200 bg-amber-50 text-amber-800"
+              : "border-emerald-200 bg-emerald-50 text-emerald-700",
+          )}
+        >
+          {notice}
+        </div>
+      )}
+      {error && (
+        <div className="mt-4 whitespace-pre-wrap rounded-md border border-[var(--danger-border)] bg-[var(--danger-bg)] px-3 py-2 text-sm text-[var(--danger-text)]">
+          {error}
+        </div>
+      )}
+    </DialogShell>
+  );
+}
+
+function AiDraftPreviewCard({
+  index,
+  item,
+  checked,
+  onToggle,
+}: {
+  index: number;
+  item: AiDraftItem;
+  checked: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <article className="rounded-lg border border-[var(--border-default)] bg-white p-4">
+      <label className="flex cursor-pointer items-start gap-3">
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={onToggle}
+          className="mt-1 h-4 w-4 rounded border-[var(--border-default)]"
+        />
+        <span className="min-w-0 flex-1">
+          <span className="text-xs font-semibold text-[var(--brand-primary)]">초안 {index + 1}</span>
+          <span className="mt-1 block text-sm font-semibold text-[var(--text-primary)]">{item.title}</span>
+          <span className="mt-1 block text-sm text-[var(--text-secondary)]">{item.description}</span>
+        </span>
+      </label>
+      <div className="mt-3 grid gap-3 text-xs text-[var(--text-secondary)] md:grid-cols-2">
+        <div>
+          <span className="font-semibold text-[var(--text-primary)]">사전 조건</span>
+          <p className="mt-1 leading-5">{item.preconditions || "-"}</p>
+        </div>
+        <div>
+          <span className="font-semibold text-[var(--text-primary)]">태그</span>
+          <div className="mt-1 flex flex-wrap gap-1">
+            {item.tags.map((tag, tagIndex) => (
+              <span key={`${item.title}-${tag}-${tagIndex}`} className="rounded-full bg-[var(--bg-muted)] px-2 py-0.5">
+                #{tag}
+              </span>
+            ))}
+          </div>
+        </div>
+      </div>
+      <ol className="mt-3 space-y-2 text-xs text-[var(--text-secondary)]">
+        {item.steps.map((step, stepIndex) => (
+          <li key={`${item.title}-step-${stepIndex}`} className="rounded-md bg-[var(--bg-subtle)] p-2">
+            <div>
+              <span className="font-semibold text-[var(--text-primary)]">{stepIndex + 1}. Action</span>
+              <span className="ml-2">{step.action}</span>
+            </div>
+            <div className="mt-1">
+              <span className="font-semibold text-[var(--text-primary)]">Expected</span>
+              <span className="ml-2">{step.expectedResult || "-"}</span>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </article>
   );
 }
 

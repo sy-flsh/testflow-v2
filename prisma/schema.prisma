@@ -64,6 +64,13 @@ enum DefectSeverity {
   TRIVIAL
 }
 
+enum AiDraftStatus {
+  DRAFT
+  SAVED
+  FAILED
+  FALLBACK
+}
+
 model User {
   id        String            @id @default(cuid())
   email     String            @unique
@@ -106,20 +113,21 @@ model WorkspaceMember {
 }
 
 model Project {
-  id          String        @id @default(cuid())
+  id          String            @id @default(cuid())
   workspaceId String
   name        String
   slug        String
-  description String        @default("")
-  color       String        @default("#2563EB")
-  status      ProjectStatus @default(ACTIVE)
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
-  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  description String            @default("")
+  color       String            @default("#2563EB")
+  status      ProjectStatus     @default(ACTIVE)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  workspace   Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   testFolders TestFolder[]
   testCases   TestCase[]
   testRuns    TestRun[]
   defects     Defect[]
+  aiDrafts    AiTestCaseDraft[]
 
   @@unique([workspaceId, slug])
   @@index([workspaceId, status])
@@ -278,4 +286,22 @@ model DefectLink {
   @@index([testCaseId])
   @@index([testRunResultId])
   @@map("defect_links")
+}
+
+model AiTestCaseDraft {
+  id           String        @id @default(cuid())
+  projectId    String
+  prompt       Json
+  source       String        @default("fallback")
+  status       AiDraftStatus @default(DRAFT)
+  items        Json
+  errorMessage String?
+  createdById  String?
+  createdAt    DateTime      @default(now())
+  savedAt      DateTime?
+  project      Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, status])
+  @@index([createdAt])
+  @@map("ai_test_case_drafts")
 }
