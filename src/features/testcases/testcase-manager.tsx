@@ -12,7 +12,7 @@ import {
   Tag,
   Upload,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { EmptyState } from "@/components/common/empty-state";
 import { DialogShell } from "@/components/common/dialog-shell";
 import { DrawerShell } from "@/components/common/drawer-shell";
@@ -31,6 +31,7 @@ import {
   saveTestCaseBackupSnapshot,
 } from "@/lib/mock/mock-store";
 import { cn } from "@/lib/utils";
+import type { TestCaseImportPreview, TestCaseImportPreviewRow } from "@/lib/testcases/import-api";
 
 type Draft = {
   id?: string;
@@ -47,6 +48,7 @@ type Draft = {
 const allFolder: TestFolder = { id: "all", label: "전체" };
 
 export function TestCaseManager({ projectId }: { projectId: string }) {
+  const [isMounted, setIsMounted] = useState(false);
   const [folders, setFolders] = useState<TestFolder[]>([allFolder]);
   const [testCases, setTestCases] = useState<TestCase[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -61,14 +63,15 @@ export function TestCaseManager({ projectId }: { projectId: string }) {
   const [drawerDraft, setDrawerDraft] = useState<Draft | null>(null);
   const [submitted, setSubmitted] = useState(false);
   const [isUploadOpen, setUploadOpen] = useState(false);
-  const [downloadNotice, setDownloadNotice] = useState(false);
 
   const apiBase = `/api/projects/${encodeURIComponent(projectId)}`;
 
   useEffect(() => {
-    let active = true;
+    setIsMounted(true);
+  }, []);
 
-    async function loadData() {
+  const reloadFromApi = useCallback(
+    async (options?: { fallback?: boolean }) => {
       setIsLoading(true);
       setActionError("");
       setNotice("");
@@ -79,18 +82,14 @@ export function TestCaseManager({ projectId }: { projectId: string }) {
           requestData<TestCase[]>(`${apiBase}/test-cases`),
         ]);
 
-        if (!active) {
-          return;
-        }
-
         const nextFolders = withAllFolder(apiFolders);
         setFolders(nextFolders);
         setTestCases(apiTestCases);
         saveTestCaseBackupSnapshot(projectId, nextFolders, apiTestCases);
         setIsBackupMode(false);
       } catch {
-        if (!active) {
-          return;
+        if (options?.fallback === false) {
+          throw new Error("테스트케이스 목록을 다시 불러오지 못했습니다.");
         }
 
         const snapshot = loadTestCaseBackupSnapshot(projectId);
@@ -109,8 +108,21 @@ export function TestCaseManager({ projectId }: { projectId: string }) {
 
         setIsBackupMode(true);
       } finally {
+        setIsLoading(false);
+      }
+    },
+    [apiBase, projectId],
+  );
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadData() {
+      try {
+        await reloadFromApi();
+      } catch {
         if (active) {
-          setIsLoading(false);
+          setNotice("테스트케이스 데이터를 불러오지 못했습니다.");
         }
       }
     }
@@ -120,7 +132,7 @@ export function TestCaseManager({ projectId }: { projectId: string }) {
     return () => {
       active = false;
     };
-  }, [apiBase, projectId]);
+  }, [reloadFromApi]);
 
   const allTags = useMemo(
     () => Array.from(new Set(testCases.flatMap((tc) => tc.tags))).sort(),
@@ -162,6 +174,14 @@ export function TestCaseManager({ projectId }: { projectId: string }) {
   const allVisibleSelected =
     visibleTestCases.length > 0 &&
     visibleTestCases.every((tc) => selectedIds.includes(tc.id));
+
+  if (!isMounted) {
+    return (
+      <div className="rounded-lg border border-[var(--border-default)] bg-white px-4 py-3 text-sm text-[var(--text-secondary)]">
+        테스트케이스 데이터를 불러오는 중입니다.
+      </div>
+    );
+  }
 
   function openNewDrawer() {
     setSubmitted(false);
@@ -401,8 +421,7 @@ export function TestCaseManager({ projectId }: { projectId: string }) {
             </button>
             <button
               onClick={() => {
-                setDownloadNotice(true);
-                window.setTimeout(() => setDownloadNotice(false), 2200);
+                window.location.href = `${apiBase}/test-cases/template.xlsx`;
               }}
               className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border-default)] bg-white px-3 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
             >
@@ -417,11 +436,6 @@ export function TestCaseManager({ projectId }: { projectId: string }) {
             </button>
           </div>
         </div>
-        {downloadNotice && (
-          <p className="mt-3 text-sm text-[var(--text-secondary)]">
-            다운로드 기능은 후속 단계에서 실제 파일 생성과 연결합니다.
-          </p>
-        )}
       </div>
 
       <div className="grid min-h-[560px] grid-cols-1 overflow-hidden rounded-lg border border-[var(--border-default)] bg-white lg:grid-cols-[240px_minmax(0,1fr)]">
@@ -477,7 +491,15 @@ export function TestCaseManager({ projectId }: { projectId: string }) {
         />
       )}
 
-      {isUploadOpen && <ExcelUploadModal onClose={() => setUploadOpen(false)} />}
+      {isUploadOpen && (
+        <ExcelUploadModal
+          apiBase={apiBase}
+          onClose={() => setUploadOpen(false)}
+          onImported={async () => {
+            await reloadFromApi({ fallback: false });
+          }}
+        />
+      )}
     </>
   );
 }
@@ -778,15 +800,97 @@ function TestCaseDrawer({
   );
 }
 
-function ExcelUploadModal({ onClose }: { onClose: () => void }) {
-  const [hasMockFile, setHasMockFile] = useState(false);
+function ExcelUploadModal({
+  apiBase,
+  onClose,
+  onImported,
+}: {
+  apiBase: string;
+  onClose: () => void;
+  onImported: () => Promise<void>;
+}) {
+  const [fileName, setFileName] = useState("");
+  const [preview, setPreview] = useState<TestCaseImportPreview | null>(null);
+  const [isPreviewing, setIsPreviewing] = useState(false);
+  const [isCommitting, setIsCommitting] = useState(false);
+  const [error, setError] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
+  const validRows = preview?.rows.filter((row) => row.status === "valid") ?? [];
+
+  async function previewFile(file: File) {
+    setFileName(file.name);
+    setPreview(null);
+    setSuccessMessage("");
+    setError("");
+
+    if (!file.name.toLowerCase().endsWith(".csv")) {
+      setError("현재 실제 가져오기는 CSV 파일만 지원합니다. XLSX는 템플릿 다운로드용입니다.");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("file", file);
+    setIsPreviewing(true);
+
+    try {
+      const nextPreview = await requestData<TestCaseImportPreview>(
+        `${apiBase}/test-cases/import/preview`,
+        {
+          method: "POST",
+          body: formData,
+          headers: {},
+        },
+      );
+      setPreview(nextPreview);
+    } catch (previewError) {
+      setError(getErrorMessage(previewError));
+    } finally {
+      setIsPreviewing(false);
+    }
+  }
+
+  async function commitImport() {
+    if (!preview || validRows.length === 0) {
+      return;
+    }
+
+    setIsCommitting(true);
+    setError("");
+    setSuccessMessage("");
+
+    try {
+      const result = await requestData<{
+        createdCount: number;
+        skippedCount: number;
+        errors: string[];
+      }>(`${apiBase}/test-cases/import/commit`, {
+        method: "POST",
+        body: JSON.stringify({
+          rows: validRows,
+        }),
+      });
+      await onImported();
+      setSuccessMessage(
+        `${result.createdCount}개 테스트케이스를 가져왔습니다.${
+          result.skippedCount > 0 ? ` ${result.skippedCount}개는 건너뛰었습니다.` : ""
+        }`,
+      );
+      if (result.errors.length > 0) {
+        setError(result.errors.join("\n"));
+      }
+    } catch (commitError) {
+      setError(getErrorMessage(commitError));
+    } finally {
+      setIsCommitting(false);
+    }
+  }
 
   return (
     <DialogShell
       title="엑셀 파일 업로드"
-      description="먼저 표준 템플릿을 다운로드하세요. 실제 파일 파싱은 후속 단계에서 연결합니다."
+      description="XLSX 템플릿을 내려받아 작성한 뒤 CSV로 저장해 가져올 수 있습니다."
       onClose={onClose}
-      maxWidth="max-w-xl"
+      maxWidth="max-w-3xl"
       footer={
         <div className="flex justify-end gap-2">
           <button
@@ -796,41 +900,138 @@ function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             취소
           </button>
           <button
-            disabled={!hasMockFile}
+            onClick={commitImport}
+            disabled={validRows.length === 0 || isCommitting}
             className="h-9 rounded-md bg-[var(--brand-primary)] px-3 text-sm font-medium text-white hover:bg-[var(--brand-primary-hover)] disabled:cursor-not-allowed disabled:bg-[var(--status-pending)]"
           >
-            업로드 실행
+            {isCommitting ? "가져오는 중..." : "유효 행만 가져오기"}
           </button>
         </div>
       }
     >
       <div className="space-y-5">
-        <button className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border-default)] bg-white px-3 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]">
+        <a
+          href={`${apiBase}/test-cases/template.xlsx`}
+          className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border-default)] bg-white px-3 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
+        >
           <Download className="h-4 w-4" />
           엑셀 템플릿 다운로드
-        </button>
+        </a>
         <div className="rounded-lg border-2 border-dashed border-[var(--border-strong)] bg-[var(--bg-subtle)] px-6 py-10 text-center">
           <Upload className="mx-auto h-8 w-8 text-[var(--text-tertiary)]" />
           <p className="mt-3 text-sm font-medium">파일을 끌어다 놓거나 선택하세요</p>
-          <p className="mt-1 text-xs text-[var(--text-secondary)]">지원 예정: .xlsx, .xls, .csv</p>
-          <button
-            onClick={() => setHasMockFile(true)}
-            className="mt-4 h-9 rounded-md bg-[var(--brand-primary)] px-3 text-sm font-medium text-white hover:bg-[var(--brand-primary-hover)]"
-          >
-            파일 선택
-          </button>
+          <p className="mt-1 text-xs text-[var(--text-secondary)]">
+            현재 가져오기는 .csv를 지원합니다. 템플릿은 XLSX로 제공됩니다.
+          </p>
+          <label className="mt-4 inline-flex h-9 cursor-pointer items-center rounded-md bg-[var(--brand-primary)] px-3 text-sm font-medium text-white hover:bg-[var(--brand-primary-hover)]">
+            {isPreviewing ? "미리보기 생성 중..." : "CSV 파일 선택"}
+            <input
+              type="file"
+              accept=".csv,text/csv"
+              disabled={isPreviewing || isCommitting}
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) {
+                  void previewFile(file);
+                }
+                event.currentTarget.value = "";
+              }}
+              className="hidden"
+            />
+          </label>
+          {fileName && (
+            <p className="mt-3 text-xs font-medium text-[var(--text-secondary)]">
+              선택한 파일: {fileName}
+            </p>
+          )}
         </div>
 
         <section className="rounded-lg border border-[var(--border-default)] p-4">
           <h3 className="mb-3 text-sm font-semibold">업로드 후 미리보기</h3>
           <div className="space-y-2 text-sm">
-            <PreviewItem ok={hasMockFile} text={hasMockFile ? "인식된 행: 45개" : "파일 선택 대기 중"} />
-            <PreviewItem ok={hasMockFile} text="컬럼 매핑 확인" />
-            <PreviewItem ok={!hasMockFile} warning text="2개 행에 누락된 필드" />
+            <PreviewItem
+              ok={Boolean(preview)}
+              text={preview ? `인식된 행: ${preview.totalRows}개` : "파일 선택 대기 중"}
+            />
+            <PreviewItem
+              ok={Boolean(preview)}
+              text={preview ? `유효 행: ${preview.validRows}개` : "컬럼 매핑 확인"}
+            />
+            <PreviewItem
+              ok={preview?.errorRows === 0}
+              warning={Boolean(preview && preview.errorRows > 0)}
+              text={
+                preview
+                  ? `오류 행: ${preview.errorRows}개`
+                  : "title, priority, status 필수값을 검사합니다"
+              }
+            />
           </div>
+          {preview && <ImportPreviewTable rows={preview.rows} />}
         </section>
+
+        {successMessage && (
+          <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+            {successMessage}
+          </div>
+        )}
+        {error && (
+          <div className="whitespace-pre-wrap rounded-md border border-[var(--danger-border)] bg-[var(--danger-bg)] px-3 py-2 text-sm text-[var(--danger-text)]">
+            {error}
+          </div>
+        )}
       </div>
     </DialogShell>
+  );
+}
+
+function ImportPreviewTable({ rows }: { rows: TestCaseImportPreviewRow[] }) {
+  return (
+    <div className="mt-4 max-h-72 overflow-auto rounded-md border border-[var(--border-default)]">
+      <table className="w-full min-w-[760px] text-left text-xs">
+        <thead className="sticky top-0 bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
+          <tr>
+            <th className="px-3 py-2 font-medium">행</th>
+            <th className="px-3 py-2 font-medium">상태</th>
+            <th className="px-3 py-2 font-medium">폴더</th>
+            <th className="px-3 py-2 font-medium">제목</th>
+            <th className="px-3 py-2 font-medium">우선순위</th>
+            <th className="px-3 py-2 font-medium">검증 메시지</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-[var(--border-default)]">
+          {rows.map((row) => (
+            <tr key={`preview-${row.rowNumber}`} className="bg-white">
+              <td className="px-3 py-2 text-[var(--text-tertiary)]">{row.rowNumber}</td>
+              <td className="px-3 py-2">
+                <span
+                  className={cn(
+                    "rounded-full px-2 py-0.5 font-medium",
+                    row.status === "valid"
+                      ? "bg-emerald-50 text-emerald-700"
+                      : "bg-red-50 text-red-700",
+                  )}
+                >
+                  {row.status === "valid" ? "유효" : "오류"}
+                </span>
+              </td>
+              <td className="px-3 py-2 text-[var(--text-secondary)]">
+                {row.mapped.folder || "기본 폴더"}
+              </td>
+              <td className="max-w-[240px] truncate px-3 py-2 font-medium">
+                {row.mapped.title || "-"}
+              </td>
+              <td className="px-3 py-2 text-[var(--text-secondary)]">{row.mapped.priority}</td>
+              <td className="px-3 py-2 text-[var(--text-secondary)]">
+                {[...row.errors, ...row.warnings].length > 0
+                  ? [...row.errors, ...row.warnings].join(" / ")
+                  : "문제 없음"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -909,10 +1110,11 @@ function mergeUpdatedTestCases(
 }
 
 async function requestData<T>(url: string, init?: RequestInit) {
+  const isFormData = init?.body instanceof FormData;
   const response = await fetch(url, {
     ...init,
     headers: {
-      "Content-Type": "application/json",
+      ...(isFormData ? {} : { "Content-Type": "application/json" }),
       ...init?.headers,
     },
   });
