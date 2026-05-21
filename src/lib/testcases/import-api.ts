@@ -40,7 +40,7 @@ export type FolderLookup = Array<{
   name: string;
 }>;
 
-type CsvRow = Record<string, string>;
+type CsvRow = Record<string, unknown>;
 
 const columnAliases: Record<string, string[]> = {
   folder: ["folder", "폴더", "folder_name", "folderName", "카테고리", "모듈"],
@@ -87,13 +87,20 @@ export function parseCsvImport(csvText: string, folders: FolderLookup): TestCase
     transformHeader: (header) => header.trim(),
     transform: (value) => value.trim(),
   });
-  const rows = parsed.data.filter((row) =>
-    Object.values(row).some((value) => typeof value === "string" && value.trim()),
-  );
-  const previewRows = rows.map((row, index) => mapCsvRow(row, index + 2, folders));
+  const rows = parsed.data
+    .map((row, index) => ({ row, rowNumber: index + 2 }))
+    .filter(({ row }) => !isBlankCsvRow(row));
+  const previewRows = rows.map(({ row, rowNumber }) => mapCsvRow(row, rowNumber, folders));
 
   for (const error of parsed.errors) {
+    const parsedRow = typeof error.row === "number" ? parsed.data[error.row] : null;
+
+    if (parsedRow && (isBlankCsvRow(parsedRow) || error.code === "TooFewFields")) {
+      continue;
+    }
+
     const rowNumber = typeof error.row === "number" ? error.row + 2 : 1;
+
     previewRows.push({
       rowNumber,
       mapped: createEmptyMappedRow(folders),
@@ -241,11 +248,31 @@ function validateMappedRow(mapped: TestCaseImportMappedRow, folders: FolderLooku
   return { errors, warnings };
 }
 
+function isBlankCsvRow(row: CsvRow) {
+  return Object.values(row).every((value) => {
+    if (typeof value === "string") {
+      return !value.trim();
+    }
+
+    if (Array.isArray(value)) {
+      return value.every((item) => typeof item !== "string" || !item.trim());
+    }
+
+    return true;
+  });
+}
+
 function readCell(row: CsvRow, aliases: string[]) {
   const keys = Object.keys(row);
   const foundKey = keys.find((key) => aliases.some((alias) => normalizeKey(alias) === normalizeKey(key)));
 
-  return foundKey ? row[foundKey]?.trim() ?? "" : "";
+  if (!foundKey) {
+    return "";
+  }
+
+  const value = row[foundKey];
+
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function readSteps(row: CsvRow) {
