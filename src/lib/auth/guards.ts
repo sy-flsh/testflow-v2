@@ -1,4 +1,10 @@
-import type { MemberRole, User, Workspace, WorkspaceMember } from "@prisma/client";
+import type {
+  MemberRole,
+  Project,
+  User,
+  Workspace,
+  WorkspaceMember,
+} from "@prisma/client";
 import { apiError } from "@/lib/api/response";
 import {
   buildPermissions,
@@ -17,6 +23,10 @@ export type CurrentWorkspaceAuth = {
   membership: WorkspaceMember & { workspace: Workspace };
   role: AuthRole;
   permissions: ReturnType<typeof buildPermissions>;
+};
+
+export type CurrentProjectAuth = CurrentWorkspaceAuth & {
+  project: Project;
 };
 
 export class AuthGuardError extends Error {
@@ -83,6 +93,34 @@ export async function requireCurrentWorkspace(): Promise<CurrentWorkspaceAuth> {
     membership,
     role,
     permissions: buildPermissions(role),
+  };
+}
+
+export async function requireProjectAccess(
+  projectId: string,
+  action: PermissionAction = "read",
+): Promise<CurrentProjectAuth> {
+  const auth = await requireCurrentWorkspace();
+  const project = await prisma.project.findFirst({
+    where: {
+      workspaceId: auth.workspace.id,
+      OR: [{ id: projectId }, { slug: projectId }],
+    },
+  });
+
+  if (!project) {
+    throw new AuthGuardError(
+      "프로젝트를 찾을 수 없습니다.",
+      404,
+      "PROJECT_NOT_FOUND",
+    );
+  }
+
+  requirePermission(auth, action);
+
+  return {
+    ...auth,
+    project,
   };
 }
 

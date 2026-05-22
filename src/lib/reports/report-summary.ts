@@ -15,7 +15,6 @@ import type {
   TopFailedTestCase,
 } from "@/lib/domain/summary";
 import type { Priority, ResultStatus, RunStatus } from "@/lib/domain/types";
-import { ensureDefaultWorkspace, findProjectByIdOrSlug } from "@/lib/projects/project-api";
 
 const resultRatioColors = {
   passed: "#10B981",
@@ -330,17 +329,10 @@ export async function getDashboardSummary(workspaceId: string): Promise<Dashboar
 export async function getProjectReportSummary(
   projectId: string,
   filter: ReportFilterInput,
-): Promise<ProjectReportSummaryResponse | null> {
-  const workspace = await ensureDefaultWorkspace();
-  const project = await findProjectByIdOrSlug(workspace.id, projectId);
-
-  if (!project) {
-    return null;
-  }
-
+): Promise<ProjectReportSummaryResponse> {
   const allRuns = await prisma.testRun.findMany({
     where: {
-      projectId: project.id,
+      projectId,
       deletedAt: null,
     },
     select: {
@@ -350,7 +342,7 @@ export async function getProjectReportSummary(
     },
     orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
   });
-  const where = buildRunWhere(project.id, filter);
+  const where = buildRunWhere(projectId, filter);
   const results = await prisma.testRunResult.findMany({
     where: {
       run: where,
@@ -391,7 +383,7 @@ export async function getProjectReportSummary(
   });
   const defects = await prisma.defect.findMany({
     where: {
-      projectId: project.id,
+      projectId,
       deletedAt: null,
     },
     select: {
