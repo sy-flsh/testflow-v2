@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
+import bcrypt from "bcryptjs";
 
 const databaseUrl = process.env.DATABASE_URL;
 
@@ -15,7 +16,11 @@ const workspaceSeed = {
   name: "TestFlow QA",
   slug: "testflow-qa",
   description: "TestFlow v2 기본 워크스페이스",
+  timezone: "Asia/Seoul",
+  logoUrl: null,
 };
+
+const devPassword = "password123!";
 
 const users = [
   { email: "qa.lead@testflow.local", name: "김QA", role: "ADMIN" as const },
@@ -222,6 +227,7 @@ const defects = [
 ];
 
 async function main() {
+  const devPasswordHash = await bcrypt.hash(devPassword, 12);
   const workspace = await prisma.workspace.upsert({
     where: { slug: workspaceSeed.slug },
     update: workspaceSeed,
@@ -231,10 +237,14 @@ async function main() {
   for (const userSeed of users) {
     const user = await prisma.user.upsert({
       where: { email: userSeed.email },
-      update: { name: userSeed.name },
+      update: {
+        name: userSeed.name,
+        passwordHash: devPasswordHash,
+      },
       create: {
         email: userSeed.email,
         name: userSeed.name,
+        passwordHash: devPasswordHash,
       },
     });
 

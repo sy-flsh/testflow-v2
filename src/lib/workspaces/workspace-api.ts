@@ -7,7 +7,6 @@ import {
 
 import type { WorkspaceMemberDto, WorkspaceSettingsDto } from "@/lib/workspaces/types";
 
-const WORKSPACE_SETTINGS_MARKER = "__testflowWorkspaceSettings";
 const DEFAULT_TIMEZONE = "Asia/Seoul";
 
 const toDomainRole: Record<PrismaMemberRole, WorkspaceMemberDto["role"]> = {
@@ -32,14 +31,12 @@ export type WorkspaceWithMembers = Prisma.WorkspaceGetPayload<{
 }>;
 
 export function mapWorkspaceToDto(workspace: Workspace): WorkspaceSettingsDto {
-  const metadata = readWorkspaceMetadata(workspace.description);
-
   return {
     id: workspace.id,
     name: workspace.name,
     slug: workspace.slug,
-    logoUrl: metadata.logoUrl,
-    timezone: metadata.timezone,
+    logoUrl: workspace.logoUrl ?? "",
+    timezone: workspace.timezone || DEFAULT_TIMEZONE,
     createdAt: workspace.createdAt.toISOString(),
     updatedAt: workspace.updatedAt.toISOString(),
   };
@@ -62,21 +59,6 @@ export function mapWorkspaceMemberToDto(
   };
 }
 
-export function createWorkspaceDescription(input: {
-  currentDescription: string;
-  timezone?: string;
-  logoUrl?: string;
-}) {
-  const currentMetadata = readWorkspaceMetadata(input.currentDescription);
-
-  return JSON.stringify({
-    [WORKSPACE_SETTINGS_MARKER]: true,
-    description: currentMetadata.description,
-    timezone: input.timezone ?? currentMetadata.timezone,
-    logoUrl: input.logoUrl ?? currentMetadata.logoUrl,
-  });
-}
-
 export function toWorkspaceSlug(value: string) {
   const slug = value
     .trim()
@@ -85,35 +67,6 @@ export function toWorkspaceSlug(value: string) {
     .replace(/^-+|-+$/g, "");
 
   return slug;
-}
-
-function readWorkspaceMetadata(description: string) {
-  const fallback = {
-    description,
-    timezone: DEFAULT_TIMEZONE,
-    logoUrl: "",
-  };
-
-  try {
-    const parsed = JSON.parse(description) as {
-      [WORKSPACE_SETTINGS_MARKER]?: boolean;
-      description?: unknown;
-      timezone?: unknown;
-      logoUrl?: unknown;
-    };
-
-    if (!parsed || parsed[WORKSPACE_SETTINGS_MARKER] !== true) {
-      return fallback;
-    }
-
-    return {
-      description: typeof parsed.description === "string" ? parsed.description : "",
-      timezone: typeof parsed.timezone === "string" && parsed.timezone ? parsed.timezone : DEFAULT_TIMEZONE,
-      logoUrl: typeof parsed.logoUrl === "string" ? parsed.logoUrl : "",
-    };
-  } catch {
-    return fallback;
-  }
 }
 
 function formatRelativeDate(date: Date) {

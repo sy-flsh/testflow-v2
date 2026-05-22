@@ -3,7 +3,6 @@ import { readJsonBody, readOptionalTrimmedString } from "@/lib/api/request";
 import { prisma } from "@/lib/db/prisma";
 import { ensureDefaultWorkspace } from "@/lib/projects/project-api";
 import {
-  createWorkspaceDescription,
   mapWorkspaceToDto,
   toWorkspaceSlug,
 } from "@/lib/workspaces/workspace-api";
@@ -32,7 +31,8 @@ export async function PATCH(request: Request) {
     const data: {
       name?: string;
       slug?: string;
-      description?: string;
+      timezone?: string;
+      logoUrl?: string | null;
     } = {};
 
     if (name !== undefined) {
@@ -62,12 +62,12 @@ export async function PATCH(request: Request) {
       data.slug = slug;
     }
 
-    if (timezone !== undefined || logoUrl !== undefined) {
-      data.description = createWorkspaceDescription({
-        currentDescription: workspace.description,
-        timezone: timezone || undefined,
-        logoUrl: logoUrl ?? undefined,
-      });
+    if (timezone !== undefined) {
+      data.timezone = timezone || "Asia/Seoul";
+    }
+
+    if (logoUrl !== undefined) {
+      data.logoUrl = logoUrl || null;
     }
 
     const updatedWorkspace = await prisma.workspace.update({

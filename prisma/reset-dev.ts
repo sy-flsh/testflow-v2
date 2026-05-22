@@ -17,6 +17,7 @@ async function main() {
   console.warn("[db:reset:dev] 개발 DB 데이터를 전체 삭제한 뒤 seed를 다시 실행합니다.");
 
   await prisma.$transaction([
+    prisma.session.deleteMany(),
     prisma.aiTestCaseDraft.deleteMany(),
     prisma.defectLink.deleteMany(),
     prisma.defect.deleteMany(),

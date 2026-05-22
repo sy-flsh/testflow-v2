@@ -72,27 +72,52 @@ enum AiDraftStatus {
 }
 
 model User {
-  id        String            @id @default(cuid())
-  email     String            @unique
-  name      String
-  createdAt DateTime          @default(now())
-  updatedAt DateTime          @updatedAt
-  members   WorkspaceMember[]
+  id              String            @id @default(cuid())
+  email           String            @unique
+  name            String
+  passwordHash    String?
+  emailVerifiedAt DateTime?
+  lastLoginAt     DateTime?
+  avatarUrl       String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  members         WorkspaceMember[]
+  sessions        Session[]
 
   @@map("users")
 }
 
 model Workspace {
-  id          String            @id @default(cuid())
-  name        String
-  slug        String            @unique
-  description String            @default("")
-  createdAt   DateTime          @default(now())
-  updatedAt   DateTime          @updatedAt
-  members     WorkspaceMember[]
-  projects    Project[]
+  id               String            @id @default(cuid())
+  name             String
+  slug             String            @unique
+  description      String            @default("")
+  logoUrl          String?
+  timezone         String            @default("Asia/Seoul")
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  members          WorkspaceMember[]
+  projects         Project[]
+  selectedSessions Session[]         @relation("SelectedWorkspaceSession")
 
   @@map("workspaces")
+}
+
+model Session {
+  id                  String     @id @default(cuid())
+  userId              String
+  tokenHash           String     @unique
+  selectedWorkspaceId String?
+  expiresAt           DateTime
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
+  lastSeenAt          DateTime?
+  user                User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  selectedWorkspace   Workspace? @relation("SelectedWorkspaceSession", fields: [selectedWorkspaceId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
 }
 
 model WorkspaceMember {

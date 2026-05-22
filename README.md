@@ -13,6 +13,7 @@ npm run db:reset:dev
 이 명령은 다음 데이터를 모두 삭제한 뒤 `prisma/seed.ts`를 다시 실행합니다.
 
 - Workspace, User, WorkspaceMember, Project
+- Session
 - TestFolder, TestCase, TestStep
 - TestRun, TestRunResult
 - Defect, DefectLink
@@ -25,3 +26,12 @@ npm run db:reset:dev
 - `DATABASE_URL`의 port가 개발 Docker DB 포트인 `5433`이 아니면 실행되지 않습니다.
 
 운영 DB나 공유 DB에서는 이 명령을 실행하지 마세요.
+
+## Local Auth Accounts
+
+개발 seed는 아래 계정에 동일한 비밀번호를 설정합니다.
+
+- `qa.lead@testflow.local` / `password123!`
+- `backend@testflow.local` / `password123!`
+- `frontend@testflow.local` / `password123!`
+- `pm@testflow.local` / `password123!`
