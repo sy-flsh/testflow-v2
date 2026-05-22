@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { LoginForm } from "@/features/auth/login-form";
 
 export default function LoginPage() {
   return (
@@ -30,37 +30,7 @@ export default function LoginPage() {
         </div>
       </section>
       <section className="flex items-center justify-center px-6 py-12">
-        <div className="w-full max-w-md">
-          <div className="mb-8 flex items-center justify-between">
-            <h2 className="text-2xl font-semibold">로그인</h2>
-            <Link
-              href="/signup"
-              className="text-sm font-medium text-[var(--brand-primary)]"
-            >
-              회원가입
-            </Link>
-          </div>
-          <div className="space-y-4">
-            <label className="block text-sm font-medium">
-              아이디
-              <input
-                className="mt-2 h-10 w-full rounded-md border border-[var(--border-default)] px-3 outline-none placeholder:text-[var(--text-tertiary)] focus:border-[var(--brand-primary)]"
-                placeholder="아이디를 입력하세요"
-              />
-            </label>
-            <label className="block text-sm font-medium">
-              비밀번호
-              <input
-                type="password"
-                className="mt-2 h-10 w-full rounded-md border border-[var(--border-default)] px-3 outline-none placeholder:text-[var(--text-tertiary)] focus:border-[var(--brand-primary)]"
-                placeholder="비밀번호를 입력하세요"
-              />
-            </label>
-            <button className="h-10 w-full rounded-md bg-[var(--brand-primary)] text-sm font-medium text-white hover:bg-[var(--brand-primary-hover)]">
-              로그인
-            </button>
-          </div>
-        </div>
+        <LoginForm />
       </section>
     </main>
   );

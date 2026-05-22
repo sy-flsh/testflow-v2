@@ -1,7 +1,61 @@
-import { Bell, ChevronDown, Search } from "lucide-react";
+"use client";
+
+import { Bell, ChevronDown, LogOut, Search } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import {
+  requestAuthData,
+  type AuthMeResponse,
+} from "@/features/auth/auth-types";
 
 export function TopHeader() {
+  const router = useRouter();
+  const [auth, setAuth] = useState<AuthMeResponse | null>(null);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+
+  useEffect(() => {
+    let ignore = false;
+
+    async function loadCurrentUser() {
+      try {
+        const currentAuth =
+          await requestAuthData<AuthMeResponse>("/api/auth/me");
+
+        if (!ignore) {
+          setAuth(currentAuth);
+        }
+      } catch {
+        if (!ignore) {
+          setAuth(null);
+        }
+      }
+    }
+
+    void loadCurrentUser();
+
+    return () => {
+      ignore = true;
+    };
+  }, []);
+
+  async function handleLogout() {
+    setIsLoggingOut(true);
+
+    try {
+      await requestAuthData<{ ok: boolean }>("/api/auth/logout", {
+        method: "POST",
+      });
+    } finally {
+      setAuth(null);
+      setIsLoggingOut(false);
+      router.replace("/login");
+      router.refresh();
+    }
+  }
+
+  const avatarLabel = auth?.user.name.trim().slice(0, 1) || "홍";
+
   return (
     <header className="tf-top-header fixed inset-x-0 top-0 z-30 flex h-14 items-center border-b border-[var(--border-default)] bg-white px-4 md:px-5">
       <Link
@@ -17,7 +71,7 @@ export function TopHeader() {
       </Link>
 
       <button className="ml-4 hidden h-8 shrink-0 items-center gap-2 rounded-md border border-[var(--border-default)] bg-white px-3 text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] sm:flex lg:ml-6">
-        Demo Workspace
+        {auth?.workspace.name || "Demo Workspace"}
         <ChevronDown className="tf-icon h-4 w-4 text-[var(--text-tertiary)]" />
       </button>
 
@@ -38,9 +92,31 @@ export function TopHeader() {
         >
           <Bell className="tf-icon h-4 w-4" />
         </button>
+        {auth ? (
+          <div className="hidden min-w-0 text-right sm:block">
+            <p className="max-w-32 truncate text-xs font-semibold text-[var(--text-primary)]">
+              {auth.user.name}
+            </p>
+            <p className="max-w-40 truncate text-[11px] text-[var(--text-tertiary)]">
+              {auth.user.email}
+            </p>
+          </div>
+        ) : null}
         <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--brand-secondary)] text-xs font-semibold text-white">
-          홍
+          {avatarLabel}
         </div>
+        {auth ? (
+          <button
+            type="button"
+            onClick={handleLogout}
+            disabled={isLoggingOut}
+            className="flex h-9 w-9 items-center justify-center rounded-md text-[var(--text-secondary)] hover:bg-[var(--bg-muted)] disabled:cursor-not-allowed disabled:opacity-50"
+            aria-label="로그아웃"
+            title="로그아웃"
+          >
+            <LogOut className="tf-icon h-4 w-4" />
+          </button>
+        ) : null}
       </div>
     </header>
   );
