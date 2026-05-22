@@ -1,7 +1,12 @@
 import { apiError, apiSuccess } from "@/lib/api/response";
 import { readJsonBody, readOptionalTrimmedString } from "@/lib/api/request";
+import {
+  authGuardErrorResponse,
+  isAuthGuardError,
+  requireCurrentWorkspace,
+  requirePermission,
+} from "@/lib/auth/guards";
 import { prisma } from "@/lib/db/prisma";
-import { ensureDefaultWorkspace } from "@/lib/projects/project-api";
 import {
   mapWorkspaceToDto,
   toWorkspaceSlug,
@@ -11,10 +16,15 @@ export const runtime = "nodejs";
 
 export async function GET() {
   try {
-    const workspace = await ensureDefaultWorkspace();
+    const auth = await requireCurrentWorkspace();
+    requirePermission(auth, "read");
 
-    return apiSuccess(mapWorkspaceToDto(workspace));
+    return apiSuccess(mapWorkspaceToDto(auth.workspace));
   } catch (error) {
+    if (isAuthGuardError(error)) {
+      return authGuardErrorResponse(error);
+    }
+
     console.error(error);
     return apiError("워크스페이스 정보를 불러오지 못했습니다.", 500, "WORKSPACE_READ_FAILED");
   }
@@ -22,7 +32,9 @@ export async function GET() {
 
 export async function PATCH(request: Request) {
   try {
-    const workspace = await ensureDefaultWorkspace();
+    const auth = await requireCurrentWorkspace();
+    requirePermission(auth, "update");
+
     const body = await readJsonBody(request);
     const name = readOptionalTrimmedString(body.name);
     const slugInput = readOptionalTrimmedString(body.slug);
@@ -55,7 +67,7 @@ export async function PATCH(request: Request) {
         select: { id: true },
       });
 
-      if (slugOwner && slugOwner.id !== workspace.id) {
+      if (slugOwner && slugOwner.id !== auth.workspace.id) {
         return apiError("이미 사용 중인 워크스페이스 URL입니다.", 409, "WORKSPACE_SLUG_CONFLICT");
       }
 
@@ -71,12 +83,16 @@ export async function PATCH(request: Request) {
     }
 
     const updatedWorkspace = await prisma.workspace.update({
-      where: { id: workspace.id },
+      where: { id: auth.workspace.id },
       data,
     });
 
     return apiSuccess(mapWorkspaceToDto(updatedWorkspace));
   } catch (error) {
+    if (isAuthGuardError(error)) {
+      return authGuardErrorResponse(error);
+    }
+
     console.error(error);
     return apiError("워크스페이스 정보를 저장하지 못했습니다.", 500, "WORKSPACE_UPDATE_FAILED");
   }
