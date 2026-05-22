@@ -11,8 +11,13 @@ import {
 
 type LoginResponse = Omit<AuthMeResponse, "workspaces">;
 
-export function LoginForm() {
+type LoginFormProps = {
+  nextPath?: string;
+};
+
+export function LoginForm({ nextPath }: LoginFormProps) {
   const router = useRouter();
+  const safeNextPath = getSafeNextPath(nextPath);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
@@ -27,7 +32,7 @@ export function LoginForm() {
         await requestAuthData<AuthMeResponse>("/api/auth/me");
 
         if (!ignore) {
-          router.replace("/dashboard");
+          router.replace(safeNextPath);
         }
       } catch {
         if (!ignore) {
@@ -41,7 +46,7 @@ export function LoginForm() {
     return () => {
       ignore = true;
     };
-  }, [router]);
+  }, [router, safeNextPath]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -56,7 +61,7 @@ export function LoginForm() {
           password,
         }),
       });
-      router.replace("/dashboard");
+      router.replace(safeNextPath);
       router.refresh();
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
@@ -122,4 +127,16 @@ export function LoginForm() {
       </form>
     </div>
   );
+}
+
+function getSafeNextPath(next?: string) {
+  if (!next) {
+    return "/dashboard";
+  }
+
+  if (!next.startsWith("/") || next.startsWith("//")) {
+    return "/dashboard";
+  }
+
+  return next;
 }

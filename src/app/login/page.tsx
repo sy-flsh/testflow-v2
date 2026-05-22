@@ -1,6 +1,15 @@
 import { LoginForm } from "@/features/auth/login-form";
 
-export default function LoginPage() {
+type LoginPageProps = {
+  searchParams: Promise<{
+    next?: string | string[];
+  }>;
+};
+
+export default async function LoginPage({ searchParams }: LoginPageProps) {
+  const { next } = await searchParams;
+  const nextPath = Array.isArray(next) ? next[0] : next;
+
   return (
     <main className="grid min-h-screen grid-cols-1 bg-white lg:grid-cols-2">
       <section className="flex min-h-72 items-center bg-[var(--brand-primary)] px-8 py-10 text-white lg:min-h-screen lg:px-14">
@@ -30,7 +39,7 @@ export default function LoginPage() {
         </div>
       </section>
       <section className="flex items-center justify-center px-6 py-12">
-        <LoginForm />
+        <LoginForm nextPath={nextPath} />
       </section>
     </main>
   );
