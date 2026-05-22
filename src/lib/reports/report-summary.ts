@@ -155,12 +155,11 @@ export type ReportFilterInput = {
   environment?: string;
 };
 
-export async function getDashboardSummary(): Promise<DashboardSummaryResponse> {
-  const workspace = await ensureDefaultWorkspace();
+export async function getDashboardSummary(workspaceId: string): Promise<DashboardSummaryResponse> {
   const [projects, testCaseCount, testRunCount, executingRuns, results, defectCount, recentDefects] =
     await Promise.all([
       prisma.project.findMany({
-        where: { workspaceId: workspace.id },
+        where: { workspaceId },
         select: {
           id: true,
           slug: true,
@@ -186,27 +185,27 @@ export async function getDashboardSummary(): Promise<DashboardSummaryResponse> {
       prisma.testCase.count({
         where: {
           deletedAt: null,
-          project: { workspaceId: workspace.id },
+          project: { workspaceId },
         },
       }),
       prisma.testRun.count({
         where: {
           deletedAt: null,
-          project: { workspaceId: workspace.id },
+          project: { workspaceId },
         },
       }),
       prisma.testRun.count({
         where: {
           deletedAt: null,
           status: "IN_PROGRESS",
-          project: { workspaceId: workspace.id },
+          project: { workspaceId },
         },
       }),
       prisma.testRunResult.findMany({
         where: {
           run: {
             deletedAt: null,
-            project: { workspaceId: workspace.id },
+            project: { workspaceId },
           },
         },
         select: {
@@ -222,13 +221,13 @@ export async function getDashboardSummary(): Promise<DashboardSummaryResponse> {
       prisma.defect.count({
         where: {
           deletedAt: null,
-          project: { workspaceId: workspace.id },
+          project: { workspaceId },
         },
       }),
       prisma.defect.findMany({
         where: {
           deletedAt: null,
-          project: { workspaceId: workspace.id },
+          project: { workspaceId },
         },
         select: {
           code: true,
@@ -260,7 +259,7 @@ export async function getDashboardSummary(): Promise<DashboardSummaryResponse> {
   const recentRuns = await prisma.testRun.findMany({
     where: {
       deletedAt: null,
-      project: { workspaceId: workspace.id },
+      project: { workspaceId },
     },
     select: {
       slug: true,
