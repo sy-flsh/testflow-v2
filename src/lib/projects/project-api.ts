@@ -71,6 +71,14 @@ export async function ensureDefaultWorkspace() {
     return existingWorkspace;
   }
 
+  const currentWorkspace = await prisma.workspace.findFirst({
+    orderBy: { createdAt: "asc" },
+  });
+
+  if (currentWorkspace) {
+    return currentWorkspace;
+  }
+
   const user = await prisma.user.upsert({
     where: { email: "qa.lead@testflow.local" },
     update: { name: "김QA" },

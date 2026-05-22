@@ -1,0 +1,83 @@
+import { apiError, apiSuccess } from "@/lib/api/response";
+import { readJsonBody, readOptionalTrimmedString } from "@/lib/api/request";
+import { prisma } from "@/lib/db/prisma";
+import { ensureDefaultWorkspace } from "@/lib/projects/project-api";
+import {
+  createWorkspaceDescription,
+  mapWorkspaceToDto,
+  toWorkspaceSlug,
+} from "@/lib/workspaces/workspace-api";
+
+export const runtime = "nodejs";
+
+export async function GET() {
+  try {
+    const workspace = await ensureDefaultWorkspace();
+
+    return apiSuccess(mapWorkspaceToDto(workspace));
+  } catch (error) {
+    console.error(error);
+    return apiError("워크스페이스 정보를 불러오지 못했습니다.", 500, "WORKSPACE_READ_FAILED");
+  }
+}
+
+export async function PATCH(request: Request) {
+  try {
+    const workspace = await ensureDefaultWorkspace();
+    const body = await readJsonBody(request);
+    const name = readOptionalTrimmedString(body.name);
+    const slugInput = readOptionalTrimmedString(body.slug);
+    const timezone = readOptionalTrimmedString(body.timezone);
+    const logoUrl = readOptionalTrimmedString(body.logoUrl);
+    const data: {
+      name?: string;
+      slug?: string;
+      description?: string;
+    } = {};
+
+    if (name !== undefined) {
+      if (!name) {
+        return apiError("워크스페이스 이름을 입력하세요.", 400, "WORKSPACE_NAME_REQUIRED");
+      }
+
+      data.name = name;
+    }
+
+    if (slugInput !== undefined) {
+      const slug = toWorkspaceSlug(slugInput);
+
+      if (!slug) {
+        return apiError("워크스페이스 URL slug를 입력하세요.", 400, "WORKSPACE_SLUG_REQUIRED");
+      }
+
+      const slugOwner = await prisma.workspace.findUnique({
+        where: { slug },
+        select: { id: true },
+      });
+
+      if (slugOwner && slugOwner.id !== workspace.id) {
+        return apiError("이미 사용 중인 워크스페이스 URL입니다.", 409, "WORKSPACE_SLUG_CONFLICT");
+      }
+
+      data.slug = slug;
+    }
+
+    if (timezone !== undefined || logoUrl !== undefined) {
+      data.description = createWorkspaceDescription({
+        currentDescription: workspace.description,
+        timezone: timezone || undefined,
+        logoUrl: logoUrl ?? undefined,
+      });
+    }
+
+    const updatedWorkspace = await prisma.workspace.update({
+      where: { id: workspace.id },
+      data,
+    });
+
+    return apiSuccess(mapWorkspaceToDto(updatedWorkspace));
+  } catch (error) {
+    console.error(error);
+    return apiError("워크스페이스 정보를 저장하지 못했습니다.", 500, "WORKSPACE_UPDATE_FAILED");
+  }
+}

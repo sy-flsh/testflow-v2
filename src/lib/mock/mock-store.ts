@@ -8,6 +8,7 @@ import type {
   TestRun,
   TestRunResult,
 } from "@/lib/domain/types";
+import type { WorkspaceMemberDto, WorkspaceSettingsDto } from "@/lib/workspaces/types";
 import { mockDefects, mockProjects, mockTestCases, mockTestRuns } from "@/lib/mock/mock-data";
 
 const MOCK_VERSION = "v1";
@@ -25,6 +26,7 @@ export const mockStorageKeys = {
   defectApiBackup: `testflow-v2:${API_BACKUP_VERSION}:backup:defects`,
   dashboardSummaryApiBackup: `testflow-v2:${API_BACKUP_VERSION}:backup:dashboard-summary`,
   reportSummaryApiBackup: `testflow-v2:${API_BACKUP_VERSION}:backup:report-summary`,
+  workspaceSettingsApiBackup: `testflow-v2:${API_BACKUP_VERSION}:backup:workspace-settings`,
 };
 
 export type ProjectBackupSnapshot = {
@@ -51,6 +53,12 @@ export type TestRunDetailBackupSnapshot = {
 export type DefectBackupSnapshot = {
   savedAt: string;
   defects: Defect[];
+};
+
+export type WorkspaceSettingsBackupSnapshot = {
+  savedAt: string;
+  workspace: WorkspaceSettingsDto;
+  members: WorkspaceMemberDto[];
 };
 
 export type ApiBackupSnapshot<T> = {
@@ -236,6 +244,45 @@ export function saveDefectBackupSnapshot(projectId: string, defects: Defect[]) {
   };
 
   window.localStorage.setItem(getDefectBackupKey(projectId), JSON.stringify(snapshot));
+}
+
+export function loadWorkspaceSettingsBackupSnapshot() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const raw = window.localStorage.getItem(mockStorageKeys.workspaceSettingsApiBackup);
+
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(raw) as WorkspaceSettingsBackupSnapshot;
+  } catch {
+    window.localStorage.removeItem(mockStorageKeys.workspaceSettingsApiBackup);
+    return null;
+  }
+}
+
+export function saveWorkspaceSettingsBackupSnapshot(
+  workspace: WorkspaceSettingsDto,
+  members: WorkspaceMemberDto[],
+) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const snapshot: WorkspaceSettingsBackupSnapshot = {
+    savedAt: new Date().toISOString(),
+    workspace,
+    members,
+  };
+
+  window.localStorage.setItem(
+    mockStorageKeys.workspaceSettingsApiBackup,
+    JSON.stringify(snapshot),
+  );
 }
 
 export function loadDashboardSummaryBackupSnapshot<T>() {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
   AlertTriangle,
@@ -18,13 +18,25 @@ import {
 } from "lucide-react";
 import { DialogShell } from "@/components/common/dialog-shell";
 import { FormField, SelectField, TextAreaField, TextInput } from "@/components/common/form-field";
-import type { Member, MemberRole } from "@/lib/domain/types";
-import { mockMembers, mockPendingInvites } from "@/lib/mock/mock-data";
+import type { MemberRole } from "@/lib/domain/types";
+import {
+  loadWorkspaceSettingsBackupSnapshot,
+  saveWorkspaceSettingsBackupSnapshot,
+} from "@/lib/mock/mock-store";
 import { cn } from "@/lib/utils";
+import type { WorkspaceMemberDto, WorkspaceSettingsDto } from "@/lib/workspaces/types";
 
 type SettingsTab = "general" | "members" | "roles" | "danger";
 
-const workspaceName = "TestFlow QA";
+const fallbackWorkspace: WorkspaceSettingsDto = {
+  id: "",
+  name: "TestFlow QA",
+  slug: "testflow-qa",
+  logoUrl: "",
+  timezone: "Asia/Seoul",
+  createdAt: "",
+  updatedAt: "",
+};
 
 const tabs: Array<{ id: SettingsTab; label: string; description: string; icon: LucideIcon }> = [
   { id: "general", label: "일반", description: "워크스페이스 기본 정보", icon: Shield },
@@ -71,10 +83,17 @@ const permissionRows = [
 
 export function WorkspaceSettings() {
   const [activeTab, setActiveTab] = useState<SettingsTab>("general");
-  const [name, setName] = useState(workspaceName);
-  const [slug, setSlug] = useState("testflow-qa");
-  const [timezone, setTimezone] = useState("Asia/Seoul");
+  const [workspace, setWorkspace] = useState<WorkspaceSettingsDto>(fallbackWorkspace);
+  const [members, setMembers] = useState<WorkspaceMemberDto[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isBackupMode, setIsBackupMode] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [name, setName] = useState(fallbackWorkspace.name);
+  const [slug, setSlug] = useState(fallbackWorkspace.slug);
+  const [timezone, setTimezone] = useState(fallbackWorkspace.timezone);
+  const [logoUrl, setLogoUrl] = useState(fallbackWorkspace.logoUrl);
   const [notice, setNotice] = useState("");
+  const [actionError, setActionError] = useState("");
   const [memberQuery, setMemberQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState<MemberRole | "all">("all");
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -86,21 +105,129 @@ export function WorkspaceSettings() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState("");
 
+  useEffect(() => {
+    let ignore = false;
+
+    async function loadSettings() {
+      setIsLoading(true);
+      setNotice("");
+      setActionError("");
+
+      try {
+        const [apiWorkspace, apiMembers] = await Promise.all([
+          requestData<WorkspaceSettingsDto>("/api/workspaces/current"),
+          requestData<WorkspaceMemberDto[]>("/api/workspaces/current/members"),
+        ]);
+
+        if (ignore) {
+          return;
+        }
+
+        setWorkspace(apiWorkspace);
+        setName(apiWorkspace.name);
+        setSlug(apiWorkspace.slug);
+        setTimezone(apiWorkspace.timezone);
+        setLogoUrl(apiWorkspace.logoUrl);
+        setMembers(apiMembers);
+        setIsBackupMode(false);
+        saveWorkspaceSettingsBackupSnapshot(apiWorkspace, apiMembers);
+      } catch (error) {
+        if (ignore) {
+          return;
+        }
+
+        const backup = loadWorkspaceSettingsBackupSnapshot();
+
+        if (backup) {
+          setWorkspace(backup.workspace);
+          setName(backup.workspace.name);
+          setSlug(backup.workspace.slug);
+          setTimezone(backup.workspace.timezone);
+          setLogoUrl(backup.workspace.logoUrl);
+          setMembers(backup.members);
+          setIsBackupMode(true);
+          setNotice(`백업 데이터 표시 중입니다. 마지막 백업: ${formatBackupTime(backup.savedAt)}`);
+        } else {
+          setWorkspace(fallbackWorkspace);
+          setMembers([]);
+          setActionError(getErrorMessage(error));
+        }
+      } finally {
+        if (!ignore) {
+          setIsLoading(false);
+        }
+      }
+    }
+
+    void loadSettings();
+
+    return () => {
+      ignore = true;
+    };
+  }, []);
+
   const filteredMembers = useMemo(() => {
     const lowered = memberQuery.trim().toLowerCase();
-    return mockMembers.filter((member) => {
-      const matchesQuery =
-        !lowered ||
-        member.name.toLowerCase().includes(lowered) ||
-        member.email.toLowerCase().includes(lowered);
-      const matchesRole = roleFilter === "all" || member.role === roleFilter;
-      return matchesQuery && matchesRole;
-    });
-  }, [memberQuery, roleFilter]);
+    return members
+      .filter((member) => member.status === "active")
+      .filter((member) => {
+        const matchesQuery =
+          !lowered ||
+          member.name.toLowerCase().includes(lowered) ||
+          member.email.toLowerCase().includes(lowered);
+        const matchesRole = roleFilter === "all" || member.role === roleFilter;
+        return matchesQuery && matchesRole;
+      });
+  }, [memberQuery, members, roleFilter]);
+
+  const pendingMembers = useMemo(
+    () => members.filter((member) => member.status === "pending"),
+    [members],
+  );
+
+  const roleCounts = useMemo(
+    () => ({
+      Admin: members.filter((member) => member.role === "Admin" && member.status === "active").length,
+      Member: members.filter((member) => member.role === "Member" && member.status === "active").length,
+      Viewer: members.filter((member) => member.role === "Viewer" && member.status === "active").length,
+    }),
+    [members],
+  );
 
   function showNotice(message: string) {
     setNotice(message);
     window.setTimeout(() => setNotice(""), 2600);
+  }
+
+  async function saveGeneralSettings() {
+    setIsSaving(true);
+    setActionError("");
+    setNotice("");
+
+    try {
+      const updatedWorkspace = await requestData<WorkspaceSettingsDto>("/api/workspaces/current", {
+        method: "PATCH",
+        body: JSON.stringify({
+          name,
+          slug,
+          timezone,
+          logoUrl,
+        }),
+      });
+
+      setWorkspace(updatedWorkspace);
+      setName(updatedWorkspace.name);
+      setSlug(updatedWorkspace.slug);
+      setTimezone(updatedWorkspace.timezone);
+      setLogoUrl(updatedWorkspace.logoUrl);
+      setIsBackupMode(false);
+      saveWorkspaceSettingsBackupSnapshot(updatedWorkspace, members);
+      showNotice("워크스페이스 일반 설정을 저장했습니다.");
+    } catch (error) {
+      setActionError(getErrorMessage(error));
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   function submitInvite() {
@@ -148,9 +275,18 @@ export function WorkspaceSettings() {
       </aside>
 
       <div className="space-y-5">
-        {notice && (
-          <div className="rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700">
-            {notice}
+        {(isLoading || isBackupMode || notice || actionError) && (
+          <div
+            className={cn(
+              "rounded-md border px-4 py-3 text-sm",
+              actionError
+                ? "border-[var(--danger-border)] bg-[var(--danger-bg)] text-[var(--danger-text)]"
+                : isBackupMode
+                  ? "border-amber-200 bg-amber-50 text-amber-800"
+                  : "border-blue-200 bg-blue-50 text-blue-700",
+            )}
+          >
+            {isLoading ? "워크스페이스 설정을 불러오는 중입니다." : actionError || notice}
           </div>
         )}
 
@@ -162,13 +298,16 @@ export function WorkspaceSettings() {
             onNameChange={setName}
             onSlugChange={setSlug}
             onTimezoneChange={setTimezone}
+            onLogoUrlChange={setLogoUrl}
+            onSave={saveGeneralSettings}
             onNotice={showNotice}
+            isSaving={isSaving}
           />
         )}
         {activeTab === "members" && (
           <MembersTab
             members={filteredMembers}
-            pendingInvites={mockPendingInvites}
+            pendingInvites={pendingMembers}
             query={memberQuery}
             roleFilter={roleFilter}
             onQueryChange={setMemberQuery}
@@ -176,7 +315,7 @@ export function WorkspaceSettings() {
             onInviteOpen={() => setInviteOpen(true)}
           />
         )}
-        {activeTab === "roles" && <RolesTab />}
+        {activeTab === "roles" && <RolesTab roleCounts={roleCounts} />}
         {activeTab === "danger" && <DangerTab onDeleteOpen={() => setDeleteOpen(true)} />}
       </div>
 
@@ -250,7 +389,7 @@ export function WorkspaceSettings() {
               </button>
               <button
                 type="button"
-                disabled={deleteConfirm !== workspaceName}
+                disabled={deleteConfirm !== workspace.name}
                 onClick={() => {
                   setDeleteOpen(false);
                   setDeleteConfirm("");
@@ -268,7 +407,7 @@ export function WorkspaceSettings() {
               삭제를 진행하면 프로젝트, 테스트케이스, 실행 결과, 결함 데이터가 모두 삭제됩니다.
               v0.1 mock UI에서는 실제 삭제 API를 호출하지 않습니다.
             </div>
-            <FormField label={`확인을 위해 ${workspaceName}을 정확히 입력하세요.`}>
+            <FormField label={`확인을 위해 ${workspace.name}을 정확히 입력하세요.`}>
               <TextInput
                 value={deleteConfirm}
                 onChange={(event) => setDeleteConfirm(event.target.value)}
@@ -289,7 +428,10 @@ function GeneralTab({
   onNameChange,
   onSlugChange,
   onTimezoneChange,
+  onLogoUrlChange,
+  onSave,
   onNotice,
+  isSaving,
 }: {
   name: string;
   slug: string;
@@ -297,7 +439,10 @@ function GeneralTab({
   onNameChange: (value: string) => void;
   onSlugChange: (value: string) => void;
   onTimezoneChange: (value: string) => void;
+  onLogoUrlChange: (value: string) => void;
+  onSave: () => void;
   onNotice: (message: string) => void;
+  isSaving: boolean;
 }) {
   return (
     <section className="tf-card">
@@ -324,7 +469,10 @@ function GeneralTab({
             </button>
             <button
               type="button"
-              onClick={() => onNotice("로고 제거는 mock 버튼입니다.")}
+              onClick={() => {
+                onLogoUrlChange("");
+                onNotice("로고 URL 값을 비웠습니다. 실제 파일 삭제는 후속 Phase에서 연결합니다.");
+              }}
               className="h-9 rounded-md border border-[var(--border-subtle)] px-3 text-sm font-medium hover:bg-[var(--surface-muted)]"
             >
               제거
@@ -355,10 +503,11 @@ function GeneralTab({
         <div className="flex justify-end">
           <button
             type="button"
-            onClick={() => onNotice("워크스페이스 일반 설정이 mock으로 저장되었습니다.")}
-            className="h-10 rounded-md bg-[var(--brand-primary)] px-4 text-sm font-semibold text-white hover:bg-[var(--brand-primary-hover)]"
+            onClick={onSave}
+            disabled={isSaving}
+            className="h-10 rounded-md bg-[var(--brand-primary)] px-4 text-sm font-semibold text-white hover:bg-[var(--brand-primary-hover)] disabled:cursor-not-allowed disabled:bg-blue-300"
           >
-            저장
+            {isSaving ? "저장 중..." : "저장"}
           </button>
         </div>
       </div>
@@ -375,8 +524,8 @@ function MembersTab({
   onRoleFilterChange,
   onInviteOpen,
 }: {
-  members: Member[];
-  pendingInvites: Member[];
+  members: WorkspaceMemberDto[];
+  pendingInvites: WorkspaceMemberDto[];
   query: string;
   roleFilter: MemberRole | "all";
   onQueryChange: (value: string) => void;
@@ -426,7 +575,7 @@ function MembersTab({
   );
 }
 
-function RolesTab() {
+function RolesTab({ roleCounts }: { roleCounts: Record<MemberRole, number> }) {
   return (
     <div className="space-y-5">
       <section className="grid gap-4 md:grid-cols-3">
@@ -438,7 +587,7 @@ function RolesTab() {
                 <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">{card.description}</p>
               </div>
               <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-[var(--brand-primary)]">
-                {card.count}명
+                {roleCounts[card.role]}명
               </span>
             </div>
             <div className="mt-4 flex flex-wrap gap-2">
@@ -528,7 +677,7 @@ function MemberTable({
   isPending = false,
 }: {
   title: string;
-  members: Member[];
+  members: WorkspaceMemberDto[];
   isPending?: boolean;
 }) {
   return (
@@ -624,4 +773,44 @@ function SectionHeader({
       <p className="mt-1 text-sm text-[var(--text-secondary)]">{description}</p>
     </div>
   );
+}
+
+async function requestData<T>(url: string, init?: RequestInit) {
+  const response = await fetch(url, {
+    cache: "no-store",
+    ...init,
+    headers: {
+      ...(init?.body ? { "Content-Type": "application/json" } : {}),
+      ...init?.headers,
+    },
+  });
+  const payload = (await response.json()) as {
+    data?: T;
+    error?: { message?: string };
+  };
+
+  if (!response.ok || payload.data === undefined) {
+    throw new Error(payload.error?.message || "요청을 처리하지 못했습니다.");
+  }
+
+  return payload.data;
+}
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "요청을 처리하지 못했습니다.";
+}
+
+function formatBackupTime(value: string) {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "알 수 없는 시점";
+  }
+
+  return date.toLocaleString("ko-KR", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
