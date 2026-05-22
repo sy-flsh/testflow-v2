@@ -1,6 +1,12 @@
 import { apiError, apiSuccess } from "@/lib/api/response";
 import {
-  ensureDefaultWorkspace,
+  authGuardErrorResponse,
+  isAuthGuardError,
+  requireCurrentWorkspace,
+  requirePermission,
+} from "@/lib/auth/guards";
+import { prisma } from "@/lib/db/prisma";
+import {
   findProjectByIdOrSlug,
   isProjectSlugAvailable,
   mapProjectToDto,
@@ -8,7 +14,6 @@ import {
   toDbProjectStatus,
   toProjectSlug,
 } from "@/lib/projects/project-api";
-import { prisma } from "@/lib/db/prisma";
 
 export const runtime = "nodejs";
 
@@ -21,8 +26,10 @@ type ProjectRouteContext = {
 export async function GET(_request: Request, context: ProjectRouteContext) {
   try {
     const { projectId } = await context.params;
-    const workspace = await ensureDefaultWorkspace();
-    const project = await findProjectByIdOrSlug(workspace.id, projectId);
+    const auth = await requireCurrentWorkspace();
+    requirePermission(auth, "read");
+
+    const project = await findProjectByIdOrSlug(auth.workspace.id, projectId);
 
     if (!project) {
       return apiError("프로젝트를 찾을 수 없습니다.", 404, "PROJECT_NOT_FOUND");
@@ -30,6 +37,10 @@ export async function GET(_request: Request, context: ProjectRouteContext) {
 
     return apiSuccess(mapProjectToDto(project));
   } catch (error) {
+    if (isAuthGuardError(error)) {
+      return authGuardErrorResponse(error);
+    }
+
     console.error(error);
     return apiError("프로젝트를 불러오지 못했습니다.", 500, "PROJECT_READ_FAILED");
   }
@@ -38,12 +49,14 @@ export async function GET(_request: Request, context: ProjectRouteContext) {
 export async function PATCH(request: Request, context: ProjectRouteContext) {
   try {
     const { projectId } = await context.params;
-    const workspace = await ensureDefaultWorkspace();
-    const project = await findProjectByIdOrSlug(workspace.id, projectId);
+    const auth = await requireCurrentWorkspace();
+    const project = await findProjectByIdOrSlug(auth.workspace.id, projectId);
 
     if (!project) {
       return apiError("프로젝트를 찾을 수 없습니다.", 404, "PROJECT_NOT_FOUND");
     }
+
+    requirePermission(auth, "update");
 
     const body = await readJsonBody(request);
     const data: {
@@ -86,7 +99,11 @@ export async function PATCH(request: Request, context: ProjectRouteContext) {
 
     if (requestedSlug !== undefined) {
       const slug = toProjectSlug(requestedSlug);
-      const available = await isProjectSlugAvailable(workspace.id, slug, project.id);
+      const available = await isProjectSlugAvailable(
+        auth.workspace.id,
+        slug,
+        project.id,
+      );
 
       if (!available) {
         return apiError("이미 사용 중인 프로젝트 URL입니다.", 409, "PROJECT_SLUG_CONFLICT");
@@ -102,6 +119,10 @@ export async function PATCH(request: Request, context: ProjectRouteContext) {
 
     return apiSuccess(mapProjectToDto(updatedProject));
   } catch (error) {
+    if (isAuthGuardError(error)) {
+      return authGuardErrorResponse(error);
+    }
+
     console.error(error);
     return apiError("프로젝트를 수정하지 못했습니다.", 500, "PROJECT_UPDATE_FAILED");
   }
@@ -110,12 +131,14 @@ export async function PATCH(request: Request, context: ProjectRouteContext) {
 export async function DELETE(_request: Request, context: ProjectRouteContext) {
   try {
     const { projectId } = await context.params;
-    const workspace = await ensureDefaultWorkspace();
-    const project = await findProjectByIdOrSlug(workspace.id, projectId);
+    const auth = await requireCurrentWorkspace();
+    const project = await findProjectByIdOrSlug(auth.workspace.id, projectId);
 
     if (!project) {
       return apiError("프로젝트를 찾을 수 없습니다.", 404, "PROJECT_NOT_FOUND");
     }
+
+    requirePermission(auth, "delete");
 
     await prisma.project.delete({
       where: { id: project.id },
@@ -123,6 +146,10 @@ export async function DELETE(_request: Request, context: ProjectRouteContext) {
 
     return apiSuccess({ id: project.slug });
   } catch (error) {
+    if (isAuthGuardError(error)) {
+      return authGuardErrorResponse(error);
+    }
+
     console.error(error);
     return apiError("프로젝트를 삭제하지 못했습니다.", 500, "PROJECT_DELETE_FAILED");
   }
