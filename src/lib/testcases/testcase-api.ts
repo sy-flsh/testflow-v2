@@ -7,7 +7,6 @@ import {
 } from "@prisma/client";
 import type { Priority, TestCase, TestCaseStatus, TestFolder } from "@/lib/domain/types";
 import { prisma } from "@/lib/db/prisma";
-import { ensureDefaultWorkspace, findProjectByIdOrSlug } from "@/lib/projects/project-api";
 
 export type TestCaseWithSteps = DbTestCase & {
   steps: DbTestStep[];
@@ -55,11 +54,6 @@ const toDbStatusMap: Record<TestCaseStatus, PrismaTestCaseStatus> = {
   draft: "DRAFT",
   deprecated: "DEPRECATED",
 };
-
-export async function findProjectForTestCaseApi(projectId: string) {
-  const workspace = await ensureDefaultWorkspace();
-  return findProjectByIdOrSlug(workspace.id, projectId);
-}
 
 export function mapFolderToDto(folder: DbTestFolder): TestFolderDto {
   return {

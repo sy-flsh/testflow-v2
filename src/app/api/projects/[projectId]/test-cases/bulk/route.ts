@@ -1,9 +1,13 @@
 import { apiError, apiSuccess } from "@/lib/api/response";
 import { readJsonBody, readStringArray, readTrimmedString } from "@/lib/api/request";
+import {
+  authGuardErrorResponse,
+  isAuthGuardError,
+  requireProjectAccess,
+} from "@/lib/auth/guards";
 import { prisma } from "@/lib/db/prisma";
 import {
   findFolderByIdOrSlug,
-  findProjectForTestCaseApi,
   mapTestCaseToDto,
   parsePriority,
   parseTestCaseStatus,
@@ -21,11 +25,7 @@ type RouteContext = {
 export async function PATCH(request: Request, context: RouteContext) {
   try {
     const { projectId } = await context.params;
-    const project = await findProjectForTestCaseApi(projectId);
-
-    if (!project) {
-      return apiError("프로젝트를 찾을 수 없습니다.", 404, "PROJECT_NOT_FOUND");
-    }
+    const { project } = await requireProjectAccess(projectId, "update");
 
     const body = await readJsonBody(request);
     const ids = readStringArray(body.ids);
@@ -102,6 +102,10 @@ export async function PATCH(request: Request, context: RouteContext) {
 
     return apiSuccess(updatedTestCases.map(mapTestCaseToDto));
   } catch (error) {
+    if (isAuthGuardError(error)) {
+      return authGuardErrorResponse(error);
+    }
+
     console.error(error);
     return apiError("테스트케이스 일괄 변경에 실패했습니다.", 500, "TEST_CASE_BULK_UPDATE_FAILED");
   }

@@ -1,5 +1,10 @@
 import { apiError, apiSuccess } from "@/lib/api/response";
 import { readJsonBody } from "@/lib/api/request";
+import {
+  authGuardErrorResponse,
+  isAuthGuardError,
+  requireProjectAccess,
+} from "@/lib/auth/guards";
 import { prisma } from "@/lib/db/prisma";
 import {
   getDbPriority,
@@ -8,7 +13,6 @@ import {
 } from "@/lib/testcases/import-api";
 import {
   createNextTestCaseCode,
-  findProjectForTestCaseApi,
   mapTestCaseToDto,
   testCaseInclude,
 } from "@/lib/testcases/testcase-api";
@@ -22,11 +26,7 @@ type RouteContext = {
 export async function POST(request: Request, context: RouteContext) {
   try {
     const { projectId } = await context.params;
-    const project = await findProjectForTestCaseApi(projectId);
-
-    if (!project) {
-      return apiError("프로젝트를 찾을 수 없습니다.", 404, "PROJECT_NOT_FOUND");
-    }
+    const { project } = await requireProjectAccess(projectId, "create");
 
     const folders = await prisma.testFolder.findMany({
       where: { projectId: project.id, deletedAt: null },
@@ -106,6 +106,10 @@ export async function POST(request: Request, context: RouteContext) {
       testCases: created.map(mapTestCaseToDto),
     });
   } catch (error) {
+    if (isAuthGuardError(error)) {
+      return authGuardErrorResponse(error);
+    }
+
     console.error(error);
     return apiError("CSV 가져오기를 저장하지 못했습니다.", 500, "TEST_CASE_IMPORT_COMMIT_FAILED");
   }

@@ -4,10 +4,14 @@ import {
   readOptionalTrimmedString,
   readTrimmedString,
 } from "@/lib/api/request";
+import {
+  authGuardErrorResponse,
+  isAuthGuardError,
+  requireProjectAccess,
+} from "@/lib/auth/guards";
 import { prisma } from "@/lib/db/prisma";
 import {
   findFolderByIdOrSlug,
-  findProjectForTestCaseApi,
   mapFoldersToDto,
 } from "@/lib/testcases/testcase-api";
 
@@ -20,11 +24,7 @@ type RouteContext = {
 export async function PATCH(request: Request, context: RouteContext) {
   try {
     const { projectId, folderId } = await context.params;
-    const project = await findProjectForTestCaseApi(projectId);
-
-    if (!project) {
-      return apiError("프로젝트를 찾을 수 없습니다.", 404, "PROJECT_NOT_FOUND");
-    }
+    const { project } = await requireProjectAccess(projectId, "update");
 
     const folder = await findFolderByIdOrSlug(project.id, folderId);
 
@@ -75,6 +75,10 @@ export async function PATCH(request: Request, context: RouteContext) {
 
     return apiSuccess(mapFoldersToDto(folders).find((item) => item.databaseId === folder.id));
   } catch (error) {
+    if (isAuthGuardError(error)) {
+      return authGuardErrorResponse(error);
+    }
+
     console.error(error);
     return apiError("테스트 폴더를 수정하지 못했습니다.", 500, "TEST_FOLDER_UPDATE_FAILED");
   }
@@ -83,11 +87,7 @@ export async function PATCH(request: Request, context: RouteContext) {
 export async function DELETE(_request: Request, context: RouteContext) {
   try {
     const { projectId, folderId } = await context.params;
-    const project = await findProjectForTestCaseApi(projectId);
-
-    if (!project) {
-      return apiError("프로젝트를 찾을 수 없습니다.", 404, "PROJECT_NOT_FOUND");
-    }
+    const { project } = await requireProjectAccess(projectId, "delete");
 
     const folder = await findFolderByIdOrSlug(project.id, folderId);
 
@@ -115,6 +115,10 @@ export async function DELETE(_request: Request, context: RouteContext) {
 
     return apiSuccess({ id: folder.slug });
   } catch (error) {
+    if (isAuthGuardError(error)) {
+      return authGuardErrorResponse(error);
+    }
+
     console.error(error);
     return apiError("테스트 폴더를 삭제하지 못했습니다.", 500, "TEST_FOLDER_DELETE_FAILED");
   }

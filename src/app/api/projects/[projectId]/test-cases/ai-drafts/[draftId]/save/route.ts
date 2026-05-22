@@ -1,11 +1,15 @@
 import { apiError, apiSuccess } from "@/lib/api/response";
 import { readJsonBody, readStringArray, readTrimmedString } from "@/lib/api/request";
+import {
+  authGuardErrorResponse,
+  isAuthGuardError,
+  requireProjectAccess,
+} from "@/lib/auth/guards";
 import { prisma } from "@/lib/db/prisma";
 import { mapAiDraftToDto, sanitizeDraftItems } from "@/lib/testcases/ai-drafts";
 import {
   createNextTestCaseCode,
   findFolderByIdOrSlug,
-  findProjectForTestCaseApi,
   mapTestCaseToDto,
   testCaseInclude,
   toDbPriority,
@@ -21,11 +25,7 @@ type RouteContext = {
 export async function POST(request: Request, context: RouteContext) {
   try {
     const { projectId, draftId } = await context.params;
-    const project = await findProjectForTestCaseApi(projectId);
-
-    if (!project) {
-      return apiError("프로젝트를 찾을 수 없습니다.", 404, "PROJECT_NOT_FOUND");
-    }
+    const { project } = await requireProjectAccess(projectId, "create");
 
     const draft = await prisma.aiTestCaseDraft.findFirst({
       where: {
@@ -121,6 +121,10 @@ export async function POST(request: Request, context: RouteContext) {
       draft: mapAiDraftToDto(savedDraft),
     });
   } catch (error) {
+    if (isAuthGuardError(error)) {
+      return authGuardErrorResponse(error);
+    }
+
     console.error(error);
     return apiError("AI 초안을 테스트케이스로 저장하지 못했습니다.", 500, "AI_DRAFT_SAVE_FAILED");
   }

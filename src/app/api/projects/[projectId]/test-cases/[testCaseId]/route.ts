@@ -5,10 +5,14 @@ import {
   readStringArray,
   readTrimmedString,
 } from "@/lib/api/request";
+import {
+  authGuardErrorResponse,
+  isAuthGuardError,
+  requireProjectAccess,
+} from "@/lib/auth/guards";
 import { prisma } from "@/lib/db/prisma";
 import {
   findFolderByIdOrSlug,
-  findProjectForTestCaseApi,
   findTestCaseByIdOrCode,
   mapTestCaseToDto,
   parsePriority,
@@ -28,11 +32,7 @@ type RouteContext = {
 export async function GET(_request: Request, context: RouteContext) {
   try {
     const { projectId, testCaseId } = await context.params;
-    const project = await findProjectForTestCaseApi(projectId);
-
-    if (!project) {
-      return apiError("프로젝트를 찾을 수 없습니다.", 404, "PROJECT_NOT_FOUND");
-    }
+    const { project } = await requireProjectAccess(projectId, "read");
 
     const testCase = await findTestCaseByIdOrCode(project.id, testCaseId);
 
@@ -42,6 +42,10 @@ export async function GET(_request: Request, context: RouteContext) {
 
     return apiSuccess(mapTestCaseToDto(testCase));
   } catch (error) {
+    if (isAuthGuardError(error)) {
+      return authGuardErrorResponse(error);
+    }
+
     console.error(error);
     return apiError("테스트케이스를 불러오지 못했습니다.", 500, "TEST_CASE_READ_FAILED");
   }
@@ -50,11 +54,7 @@ export async function GET(_request: Request, context: RouteContext) {
 export async function PATCH(request: Request, context: RouteContext) {
   try {
     const { projectId, testCaseId } = await context.params;
-    const project = await findProjectForTestCaseApi(projectId);
-
-    if (!project) {
-      return apiError("프로젝트를 찾을 수 없습니다.", 404, "PROJECT_NOT_FOUND");
-    }
+    const { project } = await requireProjectAccess(projectId, "update");
 
     const testCase = await findTestCaseByIdOrCode(project.id, testCaseId);
 
@@ -157,6 +157,10 @@ export async function PATCH(request: Request, context: RouteContext) {
 
     return apiSuccess(mapTestCaseToDto(updatedTestCase));
   } catch (error) {
+    if (isAuthGuardError(error)) {
+      return authGuardErrorResponse(error);
+    }
+
     console.error(error);
     return apiError("테스트케이스를 수정하지 못했습니다.", 500, "TEST_CASE_UPDATE_FAILED");
   }
@@ -165,11 +169,7 @@ export async function PATCH(request: Request, context: RouteContext) {
 export async function DELETE(_request: Request, context: RouteContext) {
   try {
     const { projectId, testCaseId } = await context.params;
-    const project = await findProjectForTestCaseApi(projectId);
-
-    if (!project) {
-      return apiError("프로젝트를 찾을 수 없습니다.", 404, "PROJECT_NOT_FOUND");
-    }
+    const { project } = await requireProjectAccess(projectId, "delete");
 
     const testCase = await findTestCaseByIdOrCode(project.id, testCaseId);
 
@@ -184,6 +184,10 @@ export async function DELETE(_request: Request, context: RouteContext) {
 
     return apiSuccess({ id: testCase.code });
   } catch (error) {
+    if (isAuthGuardError(error)) {
+      return authGuardErrorResponse(error);
+    }
+
     console.error(error);
     return apiError("테스트케이스를 삭제하지 못했습니다.", 500, "TEST_CASE_DELETE_FAILED");
   }

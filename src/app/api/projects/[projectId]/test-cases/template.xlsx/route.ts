@@ -1,6 +1,10 @@
 import ExcelJS from "exceljs";
 import { apiError } from "@/lib/api/response";
-import { findProjectForTestCaseApi } from "@/lib/testcases/testcase-api";
+import {
+  authGuardErrorResponse,
+  isAuthGuardError,
+  requireProjectAccess,
+} from "@/lib/auth/guards";
 
 export const runtime = "nodejs";
 
@@ -45,11 +49,7 @@ const exampleRows = [
 export async function GET(_request: Request, context: RouteContext) {
   try {
     const { projectId } = await context.params;
-    const project = await findProjectForTestCaseApi(projectId);
-
-    if (!project) {
-      return apiError("프로젝트를 찾을 수 없습니다.", 404, "PROJECT_NOT_FOUND");
-    }
+    const { project } = await requireProjectAccess(projectId, "read");
 
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet("TestCases");
@@ -73,6 +73,10 @@ export async function GET(_request: Request, context: RouteContext) {
       },
     });
   } catch (error) {
+    if (isAuthGuardError(error)) {
+      return authGuardErrorResponse(error);
+    }
+
     console.error(error);
     return apiError("템플릿 파일을 생성하지 못했습니다.", 500, "TEST_CASE_TEMPLATE_FAILED");
   }
