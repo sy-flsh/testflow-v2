@@ -5,11 +5,15 @@ import {
   readStringArray,
   readTrimmedString,
 } from "@/lib/api/request";
+import {
+  authGuardErrorResponse,
+  isAuthGuardError,
+  requireProjectAccess,
+} from "@/lib/auth/guards";
 import { prisma } from "@/lib/db/prisma";
 import {
   createNextDefectCode,
   defectInclude,
-  findProjectForDefectApi,
   mapDefectToDto,
   parseDefectSeverity,
   parseDefectStatus,
@@ -32,11 +36,7 @@ type RouteContext = {
 export async function GET(_request: Request, context: RouteContext) {
   try {
     const { projectId } = await context.params;
-    const project = await findProjectForDefectApi(projectId);
-
-    if (!project) {
-      return apiError("프로젝트를 찾을 수 없습니다.", 404, "PROJECT_NOT_FOUND");
-    }
+    const { project } = await requireProjectAccess(projectId, "read");
 
     const defects = await prisma.defect.findMany({
       where: {
@@ -49,6 +49,10 @@ export async function GET(_request: Request, context: RouteContext) {
 
     return apiSuccess(defects.map(mapDefectToDto));
   } catch (error) {
+    if (isAuthGuardError(error)) {
+      return authGuardErrorResponse(error);
+    }
+
     console.error(error);
     return apiError("결함 목록을 불러오지 못했습니다.", 500, "DEFECT_LIST_FAILED");
   }
@@ -57,11 +61,7 @@ export async function GET(_request: Request, context: RouteContext) {
 export async function POST(request: Request, context: RouteContext) {
   try {
     const { projectId } = await context.params;
-    const project = await findProjectForDefectApi(projectId);
-
-    if (!project) {
-      return apiError("프로젝트를 찾을 수 없습니다.", 404, "PROJECT_NOT_FOUND");
-    }
+    const { project } = await requireProjectAccess(projectId, "create");
 
     const body = await readJsonBody(request);
     const title = readTrimmedString(body.title);
@@ -115,6 +115,10 @@ export async function POST(request: Request, context: RouteContext) {
 
     return apiSuccess(mapDefectToDto(createdDefect), { status: 201 });
   } catch (error) {
+    if (isAuthGuardError(error)) {
+      return authGuardErrorResponse(error);
+    }
+
     console.error(error);
     return apiError("결함을 생성하지 못했습니다.", 500, "DEFECT_CREATE_FAILED");
   }

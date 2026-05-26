@@ -9,7 +9,6 @@ import {
 } from "@prisma/client";
 import type { Defect, DefectSeverity, DefectStatus, Priority } from "@/lib/domain/types";
 import { prisma } from "@/lib/db/prisma";
-import { ensureDefaultWorkspace, findProjectByIdOrSlug } from "@/lib/projects/project-api";
 import { mapTestCaseToDto, testCaseInclude, type TestCaseWithSteps } from "@/lib/testcases/testcase-api";
 import { mapResultToDto, type TestRunResultWithCase } from "@/lib/test-runs/test-run-api";
 
@@ -109,11 +108,6 @@ const toDbPriorityMap: Record<Priority, PrismaPriority> = {
   medium: "MEDIUM",
   low: "LOW",
 };
-
-export async function findProjectForDefectApi(projectId: string) {
-  const workspace = await ensureDefaultWorkspace();
-  return findProjectByIdOrSlug(workspace.id, projectId);
-}
 
 export function mapDefectToDto(defect: DefectWithLinks): DefectDto {
   const linkedTestCases = dedupeById([

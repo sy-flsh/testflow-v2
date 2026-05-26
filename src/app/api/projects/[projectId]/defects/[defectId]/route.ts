@@ -5,11 +5,15 @@ import {
   readStringArray,
   readTrimmedString,
 } from "@/lib/api/request";
+import {
+  authGuardErrorResponse,
+  isAuthGuardError,
+  requireProjectAccess,
+} from "@/lib/auth/guards";
 import { prisma } from "@/lib/db/prisma";
 import {
   defectInclude,
   findDefectByIdOrCode,
-  findProjectForDefectApi,
   mapDefectToDto,
   parseDefectSeverity,
   parseDefectStatus,
@@ -32,11 +36,7 @@ type RouteContext = {
 export async function GET(_request: Request, context: RouteContext) {
   try {
     const { projectId, defectId } = await context.params;
-    const project = await findProjectForDefectApi(projectId);
-
-    if (!project) {
-      return apiError("프로젝트를 찾을 수 없습니다.", 404, "PROJECT_NOT_FOUND");
-    }
+    const { project } = await requireProjectAccess(projectId, "read");
 
     const defect = await findDefectByIdOrCode(project.id, defectId);
 
@@ -46,6 +46,10 @@ export async function GET(_request: Request, context: RouteContext) {
 
     return apiSuccess(mapDefectToDto(defect));
   } catch (error) {
+    if (isAuthGuardError(error)) {
+      return authGuardErrorResponse(error);
+    }
+
     console.error(error);
     return apiError("결함을 불러오지 못했습니다.", 500, "DEFECT_READ_FAILED");
   }
@@ -54,11 +58,7 @@ export async function GET(_request: Request, context: RouteContext) {
 export async function PATCH(request: Request, context: RouteContext) {
   try {
     const { projectId, defectId } = await context.params;
-    const project = await findProjectForDefectApi(projectId);
-
-    if (!project) {
-      return apiError("프로젝트를 찾을 수 없습니다.", 404, "PROJECT_NOT_FOUND");
-    }
+    const { project } = await requireProjectAccess(projectId, "update");
 
     const defect = await findDefectByIdOrCode(project.id, defectId);
 
@@ -194,6 +194,10 @@ export async function PATCH(request: Request, context: RouteContext) {
 
     return apiSuccess(mapDefectToDto(updatedDefect));
   } catch (error) {
+    if (isAuthGuardError(error)) {
+      return authGuardErrorResponse(error);
+    }
+
     console.error(error);
     return apiError("결함을 수정하지 못했습니다.", 500, "DEFECT_UPDATE_FAILED");
   }
@@ -202,11 +206,7 @@ export async function PATCH(request: Request, context: RouteContext) {
 export async function DELETE(_request: Request, context: RouteContext) {
   try {
     const { projectId, defectId } = await context.params;
-    const project = await findProjectForDefectApi(projectId);
-
-    if (!project) {
-      return apiError("프로젝트를 찾을 수 없습니다.", 404, "PROJECT_NOT_FOUND");
-    }
+    const { project } = await requireProjectAccess(projectId, "delete");
 
     const defect = await findDefectByIdOrCode(project.id, defectId);
 
@@ -227,6 +227,10 @@ export async function DELETE(_request: Request, context: RouteContext) {
 
     return apiSuccess({ id: defect.code });
   } catch (error) {
+    if (isAuthGuardError(error)) {
+      return authGuardErrorResponse(error);
+    }
+
     console.error(error);
     return apiError("결함을 삭제하지 못했습니다.", 500, "DEFECT_DELETE_FAILED");
   }
