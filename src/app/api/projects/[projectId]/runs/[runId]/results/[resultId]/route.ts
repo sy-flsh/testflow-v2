@@ -1,8 +1,12 @@
 import { apiError, apiSuccess } from "@/lib/api/response";
 import { readJsonBody, readOptionalTrimmedString } from "@/lib/api/request";
+import {
+  authGuardErrorResponse,
+  isAuthGuardError,
+  requireProjectAccess,
+} from "@/lib/auth/guards";
 import { prisma } from "@/lib/db/prisma";
 import {
-  findProjectForRunApi,
   findRunByIdOrSlug,
   findRunResultByIdOrCode,
   mapResultToDto,
@@ -19,11 +23,7 @@ type RouteContext = {
 export async function PATCH(request: Request, context: RouteContext) {
   try {
     const { projectId, runId, resultId } = await context.params;
-    const project = await findProjectForRunApi(projectId);
-
-    if (!project) {
-      return apiError("프로젝트를 찾을 수 없습니다.", 404, "PROJECT_NOT_FOUND");
-    }
+    const { project } = await requireProjectAccess(projectId, "update");
 
     const run = await findRunByIdOrSlug(project.id, runId);
 
@@ -85,6 +85,10 @@ export async function PATCH(request: Request, context: RouteContext) {
 
     return apiSuccess(mapResultToDto(updatedResult));
   } catch (error) {
+    if (isAuthGuardError(error)) {
+      return authGuardErrorResponse(error);
+    }
+
     console.error(error);
     return apiError("테스트 실행 결과를 저장하지 못했습니다.", 500, "RESULT_UPDATE_FAILED");
   }

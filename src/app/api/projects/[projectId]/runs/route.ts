@@ -1,9 +1,13 @@
 import { apiError, apiSuccess } from "@/lib/api/response";
 import { readJsonBody, readStringArray, readTrimmedString } from "@/lib/api/request";
+import {
+  authGuardErrorResponse,
+  isAuthGuardError,
+  requireProjectAccess,
+} from "@/lib/auth/guards";
 import { prisma } from "@/lib/db/prisma";
 import {
   createUniqueRunSlug,
-  findProjectForRunApi,
   mapRunToDto,
   parseDateInput,
   parseRunStatus,
@@ -20,11 +24,7 @@ type RouteContext = {
 export async function GET(_request: Request, context: RouteContext) {
   try {
     const { projectId } = await context.params;
-    const project = await findProjectForRunApi(projectId);
-
-    if (!project) {
-      return apiError("프로젝트를 찾을 수 없습니다.", 404, "PROJECT_NOT_FOUND");
-    }
+    const { project } = await requireProjectAccess(projectId, "read");
 
     const runs = await prisma.testRun.findMany({
       where: {
@@ -37,6 +37,10 @@ export async function GET(_request: Request, context: RouteContext) {
 
     return apiSuccess(runs.map(mapRunToDto));
   } catch (error) {
+    if (isAuthGuardError(error)) {
+      return authGuardErrorResponse(error);
+    }
+
     console.error(error);
     return apiError("테스트 실행 목록을 불러오지 못했습니다.", 500, "TEST_RUN_LIST_FAILED");
   }
@@ -45,11 +49,7 @@ export async function GET(_request: Request, context: RouteContext) {
 export async function POST(request: Request, context: RouteContext) {
   try {
     const { projectId } = await context.params;
-    const project = await findProjectForRunApi(projectId);
-
-    if (!project) {
-      return apiError("프로젝트를 찾을 수 없습니다.", 404, "PROJECT_NOT_FOUND");
-    }
+    const { project } = await requireProjectAccess(projectId, "create");
 
     const body = await readJsonBody(request);
     const title = readTrimmedString(body.title);
@@ -114,6 +114,10 @@ export async function POST(request: Request, context: RouteContext) {
 
     return apiSuccess(mapRunToDto(run), { status: 201 });
   } catch (error) {
+    if (isAuthGuardError(error)) {
+      return authGuardErrorResponse(error);
+    }
+
     console.error(error);
     return apiError("테스트 실행을 생성하지 못했습니다.", 500, "TEST_RUN_CREATE_FAILED");
   }

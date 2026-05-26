@@ -1,8 +1,12 @@
 import { apiError, apiSuccess } from "@/lib/api/response";
 import { readJsonBody, readStringArray } from "@/lib/api/request";
+import {
+  authGuardErrorResponse,
+  isAuthGuardError,
+  requireProjectAccess,
+} from "@/lib/auth/guards";
 import { prisma } from "@/lib/db/prisma";
 import {
-  findProjectForRunApi,
   findRunByIdOrSlug,
   mapResultToDto,
   parseResultStatus,
@@ -18,11 +22,7 @@ type RouteContext = {
 export async function PATCH(request: Request, context: RouteContext) {
   try {
     const { projectId, runId } = await context.params;
-    const project = await findProjectForRunApi(projectId);
-
-    if (!project) {
-      return apiError("프로젝트를 찾을 수 없습니다.", 404, "PROJECT_NOT_FOUND");
-    }
+    const { project } = await requireProjectAccess(projectId, "update");
 
     const run = await findRunByIdOrSlug(project.id, runId);
 
@@ -70,6 +70,10 @@ export async function PATCH(request: Request, context: RouteContext) {
 
     return apiSuccess(updatedResults.map(mapResultToDto));
   } catch (error) {
+    if (isAuthGuardError(error)) {
+      return authGuardErrorResponse(error);
+    }
+
     console.error(error);
     return apiError("테스트 실행 결과 일괄 변경에 실패했습니다.", 500, "RESULT_BULK_UPDATE_FAILED");
   }

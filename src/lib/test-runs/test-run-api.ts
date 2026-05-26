@@ -6,7 +6,6 @@ import {
 } from "@prisma/client";
 import type { ResultStatus, RunStatus, TestRun, TestRunResult } from "@/lib/domain/types";
 import { prisma } from "@/lib/db/prisma";
-import { ensureDefaultWorkspace, findProjectByIdOrSlug } from "@/lib/projects/project-api";
 import { mapTestCaseToDto, testCaseInclude } from "@/lib/testcases/testcase-api";
 
 export type TestRunResultWithCase = DbTestRunResult & {
@@ -86,11 +85,6 @@ export const testRunInclude = {
     orderBy: { createdAt: "asc" as const },
   },
 };
-
-export async function findProjectForRunApi(projectId: string) {
-  const workspace = await ensureDefaultWorkspace();
-  return findProjectByIdOrSlug(workspace.id, projectId);
-}
 
 export function mapRunToDto(run: TestRunWithResults): TestRunDto {
   return {
