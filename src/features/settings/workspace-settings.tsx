@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { DialogShell } from "@/components/common/dialog-shell";
 import { FormField, SelectField, TextAreaField, TextInput } from "@/components/common/form-field";
+import { getPermissionMessage, useCurrentAuth } from "@/features/auth/use-current-auth";
 import type { MemberRole } from "@/lib/domain/types";
 import {
   loadWorkspaceSettingsBackupSnapshot,
@@ -82,6 +83,7 @@ const permissionRows = [
 ] as const;
 
 export function WorkspaceSettings() {
+  const { role, isLoading: isAuthLoading } = useCurrentAuth();
   const [activeTab, setActiveTab] = useState<SettingsTab>("general");
   const [workspace, setWorkspace] = useState<WorkspaceSettingsDto>(fallbackWorkspace);
   const [members, setMembers] = useState<WorkspaceMemberDto[]>([]);
@@ -104,6 +106,8 @@ export function WorkspaceSettings() {
   );
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState("");
+  const canAdminSettings = role === "Admin";
+  const permissionMessage = getPermissionMessage(isAuthLoading);
 
   useEffect(() => {
     let ignore = false;
@@ -200,6 +204,11 @@ export function WorkspaceSettings() {
   }
 
   async function saveGeneralSettings() {
+    if (!canAdminSettings) {
+      setActionError(permissionMessage);
+      return;
+    }
+
     setIsSaving(true);
     setActionError("");
     setNotice("");
@@ -231,6 +240,11 @@ export function WorkspaceSettings() {
   }
 
   function submitInvite() {
+    if (!canAdminSettings) {
+      showNotice(permissionMessage);
+      return;
+    }
+
     const emails = inviteEmails
       .split(/[\n,]/)
       .map((email) => email.trim())
@@ -302,6 +316,8 @@ export function WorkspaceSettings() {
             onSave={saveGeneralSettings}
             onNotice={showNotice}
             isSaving={isSaving}
+            canSave={canAdminSettings}
+            permissionMessage={permissionMessage}
           />
         )}
         {activeTab === "members" && (
@@ -313,10 +329,18 @@ export function WorkspaceSettings() {
             onQueryChange={setMemberQuery}
             onRoleFilterChange={setRoleFilter}
             onInviteOpen={() => setInviteOpen(true)}
+            canInvite={canAdminSettings}
+            permissionMessage={permissionMessage}
           />
         )}
         {activeTab === "roles" && <RolesTab roleCounts={roleCounts} />}
-        {activeTab === "danger" && <DangerTab onDeleteOpen={() => setDeleteOpen(true)} />}
+        {activeTab === "danger" && (
+          <DangerTab
+            onDeleteOpen={() => setDeleteOpen(true)}
+            canAccessDanger={canAdminSettings}
+            permissionMessage={permissionMessage}
+          />
+        )}
       </div>
 
       {inviteOpen && (
@@ -337,7 +361,9 @@ export function WorkspaceSettings() {
               <button
                 type="button"
                 onClick={submitInvite}
-                className="inline-flex h-10 items-center gap-2 rounded-md bg-[var(--brand-primary)] px-4 text-sm font-semibold text-white hover:bg-[var(--brand-primary-hover)]"
+                disabled={!canAdminSettings}
+                title={!canAdminSettings ? permissionMessage : undefined}
+                className="inline-flex h-10 items-center gap-2 rounded-md bg-[var(--brand-primary)] px-4 text-sm font-semibold text-white hover:bg-[var(--brand-primary-hover)] disabled:cursor-not-allowed disabled:bg-blue-300"
               >
                 <Mail className="h-4 w-4" />
                 초대 보내기
@@ -432,6 +458,8 @@ function GeneralTab({
   onSave,
   onNotice,
   isSaving,
+  canSave,
+  permissionMessage,
 }: {
   name: string;
   slug: string;
@@ -443,6 +471,8 @@ function GeneralTab({
   onSave: () => void;
   onNotice: (message: string) => void;
   isSaving: boolean;
+  canSave: boolean;
+  permissionMessage: string;
 }) {
   return (
     <section className="tf-card">
@@ -462,7 +492,9 @@ function GeneralTab({
             <button
               type="button"
               onClick={() => onNotice("로고 업로드는 mock 버튼입니다.")}
-              className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border-subtle)] px-3 text-sm font-medium hover:bg-[var(--surface-muted)]"
+              disabled={!canSave}
+              title={!canSave ? permissionMessage : undefined}
+              className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border-subtle)] px-3 text-sm font-medium hover:bg-[var(--surface-muted)] disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Upload className="h-4 w-4" />
               업로드
@@ -473,7 +505,9 @@ function GeneralTab({
                 onLogoUrlChange("");
                 onNotice("로고 URL 값을 비웠습니다. 실제 파일 삭제는 후속 Phase에서 연결합니다.");
               }}
-              className="h-9 rounded-md border border-[var(--border-subtle)] px-3 text-sm font-medium hover:bg-[var(--surface-muted)]"
+              disabled={!canSave}
+              title={!canSave ? permissionMessage : undefined}
+              className="h-9 rounded-md border border-[var(--border-subtle)] px-3 text-sm font-medium hover:bg-[var(--surface-muted)] disabled:cursor-not-allowed disabled:opacity-50"
             >
               제거
             </button>
@@ -482,17 +516,18 @@ function GeneralTab({
 
         <div className="grid gap-4 md:grid-cols-2">
           <FormField label="워크스페이스 이름">
-            <TextInput value={name} onChange={(event) => onNameChange(event.target.value)} />
+            <TextInput value={name} onChange={(event) => onNameChange(event.target.value)} disabled={!canSave} />
           </FormField>
           <FormField label="URL slug">
             <TextInput
               value={slug}
               onChange={(event) => onSlugChange(event.target.value)}
               prefix="testflow.local/"
+              disabled={!canSave}
             />
           </FormField>
           <FormField label="시간대">
-            <SelectField value={timezone} onChange={(event) => onTimezoneChange(event.target.value)}>
+            <SelectField value={timezone} onChange={(event) => onTimezoneChange(event.target.value)} disabled={!canSave}>
               <option value="Asia/Seoul">Asia/Seoul</option>
               <option value="UTC">UTC</option>
               <option value="America/Los_Angeles">America/Los_Angeles</option>
@@ -504,7 +539,8 @@ function GeneralTab({
           <button
             type="button"
             onClick={onSave}
-            disabled={isSaving}
+            disabled={isSaving || !canSave}
+            title={!canSave ? permissionMessage : undefined}
             className="h-10 rounded-md bg-[var(--brand-primary)] px-4 text-sm font-semibold text-white hover:bg-[var(--brand-primary-hover)] disabled:cursor-not-allowed disabled:bg-blue-300"
           >
             {isSaving ? "저장 중..." : "저장"}
@@ -523,6 +559,8 @@ function MembersTab({
   onQueryChange,
   onRoleFilterChange,
   onInviteOpen,
+  canInvite,
+  permissionMessage,
 }: {
   members: WorkspaceMemberDto[];
   pendingInvites: WorkspaceMemberDto[];
@@ -531,6 +569,8 @@ function MembersTab({
   onQueryChange: (value: string) => void;
   onRoleFilterChange: (value: MemberRole | "all") => void;
   onInviteOpen: () => void;
+  canInvite: boolean;
+  permissionMessage: string;
 }) {
   return (
     <div className="space-y-5">
@@ -560,8 +600,14 @@ function MembersTab({
           </div>
           <button
             type="button"
-            onClick={onInviteOpen}
-            className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-[var(--brand-primary)] px-4 text-sm font-semibold text-white hover:bg-[var(--brand-primary-hover)]"
+            onClick={() => {
+              if (canInvite) {
+                onInviteOpen();
+              }
+            }}
+            disabled={!canInvite}
+            title={!canInvite ? permissionMessage : undefined}
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-[var(--brand-primary)] px-4 text-sm font-semibold text-white hover:bg-[var(--brand-primary-hover)] disabled:cursor-not-allowed disabled:bg-blue-300"
           >
             <UserPlus className="h-4 w-4" />
             멤버 초대
@@ -642,7 +688,15 @@ function RolesTab({ roleCounts }: { roleCounts: Record<MemberRole, number> }) {
   );
 }
 
-function DangerTab({ onDeleteOpen }: { onDeleteOpen: () => void }) {
+function DangerTab({
+  onDeleteOpen,
+  canAccessDanger,
+  permissionMessage,
+}: {
+  onDeleteOpen: () => void;
+  canAccessDanger: boolean;
+  permissionMessage: string;
+}) {
   return (
     <section className="tf-card border-red-200">
       <SectionHeader title="위험구역" description="되돌리기 어려운 워크스페이스 작업입니다." danger />
@@ -658,8 +712,14 @@ function DangerTab({ onDeleteOpen }: { onDeleteOpen: () => void }) {
             </div>
             <button
               type="button"
-              onClick={onDeleteOpen}
-              className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-red-600 px-4 text-sm font-semibold text-white hover:bg-red-700"
+              onClick={() => {
+                if (canAccessDanger) {
+                  onDeleteOpen();
+                }
+              }}
+              disabled={!canAccessDanger}
+              title={!canAccessDanger ? permissionMessage : undefined}
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-red-600 px-4 text-sm font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-red-200"
             >
               <Trash2 className="h-4 w-4" />
               워크스페이스 삭제

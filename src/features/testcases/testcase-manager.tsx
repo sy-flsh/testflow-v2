@@ -20,6 +20,7 @@ import { DrawerShell } from "@/components/common/drawer-shell";
 import { FormField, SelectField, TextAreaField, TextInput } from "@/components/common/form-field";
 import { TableActionBar } from "@/components/common/action-bar";
 import { PriorityBadge } from "@/components/common/priority-badge";
+import { getPermissionMessage, useCurrentAuth } from "@/features/auth/use-current-auth";
 import type { Priority, TestCase, TestCaseStatus as TcStatus, TestFolder } from "@/lib/domain/types";
 import {
   priorityLabels,
@@ -55,6 +56,7 @@ type Draft = {
 const allFolder: TestFolder = { id: "all", label: "전체" };
 
 export function TestCaseManager({ projectId }: { projectId: string }) {
+  const { permissions, isLoading: isAuthLoading } = useCurrentAuth();
   const [isMounted, setIsMounted] = useState(false);
   const [folders, setFolders] = useState<TestFolder[]>([allFolder]);
   const [testCases, setTestCases] = useState<TestCase[]>([]);
@@ -71,6 +73,11 @@ export function TestCaseManager({ projectId }: { projectId: string }) {
   const [submitted, setSubmitted] = useState(false);
   const [isUploadOpen, setUploadOpen] = useState(false);
   const [isAiOpen, setAiOpen] = useState(false);
+  const canCreate = permissions?.canCreate === true;
+  const canUpdate = permissions?.canUpdate === true;
+  const canDelete = permissions?.canDelete === true;
+  const canBulkAction = canUpdate || canDelete;
+  const permissionMessage = getPermissionMessage(isAuthLoading);
 
   const apiBase = `/api/projects/${encodeURIComponent(projectId)}`;
 
@@ -192,6 +199,11 @@ export function TestCaseManager({ projectId }: { projectId: string }) {
   }
 
   function openNewDrawer() {
+    if (!canCreate) {
+      setActionError(permissionMessage);
+      return;
+    }
+
     setSubmitted(false);
     setActionError("");
     setDrawerDraft({
@@ -224,6 +236,12 @@ export function TestCaseManager({ projectId }: { projectId: string }) {
 
   async function saveDrawerDraft() {
     if (!drawerDraft) {
+      return;
+    }
+
+    const canSave = drawerDraft.id ? canUpdate : canCreate;
+    if (!canSave) {
+      setActionError(permissionMessage);
       return;
     }
 
@@ -304,6 +322,11 @@ export function TestCaseManager({ projectId }: { projectId: string }) {
   }
 
   async function deleteSelected() {
+    if (!canDelete) {
+      setActionError(permissionMessage);
+      return;
+    }
+
     setActionError("");
 
     try {
@@ -324,6 +347,11 @@ export function TestCaseManager({ projectId }: { projectId: string }) {
   }
 
   async function addTagToSelected() {
+    if (!canUpdate) {
+      setActionError(permissionMessage);
+      return;
+    }
+
     setActionError("");
 
     try {
@@ -344,6 +372,11 @@ export function TestCaseManager({ projectId }: { projectId: string }) {
   }
 
   async function moveSelectedFolder() {
+    if (!canUpdate) {
+      setActionError(permissionMessage);
+      return;
+    }
+
     setActionError("");
 
     try {
@@ -421,15 +454,31 @@ export function TestCaseManager({ projectId }: { projectId: string }) {
 
           <div className="flex flex-wrap items-center gap-2">
             <button
-              onClick={() => setAiOpen(true)}
-              className="inline-flex h-9 items-center gap-2 rounded-md border border-violet-200 bg-violet-50 px-3 text-sm font-medium text-violet-700 hover:bg-violet-100"
+              onClick={() => {
+                if (!canCreate) {
+                  setActionError(permissionMessage);
+                  return;
+                }
+                setAiOpen(true);
+              }}
+              disabled={!canCreate}
+              title={!canCreate ? permissionMessage : undefined}
+              className="inline-flex h-9 items-center gap-2 rounded-md border border-violet-200 bg-violet-50 px-3 text-sm font-medium text-violet-700 hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Sparkles className="h-4 w-4" />
               AI 초안 생성
             </button>
             <button
-              onClick={() => setUploadOpen(true)}
-              className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--brand-primary)] bg-blue-50 px-3 text-sm font-medium text-[var(--brand-primary)] hover:bg-blue-100"
+              onClick={() => {
+                if (!canCreate) {
+                  setActionError(permissionMessage);
+                  return;
+                }
+                setUploadOpen(true);
+              }}
+              disabled={!canCreate}
+              title={!canCreate ? permissionMessage : undefined}
+              className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--brand-primary)] bg-blue-50 px-3 text-sm font-medium text-[var(--brand-primary)] hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Upload className="h-4 w-4" />
               엑셀 업로드
@@ -445,7 +494,9 @@ export function TestCaseManager({ projectId }: { projectId: string }) {
             </button>
             <button
               onClick={openNewDrawer}
-              className="inline-flex h-9 items-center gap-2 rounded-md bg-[var(--brand-primary)] px-3 text-sm font-medium text-white hover:bg-[var(--brand-primary-hover)]"
+              disabled={!canCreate}
+              title={!canCreate ? permissionMessage : undefined}
+              className="inline-flex h-9 items-center gap-2 rounded-md bg-[var(--brand-primary)] px-3 text-sm font-medium text-white hover:bg-[var(--brand-primary-hover)] disabled:cursor-not-allowed disabled:bg-blue-300"
             >
               <Plus className="h-4 w-4" />새 테스트케이스
             </button>
@@ -467,9 +518,9 @@ export function TestCaseManager({ projectId }: { projectId: string }) {
         <section className="min-w-0 border-t border-[var(--border-default)] lg:border-l lg:border-t-0">
           {selectedIds.length > 0 && (
             <TableActionBar count={selectedIds.length} className="rounded-none border-x-0 border-t-0">
-              <BulkButton onClick={deleteSelected}>삭제</BulkButton>
-              <BulkButton onClick={addTagToSelected}>태그 추가</BulkButton>
-              <BulkButton onClick={moveSelectedFolder}>폴더 이동</BulkButton>
+              <BulkButton onClick={deleteSelected} disabled={!canDelete} title={!canDelete ? permissionMessage : undefined}>삭제</BulkButton>
+              <BulkButton onClick={addTagToSelected} disabled={!canUpdate} title={!canUpdate ? permissionMessage : undefined}>태그 추가</BulkButton>
+              <BulkButton onClick={moveSelectedFolder} disabled={!canUpdate} title={!canUpdate ? permissionMessage : undefined}>폴더 이동</BulkButton>
             </TableActionBar>
           )}
 
@@ -489,6 +540,8 @@ export function TestCaseManager({ projectId }: { projectId: string }) {
               onToggleAll={toggleAllVisible}
               onToggle={toggleSelection}
               onOpen={openEditDrawer}
+              canSelect={canBulkAction}
+              permissionMessage={permissionMessage}
             />
           )}
         </section>
@@ -503,6 +556,8 @@ export function TestCaseManager({ projectId }: { projectId: string }) {
           onChange={setDrawerDraft}
           onClose={() => setDrawerDraft(null)}
           onSave={saveDrawerDraft}
+          canSave={drawerDraft.id ? canUpdate : canCreate}
+          permissionMessage={permissionMessage}
         />
       )}
 
@@ -584,6 +639,8 @@ function TestCaseTable({
   onToggleAll,
   onToggle,
   onOpen,
+  canSelect,
+  permissionMessage,
 }: {
   testCases: TestCase[];
   selectedIds: string[];
@@ -591,6 +648,8 @@ function TestCaseTable({
   onToggleAll: () => void;
   onToggle: (id: string) => void;
   onOpen: (tc: TestCase) => void;
+  canSelect: boolean;
+  permissionMessage: string;
 }) {
   return (
     <div className="overflow-x-auto">
@@ -602,6 +661,8 @@ function TestCaseTable({
                 type="checkbox"
                 checked={allSelected}
                 onChange={onToggleAll}
+                disabled={!canSelect}
+                title={!canSelect ? permissionMessage : undefined}
                 aria-label="전체 선택"
               />
             </th>
@@ -628,6 +689,8 @@ function TestCaseTable({
                   checked={selectedIds.includes(tc.id)}
                   onClick={(event) => event.stopPropagation()}
                   onChange={() => onToggle(tc.id)}
+                  disabled={!canSelect}
+                  title={!canSelect ? permissionMessage : undefined}
                   aria-label={`${tc.id} 선택`}
                 />
               </td>
@@ -690,6 +753,8 @@ function TestCaseDrawer({
   onChange,
   onClose,
   onSave,
+  canSave,
+  permissionMessage,
 }: {
   folders: TestFolder[];
   draft: Draft;
@@ -698,6 +763,8 @@ function TestCaseDrawer({
   onChange: (draft: Draft) => void;
   onClose: () => void;
   onSave: () => void;
+  canSave: boolean;
+  permissionMessage: string;
 }) {
   const titleError = submitted && draft.title.trim().length === 0;
 
@@ -721,7 +788,9 @@ function TestCaseDrawer({
           </button>
           <button
             onClick={onSave}
-            className="h-9 rounded-md bg-[var(--brand-primary)] px-3 text-sm font-medium text-white hover:bg-[var(--brand-primary-hover)]"
+            disabled={!canSave}
+            title={!canSave ? permissionMessage : undefined}
+            className="h-9 rounded-md bg-[var(--brand-primary)] px-3 text-sm font-medium text-white hover:bg-[var(--brand-primary-hover)] disabled:cursor-not-allowed disabled:bg-blue-300"
           >
             저장
           </button>
@@ -734,6 +803,7 @@ function TestCaseDrawer({
             value={draft.title}
             onChange={(event) => update("title", event.target.value)}
             placeholder="테스트케이스 제목"
+            disabled={!canSave}
           />
         </FormField>
 
@@ -742,6 +812,7 @@ function TestCaseDrawer({
             <SelectField
               value={draft.priority}
               onChange={(event) => update("priority", event.target.value as Priority)}
+              disabled={!canSave}
             >
               <option value="high">High</option>
               <option value="medium">Medium</option>
@@ -752,6 +823,7 @@ function TestCaseDrawer({
             <SelectField
               value={draft.folderId}
               onChange={(event) => update("folderId", event.target.value)}
+              disabled={!canSave}
             >
               {folders
                 .filter((folder) => folder.id !== "all")
@@ -773,6 +845,7 @@ function TestCaseDrawer({
               onChange={(event) => update("tagsText", event.target.value)}
               placeholder="smoke, payment"
               className="pl-9"
+              disabled={!canSave}
             />
           </div>
         </FormField>
@@ -782,6 +855,7 @@ function TestCaseDrawer({
             value={draft.description}
             onChange={(event) => update("description", event.target.value)}
             rows={3}
+            disabled={!canSave}
           />
         </FormField>
         <FormField label="사전 조건">
@@ -789,6 +863,7 @@ function TestCaseDrawer({
             value={draft.preconditions}
             onChange={(event) => update("preconditions", event.target.value)}
             rows={4}
+            disabled={!canSave}
           />
         </FormField>
         <FormField label="실행 단계">
@@ -797,6 +872,7 @@ function TestCaseDrawer({
             onChange={(event) => update("stepsText", event.target.value)}
             rows={5}
             placeholder="1. 결제 페이지 진입&#10;2. 카드 정보 입력"
+            disabled={!canSave}
           />
         </FormField>
         <FormField label="기대 결과">
@@ -804,6 +880,7 @@ function TestCaseDrawer({
             value={draft.expectedResult}
             onChange={(event) => update("expectedResult", event.target.value)}
             rows={4}
+            disabled={!canSave}
           />
         </FormField>
 
@@ -1372,14 +1449,20 @@ function AiDraftPreviewCard({
 function BulkButton({
   children,
   onClick,
+  disabled,
+  title,
 }: {
   children: React.ReactNode;
   onClick: () => void;
+  disabled?: boolean;
+  title?: string;
 }) {
   return (
     <button
       onClick={onClick}
-      className="h-8 rounded-md border border-blue-200 bg-white px-3 text-sm font-medium text-[var(--brand-primary)] hover:bg-blue-50"
+      disabled={disabled}
+      title={title}
+      className="h-8 rounded-md border border-blue-200 bg-white px-3 text-sm font-medium text-[var(--brand-primary)] hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
     >
       {children}
     </button>

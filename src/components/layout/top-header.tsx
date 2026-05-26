@@ -94,8 +94,11 @@ export function TopHeader() {
         </button>
         {auth ? (
           <div className="hidden min-w-0 text-right sm:block">
-            <p className="max-w-32 truncate text-xs font-semibold text-[var(--text-primary)]">
+            <p className="max-w-40 truncate text-xs font-semibold text-[var(--text-primary)]">
               {auth.user.name}
+              <span className="ml-1 rounded-full bg-[var(--bg-muted)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-secondary)]">
+                {auth.role}
+              </span>
             </p>
             <p className="max-w-40 truncate text-[11px] text-[var(--text-tertiary)]">
               {auth.user.email}

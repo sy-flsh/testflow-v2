@@ -17,6 +17,7 @@ import { EmptyState } from "@/components/common/empty-state";
 import { PriorityBadge } from "@/components/common/priority-badge";
 import { FormField, SelectField, TextAreaField } from "@/components/common/form-field";
 import { StatusBadge } from "@/components/common/status-badge";
+import { getPermissionMessage, useCurrentAuth } from "@/features/auth/use-current-auth";
 import {
   loadMockRuns,
   loadTestRunDetailBackupSnapshot,
@@ -51,6 +52,7 @@ export function TestRunRunner({
   projectId: string;
   runId: string;
 }) {
+  const { permissions, isLoading: isAuthLoading } = useCurrentAuth();
   const [run, setRun] = useState<TestRun | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isBackupMode, setIsBackupMode] = useState(false);
@@ -59,6 +61,9 @@ export function TestRunRunner({
   const [activeResultId, setActiveResultId] = useState<string | null>(null);
   const [defectTarget, setDefectTarget] = useState<TestRunResult | null>(null);
   const [actualResult, setActualResult] = useState("");
+  const canCreate = permissions?.canCreate === true;
+  const canUpdate = permissions?.canUpdate === true;
+  const permissionMessage = getPermissionMessage(isAuthLoading);
 
   const apiBase = `/api/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}`;
 
@@ -148,6 +153,11 @@ export function TestRunRunner({
       return;
     }
 
+    if (!canUpdate) {
+      setActionError(permissionMessage);
+      return;
+    }
+
     setActionError("");
 
     try {
@@ -203,6 +213,12 @@ export function TestRunRunner({
 
   async function registerDefect(input: DefectDialogInput) {
     if (!run || !defectTarget) {
+      setDefectTarget(null);
+      return;
+    }
+
+    if (!canCreate) {
+      setActionError(permissionMessage);
       setDefectTarget(null);
       return;
     }
@@ -283,11 +299,19 @@ export function TestRunRunner({
             </p>
           </div>
           <div className="flex gap-2">
-            <button className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border-default)] bg-white px-3 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]">
+            <button
+              disabled={!canUpdate}
+              title={!canUpdate ? permissionMessage : undefined}
+              className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border-default)] bg-white px-3 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-50"
+            >
               <Pause className="tf-icon" />
               일시정지
             </button>
-            <button className="h-9 rounded-md bg-[var(--brand-primary)] px-3 text-sm font-medium text-white hover:bg-[var(--brand-primary-hover)]">
+            <button
+              disabled={!canUpdate}
+              title={!canUpdate ? permissionMessage : undefined}
+              className="h-9 rounded-md bg-[var(--brand-primary)] px-3 text-sm font-medium text-white hover:bg-[var(--brand-primary-hover)] disabled:cursor-not-allowed disabled:bg-blue-300"
+            >
               완료
             </button>
           </div>
@@ -391,11 +415,18 @@ export function TestRunRunner({
             <textarea
               value={actualResult}
               onChange={(event) => setActualResult(event.target.value)}
+              disabled={!canUpdate}
               rows={4}
-              className="mt-2 w-full resize-none rounded-md border border-[var(--border-default)] px-3 py-2 text-sm outline-none focus:border-[var(--brand-primary)]"
+              className="mt-2 w-full resize-none rounded-md border border-[var(--border-default)] px-3 py-2 text-sm outline-none focus:border-[var(--brand-primary)] disabled:cursor-not-allowed disabled:bg-[var(--bg-subtle)]"
               placeholder="실제 실행 결과를 입력하세요"
             />
           </label>
+
+          {!canUpdate && (
+            <div className="mb-5 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              {permissionMessage} 실행 결과 저장은 Admin 또는 Member 권한이 필요합니다.
+            </div>
+          )}
 
           <div className="mb-5 rounded-lg border border-dashed border-[var(--border-strong)] bg-[var(--bg-subtle)] p-4">
             <div className="mb-1 flex items-center gap-2 text-sm font-medium">
@@ -413,6 +444,8 @@ export function TestRunRunner({
               hotkey="1"
               icon={CheckCircle}
               className="bg-[var(--status-pass)] hover:bg-emerald-700"
+              disabled={!canUpdate}
+              title={!canUpdate ? permissionMessage : undefined}
               onClick={() => updateResult("passed")}
             />
             <ResultButton
@@ -420,6 +453,8 @@ export function TestRunRunner({
               hotkey="2"
               icon={XCircle}
               className="bg-[var(--status-fail)] hover:bg-red-600"
+              disabled={!canUpdate}
+              title={!canUpdate ? permissionMessage : undefined}
               onClick={() => updateResult("failed")}
             />
             <ResultButton
@@ -427,6 +462,8 @@ export function TestRunRunner({
               hotkey="3"
               icon={AlertTriangle}
               className="bg-[var(--status-block)] hover:bg-amber-600"
+              disabled={!canUpdate}
+              title={!canUpdate ? permissionMessage : undefined}
               onClick={() => updateResult("blocked")}
             />
             <ResultButton
@@ -434,6 +471,8 @@ export function TestRunRunner({
               hotkey="4"
               icon={MinusCircle}
               className="bg-[var(--status-skip)] hover:bg-slate-700"
+              disabled={!canUpdate}
+              title={!canUpdate ? permissionMessage : undefined}
               onClick={() => updateResult("skipped")}
             />
           </div>
@@ -529,19 +568,26 @@ function ResultButton({
   icon: Icon,
   className,
   onClick,
+  disabled,
+  title,
 }: {
   label: string;
   hotkey: string;
   icon: React.ComponentType<{ className?: string }>;
   className: string;
   onClick: () => void;
+  disabled?: boolean;
+  title?: string;
 }) {
   return (
     <button
       onClick={onClick}
+      disabled={disabled}
+      title={title}
       className={cn(
         "flex min-h-20 flex-col items-center justify-center gap-2 rounded-lg px-4 py-4 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-md",
         className,
+        disabled && "cursor-not-allowed opacity-45 hover:translate-y-0 hover:shadow-sm",
       )}
     >
       <Icon className="tf-icon-md" />

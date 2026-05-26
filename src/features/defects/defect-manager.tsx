@@ -18,6 +18,7 @@ import { FormField, SelectField, TextAreaField, TextInput } from "@/components/c
 import { PriorityBadge } from "@/components/common/priority-badge";
 import { StatusBadge } from "@/components/common/status-badge";
 import { TableActionBar } from "@/components/common/action-bar";
+import { getPermissionMessage, useCurrentAuth } from "@/features/auth/use-current-auth";
 import { defectSeverityBadgeStyles } from "@/lib/domain/badge-maps";
 import { cn } from "@/lib/utils";
 import {
@@ -141,6 +142,7 @@ function comparePriority(a: Priority, b: Priority) {
 }
 
 export function DefectManager({ projectId }: { projectId: string }) {
+  const { permissions, isLoading: isAuthLoading } = useCurrentAuth();
   const [defects, setDefects] = useState<Defect[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isBackupMode, setIsBackupMode] = useState(false);
@@ -156,6 +158,11 @@ export function DefectManager({ projectId }: { projectId: string }) {
   const [form, setForm] = useState<DefectForm>(() => toForm());
   const [titleError, setTitleError] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<Defect | "selected" | null>(null);
+  const canCreate = permissions?.canCreate === true;
+  const canUpdate = permissions?.canUpdate === true;
+  const canDelete = permissions?.canDelete === true;
+  const canSelectActions = canUpdate || canDelete;
+  const permissionMessage = getPermissionMessage(isAuthLoading);
 
   useEffect(() => {
     let active = true;
@@ -251,8 +258,14 @@ export function DefectManager({ projectId }: { projectId: string }) {
   const allVisibleSelected =
     filteredDefects.length > 0 &&
     filteredDefects.every((defect) => selectedIds.includes(defect.id));
+  const canEditDrawer = drawerMode === "create" ? canCreate : canUpdate;
 
   function openCreateDrawer() {
+    if (!canCreate) {
+      setActionError(permissionMessage);
+      return;
+    }
+
     setForm(toForm());
     setTitleError("");
     setDrawerMode("create");
@@ -270,6 +283,12 @@ export function DefectManager({ projectId }: { projectId: string }) {
   }
 
   async function saveDefect() {
+    const canSave = drawerMode === "create" ? canCreate : canUpdate;
+    if (!canSave) {
+      setActionError(permissionMessage);
+      return;
+    }
+
     if (!form.title.trim()) {
       setTitleError("결함 제목을 입력해주세요.");
       return;
@@ -314,6 +333,11 @@ export function DefectManager({ projectId }: { projectId: string }) {
   }
 
   async function duplicateDefect() {
+    if (!canCreate) {
+      setActionError(permissionMessage);
+      return;
+    }
+
     setActionError("");
 
     try {
@@ -341,6 +365,12 @@ export function DefectManager({ projectId }: { projectId: string }) {
   }
 
   async function deleteDefects(target: Defect | "selected") {
+    if (!canDelete) {
+      setActionError(permissionMessage);
+      setDeleteTarget(null);
+      return;
+    }
+
     const targetIds = target === "selected" ? selectedIds : [target.id];
 
     setActionError("");
@@ -391,6 +421,11 @@ export function DefectManager({ projectId }: { projectId: string }) {
   }
 
   async function bulkPatchSelected(payload: Partial<Pick<Defect, "status" | "assignee">>) {
+    if (!canUpdate) {
+      setActionError(permissionMessage);
+      return;
+    }
+
     setActionError("");
 
     try {
@@ -511,7 +546,9 @@ export function DefectManager({ projectId }: { projectId: string }) {
           <button
             type="button"
             onClick={openCreateDrawer}
-            className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-[var(--brand-primary)] px-4 text-sm font-semibold text-white hover:bg-[var(--brand-primary-hover)]"
+            disabled={!canCreate}
+            title={!canCreate ? permissionMessage : undefined}
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-[var(--brand-primary)] px-4 text-sm font-semibold text-white hover:bg-[var(--brand-primary-hover)] disabled:cursor-not-allowed disabled:bg-blue-300"
           >
             <Plus className="tf-icon" />
             새 결함 등록
@@ -529,7 +566,9 @@ export function DefectManager({ projectId }: { projectId: string }) {
                   event.target.value = "";
                 }
               }}
-              className="h-9 rounded-md border border-blue-200 bg-white px-3 text-sm"
+              disabled={!canUpdate}
+              title={!canUpdate ? permissionMessage : undefined}
+              className="h-9 rounded-md border border-blue-200 bg-white px-3 text-sm disabled:cursor-not-allowed disabled:opacity-50"
               defaultValue=""
             >
               <option value="" disabled>
@@ -547,7 +586,9 @@ export function DefectManager({ projectId }: { projectId: string }) {
                   event.target.value = "";
                 }
               }}
-              className="h-9 rounded-md border border-blue-200 bg-white px-3 text-sm"
+              disabled={!canUpdate}
+              title={!canUpdate ? permissionMessage : undefined}
+              className="h-9 rounded-md border border-blue-200 bg-white px-3 text-sm disabled:cursor-not-allowed disabled:opacity-50"
               defaultValue=""
             >
               <option value="" disabled>
@@ -561,8 +602,14 @@ export function DefectManager({ projectId }: { projectId: string }) {
             </select>
             <button
               type="button"
-              onClick={() => setDeleteTarget("selected")}
-              className="inline-flex h-9 items-center gap-2 rounded-md border border-red-200 bg-white px-3 text-sm font-medium text-red-700 hover:bg-red-50"
+              onClick={() => {
+                if (canDelete) {
+                  setDeleteTarget("selected");
+                }
+              }}
+              disabled={!canDelete}
+              title={!canDelete ? permissionMessage : undefined}
+              className="inline-flex h-9 items-center gap-2 rounded-md border border-red-200 bg-white px-3 text-sm font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Trash2 className="tf-icon" />
               삭제
@@ -590,6 +637,8 @@ export function DefectManager({ projectId }: { projectId: string }) {
                       type="checkbox"
                       checked={allVisibleSelected}
                       onChange={toggleAllVisible}
+                      disabled={!canSelectActions}
+                      title={!canSelectActions ? permissionMessage : undefined}
                       className="h-4 w-4 rounded border-[var(--border-subtle)]"
                       aria-label="전체 선택"
                     />
@@ -612,6 +661,8 @@ export function DefectManager({ projectId }: { projectId: string }) {
                         type="checkbox"
                         checked={selectedIds.includes(defect.id)}
                         onChange={() => toggleSelected(defect.id)}
+                        disabled={!canSelectActions}
+                        title={!canSelectActions ? permissionMessage : undefined}
                         className="h-4 w-4 rounded border-[var(--border-subtle)]"
                         aria-label={`${defect.id} 선택`}
                       />
@@ -670,16 +721,24 @@ export function DefectManager({ projectId }: { projectId: string }) {
               <>
                 <button
                   type="button"
-                onClick={() => void duplicateDefect()}
-                  className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border-subtle)] px-3 text-sm font-medium hover:bg-[var(--surface-muted)]"
+                  onClick={() => void duplicateDefect()}
+                  disabled={!canCreate}
+                  title={!canCreate ? permissionMessage : undefined}
+                  className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border-subtle)] px-3 text-sm font-medium hover:bg-[var(--surface-muted)] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <Copy className="tf-icon" />
                   복제
                 </button>
                 <button
                   type="button"
-                  onClick={() => setDeleteTarget(defects.find((defect) => defect.id === form.id) ?? null)}
-                  className="inline-flex h-9 items-center gap-2 rounded-md border border-red-200 px-3 text-sm font-medium text-red-700 hover:bg-red-50"
+                  onClick={() => {
+                    if (canDelete) {
+                      setDeleteTarget(defects.find((defect) => defect.id === form.id) ?? null);
+                    }
+                  }}
+                  disabled={!canDelete}
+                  title={!canDelete ? permissionMessage : undefined}
+                  className="inline-flex h-9 items-center gap-2 rounded-md border border-red-200 px-3 text-sm font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <Trash2 className="tf-icon" />
                   삭제
@@ -699,7 +758,9 @@ export function DefectManager({ projectId }: { projectId: string }) {
               <button
                 type="button"
                 onClick={() => void saveDefect()}
-                className="h-10 rounded-md bg-[var(--brand-primary)] px-4 text-sm font-semibold text-white hover:bg-[var(--brand-primary-hover)]"
+                disabled={drawerMode === "create" ? !canCreate : !canUpdate}
+                title={drawerMode === "create" ? (!canCreate ? permissionMessage : undefined) : (!canUpdate ? permissionMessage : undefined)}
+                className="h-10 rounded-md bg-[var(--brand-primary)] px-4 text-sm font-semibold text-white hover:bg-[var(--brand-primary-hover)] disabled:cursor-not-allowed disabled:bg-blue-300"
               >
                 저장
               </button>
@@ -713,6 +774,7 @@ export function DefectManager({ projectId }: { projectId: string }) {
                     <SelectField
                       value={form.status}
                       onChange={(event) => setForm((current) => ({ ...current, status: event.target.value as DefectStatus }))}
+                      disabled={!canEditDrawer}
                     >
                       {Object.entries(statusLabels).map(([value, label]) => (
                         <option key={value} value={value}>
@@ -725,6 +787,7 @@ export function DefectManager({ projectId }: { projectId: string }) {
                     <SelectField
                       value={form.severity}
                       onChange={(event) => setForm((current) => ({ ...current, severity: event.target.value as DefectSeverity }))}
+                      disabled={!canEditDrawer}
                     >
                       {Object.entries(severityLabels).map(([value, label]) => (
                         <option key={value} value={value}>
@@ -737,6 +800,7 @@ export function DefectManager({ projectId }: { projectId: string }) {
                     <SelectField
                       value={form.priority}
                       onChange={(event) => setForm((current) => ({ ...current, priority: event.target.value as Priority }))}
+                      disabled={!canEditDrawer}
                     >
                       {Object.entries(priorityLabels).map(([value, label]) => (
                         <option key={value} value={value}>
@@ -749,6 +813,7 @@ export function DefectManager({ projectId }: { projectId: string }) {
                     <SelectField
                       value={form.assignee}
                       onChange={(event) => setForm((current) => ({ ...current, assignee: event.target.value }))}
+                      disabled={!canEditDrawer}
                     >
                       {assignees.map((assignee) => (
                         <option key={assignee} value={assignee}>
@@ -787,6 +852,7 @@ export function DefectManager({ projectId }: { projectId: string }) {
                     }}
                     placeholder="결함 제목을 입력하세요"
                     className={titleError ? "border-red-300" : undefined}
+                    disabled={!canEditDrawer}
                   />
                 </FormField>
                 <FormField label="설명">
@@ -795,6 +861,7 @@ export function DefectManager({ projectId }: { projectId: string }) {
                     onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
                     placeholder="문제 현상과 영향 범위를 입력하세요"
                     rows={5}
+                    disabled={!canEditDrawer}
                   />
                 </FormField>
                 <FormField label="재현 단계">
@@ -803,6 +870,7 @@ export function DefectManager({ projectId }: { projectId: string }) {
                     onChange={(event) => setForm((current) => ({ ...current, reproductionSteps: event.target.value }))}
                     placeholder="1. 재현에 필요한 단계를 입력하세요"
                     rows={7}
+                    disabled={!canEditDrawer}
                   />
                 </FormField>
                 <FormField label="체크리스트">
@@ -811,6 +879,7 @@ export function DefectManager({ projectId }: { projectId: string }) {
                     onChange={(event) => setForm((current) => ({ ...current, checklistText: event.target.value }))}
                     placeholder="한 줄에 하나씩 확인 항목을 입력하세요"
                     rows={5}
+                    disabled={!canEditDrawer}
                   />
                 </FormField>
 
@@ -826,7 +895,7 @@ export function DefectManager({ projectId }: { projectId: string }) {
                       .filter(Boolean)
                       .map((item, index) => (
                         <label key={`checklist-preview-${index}-${item}`} className="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
-                          <input type="checkbox" className="h-4 w-4 rounded border-[var(--border-subtle)]" />
+                          <input type="checkbox" disabled={!canEditDrawer} className="h-4 w-4 rounded border-[var(--border-subtle)]" />
                           {item}
                         </label>
                       ))}

@@ -15,6 +15,7 @@ import { EmptyState } from "@/components/common/empty-state";
 import { DialogShell } from "@/components/common/dialog-shell";
 import { FormField, SelectField, TextAreaField } from "@/components/common/form-field";
 import { StatusBadge } from "@/components/common/status-badge";
+import { getPermissionMessage, useCurrentAuth } from "@/features/auth/use-current-auth";
 import { cn } from "@/lib/utils";
 import type { RunStatus, TestCase, TestRun } from "@/lib/domain/types";
 import {
@@ -51,6 +52,7 @@ type CreateRunInput = {
 
 export function TestRunList({ projectId }: { projectId: string }) {
   const router = useRouter();
+  const { permissions, isLoading: isAuthLoading } = useCurrentAuth();
   const [runs, setRuns] = useState<TestRun[]>([]);
   const [testCases, setTestCases] = useState<TestCase[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -60,6 +62,8 @@ export function TestRunList({ projectId }: { projectId: string }) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<RunStatus | "all">("all");
   const [isCreateOpen, setCreateOpen] = useState(false);
+  const canCreate = permissions?.canCreate === true;
+  const permissionMessage = getPermissionMessage(isAuthLoading);
 
   const apiBase = `/api/projects/${encodeURIComponent(projectId)}`;
 
@@ -134,6 +138,11 @@ export function TestRunList({ projectId }: { projectId: string }) {
   }, [query, runs, statusFilter]);
 
   async function handleCreate(input: CreateRunInput) {
+    if (!canCreate) {
+      setActionError(permissionMessage);
+      return false;
+    }
+
     setActionError("");
 
     try {
@@ -202,8 +211,16 @@ export function TestRunList({ projectId }: { projectId: string }) {
         </div>
 
         <button
-          onClick={() => setCreateOpen(true)}
-          className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-[var(--brand-primary)] px-3 text-sm font-medium text-white hover:bg-[var(--brand-primary-hover)]"
+          onClick={() => {
+            if (!canCreate) {
+              setActionError(permissionMessage);
+              return;
+            }
+            setCreateOpen(true);
+          }}
+          disabled={!canCreate}
+          title={!canCreate ? permissionMessage : undefined}
+          className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-[var(--brand-primary)] px-3 text-sm font-medium text-white hover:bg-[var(--brand-primary-hover)] disabled:cursor-not-allowed disabled:bg-blue-300"
         >
           <Plus className="tf-icon" />
           새 테스트 플랜 만들기
@@ -234,6 +251,8 @@ export function TestRunList({ projectId }: { projectId: string }) {
           submitError={actionError}
           onClose={() => setCreateOpen(false)}
           onCreate={handleCreate}
+          canCreate={canCreate}
+          permissionMessage={permissionMessage}
         />
       )}
     </>
@@ -317,11 +336,15 @@ function CreateRunDialog({
   submitError,
   onClose,
   onCreate,
+  canCreate,
+  permissionMessage,
 }: {
   testCases: TestCase[];
   submitError?: string;
   onClose: () => void;
   onCreate: (input: CreateRunInput) => Promise<boolean>;
+  canCreate: boolean;
+  permissionMessage: string;
 }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -336,6 +359,10 @@ function CreateRunDialog({
   const selectionError = submitted && selectedCaseIds.length === 0;
 
   async function handleSubmit(startNow: boolean) {
+    if (!canCreate) {
+      return;
+    }
+
     setSubmitted(true);
 
     if (!title.trim() || selectedCaseIds.length === 0) {
@@ -384,14 +411,16 @@ function CreateRunDialog({
           </button>
           <button
             onClick={() => handleSubmit(false)}
-            disabled={isSubmitting}
+            disabled={isSubmitting || !canCreate}
+            title={!canCreate ? permissionMessage : undefined}
             className="h-9 rounded-md border border-[var(--border-default)] bg-white px-3 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-60"
           >
             임시저장
           </button>
           <button
             onClick={() => handleSubmit(true)}
-            disabled={isSubmitting}
+            disabled={isSubmitting || !canCreate}
+            title={!canCreate ? permissionMessage : undefined}
             className="h-9 rounded-md bg-[var(--brand-primary)] px-3 text-sm font-medium text-white hover:bg-[var(--brand-primary-hover)] disabled:cursor-not-allowed disabled:opacity-60"
           >
             플랜 생성 & 실행 시작

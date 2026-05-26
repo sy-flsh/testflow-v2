@@ -17,6 +17,7 @@ import { useRouter } from "next/navigation";
 import { EmptyState } from "@/components/common/empty-state";
 import { DialogShell } from "@/components/common/dialog-shell";
 import { FormField, TextAreaField, TextInput } from "@/components/common/form-field";
+import { getPermissionMessage, useCurrentAuth } from "@/features/auth/use-current-auth";
 import type { Project, ProjectStatus } from "@/lib/domain/types";
 import { projectStatusLabels as statusLabels } from "@/lib/domain/labels";
 import {
@@ -40,6 +41,7 @@ const colorOptions = [
 
 export function ProjectList() {
   const router = useRouter();
+  const { permissions, isLoading: isAuthLoading } = useCurrentAuth();
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isBackupMode, setIsBackupMode] = useState(false);
@@ -53,6 +55,9 @@ export function ProjectList() {
   const [viewMode, setViewMode] = useState<ViewMode>("card");
   const [isCreateOpen, setCreateOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
+  const canCreate = permissions?.canCreate === true;
+  const canDelete = permissions?.canDelete === true;
+  const permissionMessage = getPermissionMessage(isAuthLoading);
 
   useEffect(() => {
     let active = true;
@@ -139,6 +144,11 @@ export function ProjectList() {
     description: string;
     color: string;
   }) {
+    if (!canCreate) {
+      setActionError(permissionMessage);
+      return false;
+    }
+
     setActionError("");
 
     try {
@@ -167,6 +177,11 @@ export function ProjectList() {
 
   async function handleDelete() {
     if (!deleteTarget) {
+      return;
+    }
+
+    if (!canDelete) {
+      setActionError(permissionMessage);
       return;
     }
 
@@ -263,8 +278,16 @@ export function ProjectList() {
             </ViewToggleButton>
           </div>
           <button
-            onClick={() => setCreateOpen(true)}
-            className="inline-flex h-9 items-center gap-2 rounded-md bg-[var(--brand-primary)] px-3 text-sm font-medium text-white hover:bg-[var(--brand-primary-hover)]"
+            onClick={() => {
+              if (!canCreate) {
+                setActionError(permissionMessage);
+                return;
+              }
+              setCreateOpen(true);
+            }}
+            disabled={!canCreate}
+            title={!canCreate ? permissionMessage : undefined}
+            className="inline-flex h-9 items-center gap-2 rounded-md bg-[var(--brand-primary)] px-3 text-sm font-medium text-white hover:bg-[var(--brand-primary-hover)] disabled:cursor-not-allowed disabled:bg-blue-300"
           >
             <Plus className="h-4 w-4" />새 프로젝트
           </button>
@@ -285,6 +308,8 @@ export function ProjectList() {
               project={project}
               onOpen={() => router.push(`/projects/${project.id}/testcases`)}
               onDelete={() => setDeleteTarget(project)}
+              canDelete={canDelete}
+              permissionMessage={permissionMessage}
             />
           ))}
         </div>
@@ -293,6 +318,8 @@ export function ProjectList() {
           projects={visibleProjects}
           onOpen={(project) => router.push(`/projects/${project.id}/testcases`)}
           onDelete={setDeleteTarget}
+          canDelete={canDelete}
+          permissionMessage={permissionMessage}
         />
       )}
 
@@ -320,10 +347,14 @@ function ProjectCard({
   project,
   onOpen,
   onDelete,
+  canDelete,
+  permissionMessage,
 }: {
   project: Project;
   onOpen: () => void;
   onDelete: () => void;
+  canDelete: boolean;
+  permissionMessage: string;
 }) {
   const extraMemberCount = Math.max(project.members.length - 3, 0);
 
@@ -355,9 +386,13 @@ function ProjectCard({
         <button
           onClick={(event) => {
             event.stopPropagation();
-            onDelete();
+            if (canDelete) {
+              onDelete();
+            }
           }}
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--danger-bg)] hover:text-[var(--danger-text)]"
+          disabled={!canDelete}
+          title={!canDelete ? permissionMessage : undefined}
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--danger-bg)] hover:text-[var(--danger-text)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[var(--text-tertiary)]"
           aria-label={`${project.name} 삭제`}
         >
           <MoreVertical className="h-4 w-4" />
@@ -411,10 +446,14 @@ function ProjectTable({
   projects,
   onOpen,
   onDelete,
+  canDelete,
+  permissionMessage,
 }: {
   projects: Project[];
   onOpen: (project: Project) => void;
   onDelete: (project: Project) => void;
+  canDelete: boolean;
+  permissionMessage: string;
 }) {
   return (
     <div className="overflow-hidden rounded-lg border border-[var(--border-default)] bg-white">
@@ -466,9 +505,13 @@ function ProjectTable({
                 <button
                   onClick={(event) => {
                     event.stopPropagation();
-                    onDelete(project);
+                    if (canDelete) {
+                      onDelete(project);
+                    }
                   }}
-                  className="flex h-8 w-8 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--danger-bg)] hover:text-[var(--danger-text)]"
+                  disabled={!canDelete}
+                  title={!canDelete ? permissionMessage : undefined}
+                  className="flex h-8 w-8 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--danger-bg)] hover:text-[var(--danger-text)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[var(--text-tertiary)]"
                   aria-label={`${project.name} 삭제`}
                 >
                   <Trash2 className="h-4 w-4" />
