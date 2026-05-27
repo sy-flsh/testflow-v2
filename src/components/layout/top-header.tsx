@@ -3,51 +3,20 @@
 import { Bell, ChevronDown, LogOut, Search } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
-import {
-  requestAuthData,
-  type AuthMeResponse,
-} from "@/features/auth/auth-types";
+import { useState } from "react";
+import { useCurrentAuth } from "@/features/auth/use-current-auth";
 
 export function TopHeader() {
   const router = useRouter();
-  const [auth, setAuth] = useState<AuthMeResponse | null>(null);
+  const { auth, logout } = useCurrentAuth();
   const [isLoggingOut, setIsLoggingOut] = useState(false);
-
-  useEffect(() => {
-    let ignore = false;
-
-    async function loadCurrentUser() {
-      try {
-        const currentAuth =
-          await requestAuthData<AuthMeResponse>("/api/auth/me");
-
-        if (!ignore) {
-          setAuth(currentAuth);
-        }
-      } catch {
-        if (!ignore) {
-          setAuth(null);
-        }
-      }
-    }
-
-    void loadCurrentUser();
-
-    return () => {
-      ignore = true;
-    };
-  }, []);
 
   async function handleLogout() {
     setIsLoggingOut(true);
 
     try {
-      await requestAuthData<{ ok: boolean }>("/api/auth/logout", {
-        method: "POST",
-      });
+      await logout();
     } finally {
-      setAuth(null);
       setIsLoggingOut(false);
       router.replace("/login");
       router.refresh();

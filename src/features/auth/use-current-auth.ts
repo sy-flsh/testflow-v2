@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
+import { AuthContext } from "@/features/auth/auth-provider";
 import {
   getErrorMessage,
   requestAuthData,
@@ -8,32 +9,39 @@ import {
 } from "@/features/auth/auth-types";
 
 export function useCurrentAuth() {
-  const [auth, setAuth] = useState<AuthMeResponse | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState("");
+  const context = useContext(AuthContext);
+  const hasContext = context !== null;
+  const [fallbackAuth, setFallbackAuth] = useState<AuthMeResponse | null>(null);
+  const [fallbackLoading, setFallbackLoading] = useState(true);
+  const [fallbackError, setFallbackError] = useState("");
 
   useEffect(() => {
+    if (hasContext) {
+      setFallbackLoading(false);
+      return;
+    }
+
     let ignore = false;
 
     async function loadAuth() {
-      setIsLoading(true);
-      setError("");
+      setFallbackLoading(true);
+      setFallbackError("");
 
       try {
         const currentAuth =
           await requestAuthData<AuthMeResponse>("/api/auth/me");
 
         if (!ignore) {
-          setAuth(currentAuth);
+          setFallbackAuth(currentAuth);
         }
       } catch (loadError) {
         if (!ignore) {
-          setAuth(null);
-          setError(getErrorMessage(loadError));
+          setFallbackAuth(null);
+          setFallbackError(getErrorMessage(loadError));
         }
       } finally {
         if (!ignore) {
-          setIsLoading(false);
+          setFallbackLoading(false);
         }
       }
     }
@@ -43,14 +51,42 @@ export function useCurrentAuth() {
     return () => {
       ignore = true;
     };
-  }, []);
+  }, [hasContext]);
+
+  if (context) {
+    return context;
+  }
 
   return {
-    auth,
-    permissions: auth?.permissions ?? null,
-    role: auth?.role ?? null,
-    isLoading,
-    error,
+    auth: fallbackAuth,
+    user: fallbackAuth?.user ?? null,
+    workspace: fallbackAuth?.workspace ?? null,
+    permissions: fallbackAuth?.permissions ?? null,
+    role: fallbackAuth?.role ?? null,
+    isLoading: fallbackLoading,
+    error: fallbackError,
+    refetch: async () => {
+      try {
+        const currentAuth =
+          await requestAuthData<AuthMeResponse>("/api/auth/me");
+        setFallbackAuth(currentAuth);
+        setFallbackError("");
+        return currentAuth;
+      } catch (loadError) {
+        setFallbackAuth(null);
+        setFallbackError(getErrorMessage(loadError));
+        return null;
+      }
+    },
+    logout: async () => {
+      try {
+        await requestAuthData<{ ok: boolean }>("/api/auth/logout", {
+          method: "POST",
+        });
+      } finally {
+        setFallbackAuth(null);
+      }
+    },
   };
 }
 
