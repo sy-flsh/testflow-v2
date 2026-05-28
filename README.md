@@ -1,5 +1,40 @@
 # TestFlow v2
 
+## Auth and Permissions
+
+TestFlow v2 uses a custom credentials authentication flow with a DB-backed opaque session cookie.
+
+- Login/signup UI is connected to `/api/auth/login` and `/api/auth/signup`.
+- Session cookie name: `tf_session`
+- Session duration: 14 days
+- Cookie options: `HttpOnly`, `SameSite=Lax`, `Secure` in production only, `Path=/`
+- The raw session token is never stored in DB. Only `tokenHash` is stored in the `Session` table.
+- `/api/auth/me` returns the current user, current workspace, role, permissions, and workspace list.
+- `AuthProvider` centralizes current auth state for app pages and reduces duplicated `/api/auth/me` calls.
+
+Protected app pages are guarded by `middleware.ts`. Unauthenticated users are redirected to `/login?next=<current-path>`. Login uses a safe internal-only `next` redirect and rejects external URLs.
+
+Route-level API guards are applied to:
+
+- Workspace
+- Projects
+- Dashboard
+- Project Report
+- TestCase / TestFolder
+- CSV Import / XLSX Template / AI Draft
+- TestRun / TestRunResult
+- Defect / DefectLink
+
+RBAC policy:
+
+| Role | Read | Create | Update | Delete | Danger Zone |
+| --- | --- | --- | --- | --- | --- |
+| Admin | Yes | Yes | Yes | Yes | Yes |
+| Member | Yes | Yes | Yes | No | No |
+| Viewer | Yes | No | No | No | No |
+
+The UI reflects the same permissions by hiding or disabling restricted actions, but API guards remain the source of enforcement.
+
 ## Local DB Reset
 
 `npm run db:seed`는 기본 seed 데이터를 upsert로 복원합니다. 테스트 중 생성한 비-seed 데이터는 삭제하지 않습니다.
@@ -35,3 +70,40 @@ npm run db:reset:dev
 - `backend@testflow.local` / `password123!`
 - `frontend@testflow.local` / `password123!`
 - `pm@testflow.local` / `password123!`
+
+## Auth Smoke Tests
+
+Run the auth/permission smoke test after resetting the development DB:
+
+```bash
+npm run db:reset:dev
+npm run test:auth
+```
+
+`npm run test:smoke` is an alias for `npm run test:auth`.
+
+The smoke test starts a local Next.js dev server on `127.0.0.1:3210` by default and checks:
+
+- unauthenticated page redirect to `/login?next=...`
+- unauthenticated protected API `401`
+- Admin login and write permissions
+- Member create/update permissions and delete denial
+- Viewer read permission and write denial
+- Dashboard/Report protected API access
+- logout invalidation
+
+To run against an already running server:
+
+```bash
+TESTFLOW_EXTERNAL_SERVER=1 TESTFLOW_BASE_URL=http://localhost:3000 npm run test:auth
+```
+
+## Before Production
+
+The following items are not complete production hardening yet:
+
+- CSRF hardening for state-changing requests
+- Rate limiting for auth and write APIs
+- Session cleanup/rotation policy
+- Playwright UI E2E for permission buttons and browser flows
+- Remaining `npm audit` moderate findings review

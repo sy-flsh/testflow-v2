@@ -23,9 +23,16 @@ v0.1에 포함하는 기능은 아래로 한정한다.
 
 ### 인증
 
-- 로그인 기본 UI
-- 회원가입 기본 UI
-- 실제 운영 수준 인증, 이메일 인증, 비밀번호 재설정은 후속 Phase
+- custom credentials 기반 로그인/회원가입
+- DB-backed opaque session cookie
+- `tf_session` HttpOnly cookie
+- DB에는 session token 원문이 아닌 `tokenHash`만 저장
+- 세션 만료 14일
+- 로그인 성공 후 safe `next` redirect
+- middleware 기반 앱 내부 페이지 보호
+- `/api/auth/me` 기반 current user/current workspace 조회
+- AuthProvider 기반 current auth state 중앙화
+- 실제 운영 수준 이메일 인증, 비밀번호 재설정은 후속 Phase
 
 ### 대시보드
 
@@ -97,11 +104,12 @@ v0.1에 포함하는 기능은 아래로 한정한다.
 
 ### 워크스페이스 설정
 
-- 일반 정보
-- 멤버 목록
+- Workspace DB/API 기반 일반 정보 조회/수정
+- WorkspaceMember DB/API 기반 멤버 목록
 - 역할 및 권한 보기
+- 권한 기반 설정 저장/위험구역 버튼 비활성화
 - 위험구역 UI
-- v0.1에서 멤버/역할 화면은 읽기 또는 mock 수준
+- v0.1에서 멤버 초대와 대기 중인 초대 처리는 mock 또는 read-only 수준
 
 ## 3. v0.1 제외 범위
 
@@ -116,40 +124,53 @@ v0.1에 포함하는 기능은 아래로 한정한다.
 - 보고서 공유 링크
 - QR 코드
 - 멤버 초대 이메일 발송
-- 세밀한 RBAC 권한 집행
+- 세밀한 RBAC 권한 커스터마이징
 - Test Plan을 Test Run보다 상위 엔티티로 분리하는 고도화
 - QA Action / Command Center 전체 재구현
 - 감사 추적 전체 구현
 - Retest Queue
 - Release Readiness
 
-## 4. 사용자 역할
+## 4. 사용자 역할과 권한
 
-v0.1의 역할은 UI 표시와 기본 구분 중심으로 둔다.
+v0.1은 Admin / Member / Viewer 역할을 기준으로 API guard와 주요 UI 버튼 비활성화를 적용한다. UI는 편의 장치이며, 권한 집행의 기준은 route-level API guard다.
 
-| 역할 | 설명 | v0.1 처리 |
-| --- | --- | --- |
-| Admin | 워크스페이스와 프로젝트를 관리하는 사용자 | UI 표시 중심 |
-| Member | 테스트케이스, 실행, 결함을 작성/수정하는 사용자 | UI 표시 중심 |
-| Viewer | 읽기 전용 사용자 | UI 표시 중심 |
+| 역할 | 읽기 | 생성 | 수정 | 삭제 | 위험구역 |
+| --- | --- | --- | --- | --- | --- |
+| Admin | 가능 | 가능 | 가능 | 가능 | 가능 |
+| Member | 가능 | 가능 | 가능 | 불가 | 불가 |
+| Viewer | 가능 | 불가 | 불가 | 불가 | 불가 |
 
-세밀한 권한 집행, 권한별 API 차단, 멤버 초대와 역할 변경의 실제 적용은 후속 Phase에서 구현한다.
+권한 적용 범위:
+
+- Workspace API
+- Projects API
+- Dashboard API
+- Project Report API
+- TestCase / TestFolder API
+- CSV Import / XLSX Template / AI Draft API
+- TestRun / TestRunResult API
+- Defect / DefectLink API
+
+후속 Phase에서는 멤버 초대, 역할 변경, 더 세밀한 permission set, 프로젝트 단위 예외 권한을 다룬다.
 
 ## 5. 핵심 사용자 흐름
 
 1. 사용자가 회원가입 또는 로그인한다.
-2. 대시보드에서 현재 워크스페이스의 품질 현황을 확인한다.
-3. 프로젝트 목록에서 새 프로젝트를 생성한다.
-4. 프로젝트의 테스트케이스 화면으로 이동한다.
-5. 테스트케이스를 직접 생성하거나 CSV Import로 가져온다.
-6. 필요한 경우 Quick Edit 또는 Bulk Edit로 테스트케이스를 정리한다.
-7. 테스트 실행 화면에서 새 Test Run을 생성한다.
-8. 실행 대상 Test Case를 선택한다.
-9. 선택된 Test Case 기준으로 TestRunResult가 pending 상태로 생성된다.
-10. Runner 화면 또는 Drawer에서 TC별 결과를 입력한다.
-11. failed 또는 blocked 결과에서 Defect를 생성한다.
-12. 결함 화면에서 상태, 심각도, 우선순위, 담당자를 관리한다.
-13. 보고서 화면에서 KPI, 차트, Top Failed TC를 확인한다.
+2. 비로그인 사용자가 보호 페이지에 접근하면 `/login?next=...`로 이동한다.
+3. 로그인 성공 후 안전한 내부 `next` 경로 또는 `/dashboard`로 이동한다.
+4. 대시보드에서 현재 워크스페이스의 품질 현황을 확인한다.
+5. 프로젝트 목록에서 새 프로젝트를 생성한다.
+6. 프로젝트의 테스트케이스 화면으로 이동한다.
+7. 테스트케이스를 직접 생성하거나 CSV Import로 가져온다.
+8. 필요한 경우 Quick Edit 또는 Bulk Edit로 테스트케이스를 정리한다.
+9. 테스트 실행 화면에서 새 Test Run을 생성한다.
+10. 실행 대상 Test Case를 선택한다.
+11. 선택된 Test Case 기준으로 TestRunResult가 pending 상태로 생성된다.
+12. Runner 화면 또는 Drawer에서 TC별 결과를 입력한다.
+13. failed 또는 blocked 결과에서 Defect를 생성한다.
+14. 결함 화면에서 상태, 심각도, 우선순위, 담당자를 관리한다.
+15. 보고서 화면에서 KPI, 차트, Top Failed TC를 확인한다.
 
 ## 6. 화면 목록과 라우트
 
@@ -171,6 +192,7 @@ v0.1의 역할은 UI 표시와 기본 구분 중심으로 둔다.
 v0.1 기준 Prisma DB 모델은 다음과 같다.
 
 - User
+- Session
 - Workspace
 - WorkspaceMember
 - Project
@@ -216,6 +238,19 @@ localStorage 사용 후보:
 - 필터/정렬 preference
 
 AI Draft 자체는 `AiTestCaseDraft` DB 모델에 저장한다. CSV Import preview는 v0.1에서 DB 저장 없이 요청/응답 payload로 처리한다.
+
+### 인증/세션 정책
+
+- 인증 방식은 custom credentials + DB-backed opaque session cookie다.
+- 세션 쿠키 이름은 `tf_session`이다.
+- 세션 만료는 14일이다.
+- cookie는 HttpOnly, SameSite=Lax, Path=/로 설정한다.
+- production 환경에서만 Secure cookie를 사용한다.
+- DB `Session`에는 session token 원문을 저장하지 않고 SHA-256 `tokenHash`만 저장한다.
+- 로그아웃 시 현재 Session을 삭제하고 cookie를 만료시킨다.
+- 앱 내부 페이지는 middleware에서 `tf_session` cookie 존재 여부를 기준으로 1차 보호한다.
+- 주요 API는 route-level guard에서 실제 세션, current workspace, project access, permission을 검증한다.
+- 로그인 성공 후 `next` 파라미터는 `/`로 시작하는 내부 상대 경로만 허용한다.
 
 ## 9. Test Case 요구사항
 
@@ -406,8 +441,8 @@ Dashboard 데이터는 `/api/dashboard/summary`, Project Report 데이터는 `/a
 
 ### v0.1 포함
 
-- 워크스페이스 일반 정보 화면
-- 멤버 목록 화면
+- Workspace DB/API 기반 일반 정보 화면
+- WorkspaceMember DB/API 기반 멤버 목록 화면
 - 역할 및 권한 보기 화면
 - 위험구역 UI
 
@@ -447,11 +482,11 @@ v0.1 권장 기술 스택은 다음과 같다.
 - Prisma
 - PostgreSQL
 - papaparse
-- xlsx
+- exceljs
 
-v0.1 구현은 React state와 fetch 기반 클라이언트 상태 관리를 사용한다. TanStack Query, Zustand, React Hook Form, Zod는 후속 구조 개선 시 도입 후보로 둔다.
+v0.1 구현은 React state와 fetch 기반 클라이언트 상태 관리를 사용한다. 인증 상태는 AuthProvider로 중앙화한다. TanStack Query, Zustand, React Hook Form, Zod는 후속 구조 개선 시 도입 후보로 둔다.
 
-XLSX는 서버 API에서 템플릿 다운로드 생성에만 사용한다. v0.1에서 직접 `.xlsx` 업로드는 지원하지 않는다.
+XLSX 템플릿 다운로드는 서버 API에서 exceljs로 생성한다. v0.1에서 직접 `.xlsx` 업로드는 지원하지 않는다.
 
 ## 15. 구현 마일스톤
 
@@ -473,7 +508,13 @@ v0.1은 아래 조건을 만족해야 완료로 본다.
 
 - `npm run build` 통과
 - `npm run lint` 통과
+- `npm run test:auth` 또는 `npm run test:smoke` 통과
 - 주요 happy path 브라우저 검증 완료
+- 로그인/회원가입 API와 UI가 동작함
+- 보호 페이지 비로그인 접근 시 `/login?next=...`로 이동함
+- 로그인 성공 후 safe next redirect가 동작함
+- Admin / Member / Viewer 권한에 따라 API guard가 동작함
+- 주요 UI 위험 액션 버튼이 권한에 맞게 숨김 또는 비활성화됨
 - Test Case 생성/수정/삭제가 DB에 저장됨
 - CSV Import 결과가 DB에 저장됨
 - XLSX 템플릿 다운로드가 동작함
@@ -486,7 +527,39 @@ v0.1은 아래 조건을 만족해야 완료로 본다.
 - API 쓰기 실패를 성공처럼 표시하지 않음
 - localStorage backup 표시 시 사용자가 알 수 있음
 
-## 17. 리스크
+## 17. 인증/권한 Smoke Test
+
+v0.1은 Node 기반 auth permission smoke test를 제공한다. 이 테스트는 Playwright 같은 브라우저 E2E를 대체하지 않고, 인증/권한 API 회귀를 빠르게 잡기 위한 최소 통합 테스트다.
+
+실행:
+
+```bash
+npm run db:reset:dev
+npm run test:auth
+```
+
+`npm run test:smoke`는 `npm run test:auth`의 alias다.
+
+검증 범위:
+
+- 비로그인 보호 페이지 접근 시 `/login?next=...` redirect
+- 비로그인 보호 API 401
+- Admin 로그인과 쓰기 권한
+- Member 생성/수정 권한 및 삭제 거부
+- Viewer 조회 권한 및 쓰기 거부
+- Dashboard / Report 보호 API 접근
+- logout 후 세션 무효화
+
+개발 seed 계정:
+
+| 역할 | 이메일 | 비밀번호 |
+| --- | --- | --- |
+| Admin | `qa.lead@testflow.local` | `password123!` |
+| Member | `backend@testflow.local` | `password123!` |
+| Member | `frontend@testflow.local` | `password123!` |
+| Viewer | `pm@testflow.local` | `password123!` |
+
+## 18. 리스크
 
 | 리스크 | 설명 | 대응 |
 | --- | --- | --- |
@@ -497,9 +570,14 @@ v0.1은 아래 조건을 만족해야 완료로 본다.
 | AI API 불안정 | API key 누락, 모델 응답 실패, JSON 파싱 실패 가능 | rule-based fallback으로 초안 생성 |
 | Defect와 Result 연결 누락 | 결함 추적 맥락이 끊길 수 있음 | Result 기반 Defect 생성 시 testCaseId/testRunResultId 연결 유지 |
 | Report 데이터 부족 | 초기에는 차트가 mock처럼 보일 수 있음 | seed/empty state를 구분하고 실제 DB 집계를 우선 |
-| 권한 UI와 실제 권한 차이 | v0.1은 역할 표시 중심 | 세밀한 RBAC는 후속 Phase로 명시 |
+| 권한 UI와 실제 권한 차이 | UI 비활성화와 API guard가 어긋날 수 있음 | API guard를 기준으로 두고 smoke test로 회귀 확인 |
+| CSRF | SameSite=Lax만으로 모든 상태 변경 요청을 방어한다고 볼 수 없음 | 운영 전 CSRF hardening 검토 |
+| 인증 rate limit | 로그인/회원가입 brute force 방어가 아직 없음 | 운영 전 rate limit 적용 |
+| 세션 정리 정책 | 만료 세션 정리/rotation 정책이 최소 수준 | 운영 전 cleanup job과 rotation 검토 |
+| UI E2E 공백 | Node smoke test는 API/RBAC 중심이며 실제 브라우저 버튼 상태는 제한적으로만 보장 | Playwright UI E2E를 후속으로 추가 |
+| audit moderate | high 취약점은 제거했지만 moderate 항목은 운영 전 별도 검토 필요 | 배포 전 `npm audit` 기준 재검토 |
 
-## 18. 후속 Phase
+## 19. 후속 Phase
 
 v0.1 이후 후보 기능은 다음과 같다.
 
@@ -509,7 +587,12 @@ v0.1 이후 후보 기능은 다음과 같다.
 - QR 코드
 - 첨부파일 실제 저장
 - 멤버 초대 이메일
-- RBAC 강화
+- 세밀한 RBAC 권한 커스터마이징
+- CSRF hardening
+- Auth/API rate limit
+- 만료 세션 정리와 세션 rotation
+- Playwright UI E2E
+- audit moderate 항목 운영 전 검토
 - Jira / GitHub / Slack 연동
 - 실시간 협업
 - 댓글 / 멘션 / 알림
@@ -520,7 +603,7 @@ v0.1 이후 후보 기능은 다음과 같다.
 - AI 릴리즈 리스크 요약
 - AI 생성 이력 및 사용량 제한
 
-## 19. PRD 운영 규칙
+## 20. PRD 운영 규칙
 
 - 구현 전에 이 문서의 범위를 먼저 확인한다.
 - v0.1 포함/제외 범위가 바뀌면 코드 변경 전에 PRD를 갱신한다.
