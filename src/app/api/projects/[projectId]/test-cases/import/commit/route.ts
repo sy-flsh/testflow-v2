@@ -7,6 +7,7 @@ import {
 } from "@/lib/auth/guards";
 import { prisma } from "@/lib/db/prisma";
 import { enforceCsrfProtection } from "@/lib/security/csrf";
+import { checkRateLimit, rateLimitErrorResponse } from "@/lib/security/rate-limit";
 import {
   getDbPriority,
   getDbStatus,
@@ -19,6 +20,9 @@ import {
 } from "@/lib/testcases/testcase-api";
 
 export const runtime = "nodejs";
+
+const CSV_IMPORT_WINDOW_MS = 60 * 60 * 1000;
+const CSV_IMPORT_USER_LIMIT = 30;
 
 type RouteContext = {
   params: Promise<{ projectId: string }>;
@@ -33,7 +37,17 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     const { projectId } = await context.params;
-    const { project } = await requireProjectAccess(projectId, "create");
+    const { project, user } = await requireProjectAccess(projectId, "create");
+    const rateLimit = await checkRateLimit({
+      scope: "testcases:csv-import:user",
+      key: user.id,
+      limit: CSV_IMPORT_USER_LIMIT,
+      windowMs: CSV_IMPORT_WINDOW_MS,
+    });
+
+    if (!rateLimit.allowed) {
+      return rateLimitErrorResponse(rateLimit);
+    }
 
     const folders = await prisma.testFolder.findMany({
       where: { projectId: project.id, deletedAt: null },

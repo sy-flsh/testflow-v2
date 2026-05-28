@@ -191,7 +191,12 @@ async function startServer() {
     ["run", "dev", "--", "--hostname", "127.0.0.1", "-p", PORT],
     {
       cwd: process.cwd(),
-      env: { ...process.env, PORT },
+      env: {
+        ...process.env,
+        PORT,
+        OPENAI_API_KEY:
+          process.env.TESTFLOW_SMOKE_USE_OPENAI === "1" ? process.env.OPENAI_API_KEY : "",
+      },
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
@@ -443,6 +448,91 @@ async function main() {
       });
 
       assert(result.json?.error?.code === "CSRF_FORBIDDEN", "Expected CSRF_FORBIDDEN");
+    });
+
+    await check("admin can create AI draft within rate limit", async () => {
+      const result = await request("/api/projects/demo-project/test-cases/ai-drafts", {
+        method: "POST",
+        jar: adminJar,
+        body: {
+          featureName: "Auth smoke AI draft",
+          requirementText: "사용자는 결제 내역을 검색하고 상세 내역을 확인할 수 있다.",
+          scenarioCount: 1,
+          testType: "normal",
+        },
+        expectedStatus: 201,
+      });
+
+      assert(result.json?.data?.draft?.id, "AI draft create did not return draft id");
+    });
+
+    await check("AI draft user rate limit returns 429", async () => {
+      for (let index = 0; index < 19; index += 1) {
+        await request("/api/projects/demo-project/test-cases/ai-drafts", {
+          method: "POST",
+          jar: adminJar,
+          body: { featureName: `Rate limit ${index}` },
+          expectedStatus: 400,
+        });
+      }
+
+      const limited = await request("/api/projects/demo-project/test-cases/ai-drafts", {
+        method: "POST",
+        jar: adminJar,
+        body: { featureName: "Rate limited" },
+        expectedStatus: 429,
+      });
+
+      assert(limited.json?.error?.code === "RATE_LIMITED", "Expected RATE_LIMITED");
+    });
+
+    await check("admin can preview and commit CSV import within rate limit", async () => {
+      const preview = await request("/api/projects/demo-project/test-cases/import/preview", {
+        method: "POST",
+        jar: adminJar,
+        headers: { "Content-Type": "text/csv" },
+        body:
+          "folder,title,description,priority,status,tags,step1_action,step1_expected\n" +
+          `payment-checkout,Auth smoke imported TC ${RUN_ID},CSV import smoke,medium,ready,auth-smoke,Run checkout,Checkout succeeds\n`,
+        expectedStatus: 200,
+      });
+
+      assert(preview.json?.data?.validRows === 1, "CSV preview did not produce one valid row");
+
+      const commit = await request("/api/projects/demo-project/test-cases/import/commit", {
+        method: "POST",
+        jar: adminJar,
+        body: { rows: preview.json.data.rows },
+        expectedStatus: 200,
+      });
+      const importedTestCaseIds = commit.json?.data?.testCases
+        ?.map((item) => item.id)
+        .filter(Boolean);
+
+      assert(importedTestCaseIds?.length === 1, "CSV commit did not create one test case");
+      cleanup.testCases.push(...importedTestCaseIds);
+    });
+
+    await check("CSV import user rate limit returns 429", async () => {
+      for (let index = 0; index < 28; index += 1) {
+        await request("/api/projects/demo-project/test-cases/import/preview", {
+          method: "POST",
+          jar: adminJar,
+          headers: { "Content-Type": "text/csv" },
+          body: "",
+          expectedStatus: 400,
+        });
+      }
+
+      const limited = await request("/api/projects/demo-project/test-cases/import/preview", {
+        method: "POST",
+        jar: adminJar,
+        headers: { "Content-Type": "text/csv" },
+        body: "",
+        expectedStatus: 429,
+      });
+
+      assert(limited.json?.error?.code === "RATE_LIMITED", "Expected RATE_LIMITED");
     });
 
     const adminProject = await request("/api/projects", {

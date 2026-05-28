@@ -33,6 +33,8 @@ Auth rate limit policy:
 - Login IP attempts: 10 attempts / 10 minutes
 - Login email failures: 5 failed credentials / 10 minutes
 - Signup IP attempts: 5 attempts / 10 minutes
+- AI Draft generation: 20 attempts / 1 hour per user
+- CSV Import preview/commit: 30 attempts / 1 hour per user
 - Exceeded buckets return `429 RATE_LIMITED`
 - Successful login resets the matching email failure bucket
 
@@ -130,7 +132,7 @@ The command is safe to run in production because it does not delete active sessi
 The following items are not complete production hardening yet:
 
 - CSRF token hardening beyond the current Origin/Referer guard
-- Rate limiting for AI/CSV and write APIs beyond current auth login/signup limits
+- Rate limiting for general write APIs beyond current auth, AI Draft, and CSV Import limits
 - Scheduled auth cleanup job and session rotation policy
 - Playwright UI E2E for permission buttons and browser flows
 - Remaining `npm audit` moderate findings review

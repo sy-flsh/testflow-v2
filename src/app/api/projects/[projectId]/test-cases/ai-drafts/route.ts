@@ -7,10 +7,14 @@ import {
 } from "@/lib/auth/guards";
 import { prisma } from "@/lib/db/prisma";
 import { enforceCsrfProtection } from "@/lib/security/csrf";
+import { checkRateLimit, rateLimitErrorResponse } from "@/lib/security/rate-limit";
 import { generateAiDraftItems, mapAiDraftToDto, sanitizeInput } from "@/lib/testcases/ai-drafts";
 import { findFolderByIdOrSlug } from "@/lib/testcases/testcase-api";
 
 export const runtime = "nodejs";
+
+const AI_DRAFT_WINDOW_MS = 60 * 60 * 1000;
+const AI_DRAFT_USER_LIMIT = 20;
 
 type RouteContext = {
   params: Promise<{ projectId: string }>;
@@ -25,7 +29,17 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     const { projectId } = await context.params;
-    const { project } = await requireProjectAccess(projectId, "create");
+    const { project, user } = await requireProjectAccess(projectId, "create");
+    const rateLimit = await checkRateLimit({
+      scope: "testcases:ai-draft:user",
+      key: user.id,
+      limit: AI_DRAFT_USER_LIMIT,
+      windowMs: AI_DRAFT_WINDOW_MS,
+    });
+
+    if (!rateLimit.allowed) {
+      return rateLimitErrorResponse(rateLimit);
+    }
 
     const body = await readJsonBody(request);
     const requirementText = readTrimmedString(body.requirementText);
