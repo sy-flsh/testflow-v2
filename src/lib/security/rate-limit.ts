@@ -63,16 +63,12 @@ export async function checkRateLimit(input: RateLimitInput): Promise<RateLimitRe
 }
 
 export async function resetRateLimit(input: Pick<RateLimitInput, "scope" | "key">) {
-  await prisma.rateLimitBucket
-    .delete({
-      where: {
-        scope_key: {
-          scope: normalizeBucketPart(input.scope),
-          key: normalizeBucketPart(input.key),
-        },
-      },
-    })
-    .catch(() => undefined);
+  await prisma.rateLimitBucket.deleteMany({
+    where: {
+      scope: normalizeBucketPart(input.scope),
+      key: normalizeBucketPart(input.key),
+    },
+  });
 }
 
 export function rateLimitErrorResponse(result: RateLimitResult) {
