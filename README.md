@@ -109,12 +109,28 @@ To run against an already running server:
 TESTFLOW_EXTERNAL_SERVER=1 TESTFLOW_BASE_URL=http://localhost:3000 npm run test:auth
 ```
 
+## Auth Cleanup
+
+Expired auth records can be cleaned without resetting the database:
+
+```bash
+npm run auth:cleanup -- --dry-run
+npm run auth:cleanup
+```
+
+Cleanup scope is intentionally narrow:
+
+- `Session` rows where `expiresAt < now`
+- `RateLimitBucket` rows where `expiresAt < now`
+
+The command is safe to run in production because it does not delete active sessions or active rate limit buckets. In production, run it from a scheduled job or cron after confirming `DATABASE_URL` points to the intended database.
+
 ## Before Production
 
 The following items are not complete production hardening yet:
 
 - CSRF token hardening beyond the current Origin/Referer guard
 - Rate limiting for AI/CSV and write APIs beyond current auth login/signup limits
-- Session cleanup/rotation policy
+- Scheduled auth cleanup job and session rotation policy
 - Playwright UI E2E for permission buttons and browser flows
 - Remaining `npm audit` moderate findings review
