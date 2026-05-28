@@ -1,10 +1,17 @@
 import { apiError, apiSuccess } from "@/lib/api/response";
 import { deleteCurrentSession } from "@/lib/auth/session";
+import { enforceCsrfProtection } from "@/lib/security/csrf";
 
 export const runtime = "nodejs";
 
-export async function POST() {
+export async function POST(request: Request) {
   try {
+    const csrfError = enforceCsrfProtection(request);
+
+    if (csrfError) {
+      return csrfError;
+    }
+
     await deleteCurrentSession();
 
     return apiSuccess({ ok: true });

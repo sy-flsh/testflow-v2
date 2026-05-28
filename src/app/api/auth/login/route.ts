@@ -4,11 +4,18 @@ import { mapAuthPayload, resolveActiveMembership } from "@/lib/auth/me";
 import { verifyPassword } from "@/lib/auth/password";
 import { createSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db/prisma";
+import { enforceCsrfProtection } from "@/lib/security/csrf";
 
 export const runtime = "nodejs";
 
 export async function POST(request: Request) {
   try {
+    const csrfError = enforceCsrfProtection(request);
+
+    if (csrfError) {
+      return csrfError;
+    }
+
     const body = await readJsonBody(request);
     const email = normalizeEmail(body.email);
     const password = readTrimmedString(body.password);

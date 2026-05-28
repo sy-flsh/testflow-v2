@@ -4,12 +4,19 @@ import { prisma } from "@/lib/db/prisma";
 import { mapAuthPayload } from "@/lib/auth/me";
 import { createSession } from "@/lib/auth/session";
 import { hashPassword, validatePassword } from "@/lib/auth/password";
+import { enforceCsrfProtection } from "@/lib/security/csrf";
 import { toWorkspaceSlug } from "@/lib/workspaces/workspace-api";
 
 export const runtime = "nodejs";
 
 export async function POST(request: Request) {
   try {
+    const csrfError = enforceCsrfProtection(request);
+
+    if (csrfError) {
+      return csrfError;
+    }
+
     const body = await readJsonBody(request);
     const name = readTrimmedString(body.name);
     const email = normalizeEmail(body.email);

@@ -6,6 +6,7 @@ import {
   requireProjectAccess,
 } from "@/lib/auth/guards";
 import { prisma } from "@/lib/db/prisma";
+import { enforceCsrfProtection } from "@/lib/security/csrf";
 import {
   findRunByIdOrSlug,
   mapRunToDto,
@@ -45,6 +46,12 @@ export async function GET(_request: Request, context: RouteContext) {
 
 export async function PATCH(request: Request, context: RouteContext) {
   try {
+    const csrfError = enforceCsrfProtection(request);
+
+    if (csrfError) {
+      return csrfError;
+    }
+
     const { projectId, runId } = await context.params;
     const { project } = await requireProjectAccess(projectId, "update");
 
@@ -126,8 +133,14 @@ export async function PATCH(request: Request, context: RouteContext) {
   }
 }
 
-export async function DELETE(_request: Request, context: RouteContext) {
+export async function DELETE(request: Request, context: RouteContext) {
   try {
+    const csrfError = enforceCsrfProtection(request);
+
+    if (csrfError) {
+      return csrfError;
+    }
+
     const { projectId, runId } = await context.params;
     const { project } = await requireProjectAccess(projectId, "delete");
 

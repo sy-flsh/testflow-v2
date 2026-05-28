@@ -12,6 +12,7 @@ import {
   parseProjectStatus,
   toDbProjectStatus,
 } from "@/lib/projects/project-api";
+import { enforceCsrfProtection } from "@/lib/security/csrf";
 
 export const runtime = "nodejs";
 
@@ -38,6 +39,12 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
+    const csrfError = enforceCsrfProtection(request);
+
+    if (csrfError) {
+      return csrfError;
+    }
+
     const auth = await requireCurrentWorkspace();
     requirePermission(auth, "create");
 

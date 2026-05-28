@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 
 const PORT = process.env.TESTFLOW_TEST_PORT || "3210";
 const BASE_URL = process.env.TESTFLOW_BASE_URL || `http://127.0.0.1:${PORT}`;
+const BASE_ORIGIN = new URL(BASE_URL).origin;
 const EXTERNAL_SERVER = process.env.TESTFLOW_EXTERNAL_SERVER === "1";
 const PASSWORD = "password123!";
 const RUN_ID = `${Date.now()}`;
@@ -75,11 +76,20 @@ async function request(path, options = {}) {
   } = options;
   const requestHeaders = { ...headers };
   const cookieHeader = jar?.header();
+  const methodName = method.toUpperCase();
   const init = {
-    method,
+    method: methodName,
     headers: requestHeaders,
     redirect,
   };
+
+  if (
+    isUnsafeMethod(methodName) &&
+    !hasHeader(requestHeaders, "origin") &&
+    !hasHeader(requestHeaders, "referer")
+  ) {
+    requestHeaders.Origin = BASE_ORIGIN;
+  }
 
   if (cookieHeader) {
     requestHeaders.Cookie = cookieHeader;
@@ -125,6 +135,14 @@ function parseJson(text) {
   } catch {
     return null;
   }
+}
+
+function isUnsafeMethod(method) {
+  return method === "POST" || method === "PUT" || method === "PATCH" || method === "DELETE";
+}
+
+function hasHeader(headers, name) {
+  return Object.keys(headers).some((key) => key.toLowerCase() === name);
 }
 
 function assert(condition, message) {
@@ -280,8 +298,34 @@ async function main() {
       await expectStatus(`unauthenticated ${path} returns 401`, path, 401);
     }
 
+    await check("cross-origin login is rejected by CSRF guard", async () => {
+      const result = await request("/api/auth/login", {
+        method: "POST",
+        headers: { Origin: "https://evil.example" },
+        body: { email: accounts.admin, password: PASSWORD },
+        expectedStatus: 403,
+      });
+
+      assert(result.json?.error?.code === "CSRF_FORBIDDEN", "Expected CSRF_FORBIDDEN");
+    });
+
     await check("admin login succeeds", async () => {
       adminJar = await login(accounts.admin, "Admin");
+    });
+
+    await check("cross-origin logout is rejected by CSRF guard", async () => {
+      const result = await request("/api/auth/logout", {
+        method: "POST",
+        jar: adminJar,
+        headers: { Origin: "https://evil.example" },
+        expectedStatus: 403,
+      });
+
+      assert(result.json?.error?.code === "CSRF_FORBIDDEN", "Expected CSRF_FORBIDDEN");
+      await request("/api/auth/me", {
+        jar: adminJar,
+        expectedStatus: 200,
+      });
     });
 
     const memberJar = await login(accounts.member, "Member");
@@ -291,6 +335,18 @@ async function main() {
 
     await expectStatus("admin /api/auth/me returns 200", "/api/auth/me", 200, {
       jar: adminJar,
+    });
+
+    await check("cross-origin project write is rejected by CSRF guard", async () => {
+      const result = await request("/api/projects", {
+        method: "POST",
+        jar: adminJar,
+        headers: { Origin: "https://evil.example" },
+        body: { name: `Blocked CSRF Project ${RUN_ID}` },
+        expectedStatus: 403,
+      });
+
+      assert(result.json?.error?.code === "CSRF_FORBIDDEN", "Expected CSRF_FORBIDDEN");
     });
 
     const adminProject = await request("/api/projects", {

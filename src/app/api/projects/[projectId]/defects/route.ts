@@ -11,6 +11,7 @@ import {
   requireProjectAccess,
 } from "@/lib/auth/guards";
 import { prisma } from "@/lib/db/prisma";
+import { enforceCsrfProtection } from "@/lib/security/csrf";
 import {
   createNextDefectCode,
   defectInclude,
@@ -60,6 +61,12 @@ export async function GET(_request: Request, context: RouteContext) {
 
 export async function POST(request: Request, context: RouteContext) {
   try {
+    const csrfError = enforceCsrfProtection(request);
+
+    if (csrfError) {
+      return csrfError;
+    }
+
     const { projectId } = await context.params;
     const { project } = await requireProjectAccess(projectId, "create");
 

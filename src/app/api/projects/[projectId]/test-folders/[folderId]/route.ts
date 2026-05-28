@@ -14,6 +14,7 @@ import {
   findFolderByIdOrSlug,
   mapFoldersToDto,
 } from "@/lib/testcases/testcase-api";
+import { enforceCsrfProtection } from "@/lib/security/csrf";
 
 export const runtime = "nodejs";
 
@@ -23,6 +24,12 @@ type RouteContext = {
 
 export async function PATCH(request: Request, context: RouteContext) {
   try {
+    const csrfError = enforceCsrfProtection(request);
+
+    if (csrfError) {
+      return csrfError;
+    }
+
     const { projectId, folderId } = await context.params;
     const { project } = await requireProjectAccess(projectId, "update");
 
@@ -84,8 +91,14 @@ export async function PATCH(request: Request, context: RouteContext) {
   }
 }
 
-export async function DELETE(_request: Request, context: RouteContext) {
+export async function DELETE(request: Request, context: RouteContext) {
   try {
+    const csrfError = enforceCsrfProtection(request);
+
+    if (csrfError) {
+      return csrfError;
+    }
+
     const { projectId, folderId } = await context.params;
     const { project } = await requireProjectAccess(projectId, "delete");
 

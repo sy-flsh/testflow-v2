@@ -25,6 +25,8 @@ Route-level API guards are applied to:
 - TestRun / TestRunResult
 - Defect / DefectLink
 
+Unsafe API methods (`POST`, `PUT`, `PATCH`, `DELETE`) also enforce a same-origin CSRF guard using the `Origin` header first and `Referer` as fallback.
+
 RBAC policy:
 
 | Role | Read | Create | Update | Delete | Danger Zone |
@@ -102,7 +104,7 @@ TESTFLOW_EXTERNAL_SERVER=1 TESTFLOW_BASE_URL=http://localhost:3000 npm run test:
 
 The following items are not complete production hardening yet:
 
-- CSRF hardening for state-changing requests
+- CSRF token hardening beyond the current Origin/Referer guard
 - Rate limiting for auth and write APIs
 - Session cleanup/rotation policy
 - Playwright UI E2E for permission buttons and browser flows

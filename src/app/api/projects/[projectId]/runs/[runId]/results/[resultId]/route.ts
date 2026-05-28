@@ -6,6 +6,7 @@ import {
   requireProjectAccess,
 } from "@/lib/auth/guards";
 import { prisma } from "@/lib/db/prisma";
+import { enforceCsrfProtection } from "@/lib/security/csrf";
 import {
   findRunByIdOrSlug,
   findRunResultByIdOrCode,
@@ -22,6 +23,12 @@ type RouteContext = {
 
 export async function PATCH(request: Request, context: RouteContext) {
   try {
+    const csrfError = enforceCsrfProtection(request);
+
+    if (csrfError) {
+      return csrfError;
+    }
+
     const { projectId, runId, resultId } = await context.params;
     const { project } = await requireProjectAccess(projectId, "update");
 

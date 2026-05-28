@@ -14,6 +14,7 @@ import {
   toDbProjectStatus,
   toProjectSlug,
 } from "@/lib/projects/project-api";
+import { enforceCsrfProtection } from "@/lib/security/csrf";
 
 export const runtime = "nodejs";
 
@@ -48,6 +49,12 @@ export async function GET(_request: Request, context: ProjectRouteContext) {
 
 export async function PATCH(request: Request, context: ProjectRouteContext) {
   try {
+    const csrfError = enforceCsrfProtection(request);
+
+    if (csrfError) {
+      return csrfError;
+    }
+
     const { projectId } = await context.params;
     const auth = await requireCurrentWorkspace();
     const project = await findProjectByIdOrSlug(auth.workspace.id, projectId);
@@ -128,8 +135,14 @@ export async function PATCH(request: Request, context: ProjectRouteContext) {
   }
 }
 
-export async function DELETE(_request: Request, context: ProjectRouteContext) {
+export async function DELETE(request: Request, context: ProjectRouteContext) {
   try {
+    const csrfError = enforceCsrfProtection(request);
+
+    if (csrfError) {
+      return csrfError;
+    }
+
     const { projectId } = await context.params;
     const auth = await requireCurrentWorkspace();
     const project = await findProjectByIdOrSlug(auth.workspace.id, projectId);

@@ -15,6 +15,7 @@ import {
   findFolderByIdOrSlug,
   mapFoldersToDto,
 } from "@/lib/testcases/testcase-api";
+import { enforceCsrfProtection } from "@/lib/security/csrf";
 
 export const runtime = "nodejs";
 
@@ -48,6 +49,12 @@ export async function GET(_request: Request, context: RouteContext) {
 
 export async function POST(request: Request, context: RouteContext) {
   try {
+    const csrfError = enforceCsrfProtection(request);
+
+    if (csrfError) {
+      return csrfError;
+    }
+
     const { projectId } = await context.params;
     const { project } = await requireProjectAccess(projectId, "create");
 

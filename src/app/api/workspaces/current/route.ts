@@ -11,6 +11,7 @@ import {
   mapWorkspaceToDto,
   toWorkspaceSlug,
 } from "@/lib/workspaces/workspace-api";
+import { enforceCsrfProtection } from "@/lib/security/csrf";
 
 export const runtime = "nodejs";
 
@@ -32,6 +33,12 @@ export async function GET() {
 
 export async function PATCH(request: Request) {
   try {
+    const csrfError = enforceCsrfProtection(request);
+
+    if (csrfError) {
+      return csrfError;
+    }
+
     const auth = await requireCurrentWorkspace();
     requirePermission(auth, "update");
 
