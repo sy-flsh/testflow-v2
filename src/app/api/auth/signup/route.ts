@@ -5,9 +5,17 @@ import { mapAuthPayload } from "@/lib/auth/me";
 import { createSession } from "@/lib/auth/session";
 import { hashPassword, validatePassword } from "@/lib/auth/password";
 import { enforceCsrfProtection } from "@/lib/security/csrf";
+import {
+  checkRateLimit,
+  getClientIp,
+  rateLimitErrorResponse,
+} from "@/lib/security/rate-limit";
 import { toWorkspaceSlug } from "@/lib/workspaces/workspace-api";
 
 export const runtime = "nodejs";
+
+const SIGNUP_WINDOW_MS = 10 * 60 * 1000;
+const SIGNUP_IP_LIMIT = 5;
 
 export async function POST(request: Request) {
   try {
@@ -15,6 +23,17 @@ export async function POST(request: Request) {
 
     if (csrfError) {
       return csrfError;
+    }
+
+    const ipLimit = await checkRateLimit({
+      scope: "auth:signup:ip",
+      key: getClientIp(request),
+      limit: SIGNUP_IP_LIMIT,
+      windowMs: SIGNUP_WINDOW_MS,
+    });
+
+    if (!ipLimit.allowed) {
+      return rateLimitErrorResponse(ipLimit);
     }
 
     const body = await readJsonBody(request);

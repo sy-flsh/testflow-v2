@@ -120,6 +120,20 @@ model Session {
   @@map("sessions")
 }
 
+model RateLimitBucket {
+  id          String   @id @default(cuid())
+  scope       String
+  key         String
+  count       Int      @default(0)
+  windowStart DateTime
+  expiresAt   DateTime
+  updatedAt   DateTime @updatedAt
+
+  @@unique([scope, key])
+  @@index([expiresAt])
+  @@map("rate_limit_buckets")
+}
+
 model WorkspaceMember {
   id          String       @id @default(cuid())
   workspaceId String

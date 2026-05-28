@@ -11,6 +11,7 @@ TestFlow v2 uses a custom credentials authentication flow with a DB-backed opaqu
 - The raw session token is never stored in DB. Only `tokenHash` is stored in the `Session` table.
 - `/api/auth/me` returns the current user, current workspace, role, permissions, and workspace list.
 - `AuthProvider` centralizes current auth state for app pages and reduces duplicated `/api/auth/me` calls.
+- Login/signup APIs use DB-backed `RateLimitBucket` records for first-stage brute force and signup abuse protection.
 
 Protected app pages are guarded by `middleware.ts`. Unauthenticated users are redirected to `/login?next=<current-path>`. Login uses a safe internal-only `next` redirect and rejects external URLs.
 
@@ -26,6 +27,14 @@ Route-level API guards are applied to:
 - Defect / DefectLink
 
 Unsafe API methods (`POST`, `PUT`, `PATCH`, `DELETE`) also enforce a same-origin CSRF guard using the `Origin` header first and `Referer` as fallback.
+
+Auth rate limit policy:
+
+- Login IP attempts: 10 attempts / 10 minutes
+- Login email failures: 5 failed credentials / 10 minutes
+- Signup IP attempts: 5 attempts / 10 minutes
+- Exceeded buckets return `429 RATE_LIMITED`
+- Successful login resets the matching email failure bucket
 
 RBAC policy:
 
@@ -50,7 +59,7 @@ npm run db:reset:dev
 이 명령은 다음 데이터를 모두 삭제한 뒤 `prisma/seed.ts`를 다시 실행합니다.
 
 - Workspace, User, WorkspaceMember, Project
-- Session
+- Session, RateLimitBucket
 - TestFolder, TestCase, TestStep
 - TestRun, TestRunResult
 - Defect, DefectLink
@@ -105,7 +114,7 @@ TESTFLOW_EXTERNAL_SERVER=1 TESTFLOW_BASE_URL=http://localhost:3000 npm run test:
 The following items are not complete production hardening yet:
 
 - CSRF token hardening beyond the current Origin/Referer guard
-- Rate limiting for auth and write APIs
+- Rate limiting for AI/CSV and write APIs beyond current auth login/signup limits
 - Session cleanup/rotation policy
 - Playwright UI E2E for permission buttons and browser flows
 - Remaining `npm audit` moderate findings review

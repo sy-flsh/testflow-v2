@@ -31,6 +31,7 @@ v0.1에 포함하는 기능은 아래로 한정한다.
 - 로그인 성공 후 safe `next` redirect
 - middleware 기반 앱 내부 페이지 보호
 - unsafe API Origin/Referer 기반 CSRF guard
+- login/signup DB 기반 rate limit
 - `/api/auth/me` 기반 current user/current workspace 조회
 - AuthProvider 기반 current auth state 중앙화
 - 실제 운영 수준 이메일 인증, 비밀번호 재설정은 후속 Phase
@@ -194,6 +195,7 @@ v0.1 기준 Prisma DB 모델은 다음과 같다.
 
 - User
 - Session
+- RateLimitBucket
 - Workspace
 - WorkspaceMember
 - Project
@@ -253,6 +255,10 @@ AI Draft 자체는 `AiTestCaseDraft` DB 모델에 저장한다. CSV Import previ
 - 주요 API는 route-level guard에서 실제 세션, current workspace, project access, permission을 검증한다.
 - 로그인 성공 후 `next` 파라미터는 `/`로 시작하는 내부 상대 경로만 허용한다.
 - `POST`, `PUT`, `PATCH`, `DELETE` API는 Origin 우선, Referer fallback 방식의 same-origin CSRF guard를 통과해야 한다.
+- 로그인 API는 IP 기준 10회/10분, email 실패 기준 5회/10분 rate limit을 적용한다.
+- 회원가입 API는 IP 기준 5회/10분 rate limit을 적용한다.
+- rate limit 초과 시 `429 RATE_LIMITED`를 반환한다.
+- 로그인 성공 시 해당 email failure bucket은 reset한다.
 
 ## 9. Test Case 요구사항
 
@@ -574,7 +580,7 @@ npm run test:auth
 | Report 데이터 부족 | 초기에는 차트가 mock처럼 보일 수 있음 | seed/empty state를 구분하고 실제 DB 집계를 우선 |
 | 권한 UI와 실제 권한 차이 | UI 비활성화와 API guard가 어긋날 수 있음 | API guard를 기준으로 두고 smoke test로 회귀 확인 |
 | CSRF | Origin/Referer guard는 적용했지만 토큰 기반 방어는 아직 없음 | 필요 시 double-submit token 등 추가 hardening 검토 |
-| 인증 rate limit | 로그인/회원가입 brute force 방어가 아직 없음 | 운영 전 rate limit 적용 |
+| 인증 rate limit 범위 | 로그인/회원가입은 보호하지만 AI/CSV/write API rate limit은 아직 없음 | 비용/부하가 큰 API부터 후속 적용 |
 | 세션 정리 정책 | 만료 세션 정리/rotation 정책이 최소 수준 | 운영 전 cleanup job과 rotation 검토 |
 | UI E2E 공백 | Node smoke test는 API/RBAC 중심이며 실제 브라우저 버튼 상태는 제한적으로만 보장 | Playwright UI E2E를 후속으로 추가 |
 | audit moderate | high 취약점은 제거했지만 moderate 항목은 운영 전 별도 검토 필요 | 배포 전 `npm audit` 기준 재검토 |
@@ -591,7 +597,7 @@ v0.1 이후 후보 기능은 다음과 같다.
 - 멤버 초대 이메일
 - 세밀한 RBAC 권한 커스터마이징
 - CSRF token hardening
-- Auth/API rate limit
+- AI/CSV/write API rate limit
 - 만료 세션 정리와 세션 rotation
 - Playwright UI E2E
 - audit moderate 항목 운영 전 검토

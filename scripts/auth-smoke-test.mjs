@@ -156,12 +156,13 @@ async function check(label, fn) {
   console.log(`PASS ${label}`);
 }
 
-async function login(email, expectedRole) {
+async function login(email, expectedRole, options = {}) {
   const jar = new CookieJar();
   const result = await request("/api/auth/login", {
     method: "POST",
     body: { email, password: PASSWORD },
     jar,
+    headers: options.headers,
     expectedStatus: 200,
   });
 
@@ -307,6 +308,101 @@ async function main() {
       });
 
       assert(result.json?.error?.code === "CSRF_FORBIDDEN", "Expected CSRF_FORBIDDEN");
+    });
+
+    await check("login email failure rate limit returns 429 and resets on success", async () => {
+      const headers = { "X-Forwarded-For": `203.0.113.10` };
+
+      for (let index = 0; index < 5; index += 1) {
+        await request("/api/auth/login", {
+          method: "POST",
+          headers,
+          body: { email: accounts.admin, password: `wrong-${index}` },
+          expectedStatus: 401,
+        });
+      }
+
+      const limited = await request("/api/auth/login", {
+        method: "POST",
+        headers,
+        body: { email: accounts.admin, password: "wrong-limited" },
+        expectedStatus: 429,
+      });
+
+      assert(limited.json?.error?.code === "RATE_LIMITED", "Expected RATE_LIMITED");
+
+      const successJar = await login(accounts.admin, "Admin", { headers });
+
+      await request("/api/auth/login", {
+        method: "POST",
+        headers,
+        body: { email: accounts.admin, password: "wrong-after-reset" },
+        expectedStatus: 401,
+      });
+      await request("/api/auth/logout", {
+        method: "POST",
+        headers,
+        jar: successJar,
+        expectedStatus: 200,
+      });
+    });
+
+    await check("login IP rate limit returns 429", async () => {
+      const headers = { "X-Forwarded-For": `203.0.113.20` };
+
+      for (let index = 0; index < 10; index += 1) {
+        await request("/api/auth/login", {
+          method: "POST",
+          headers,
+          body: {
+            email: `ip-limit-${RUN_ID}-${index}@testflow.local`,
+            password: "wrong-password",
+          },
+          expectedStatus: 401,
+        });
+      }
+
+      const limited = await request("/api/auth/login", {
+        method: "POST",
+        headers,
+        body: {
+          email: `ip-limit-${RUN_ID}-limited@testflow.local`,
+          password: "wrong-password",
+        },
+        expectedStatus: 429,
+      });
+
+      assert(limited.json?.error?.code === "RATE_LIMITED", "Expected RATE_LIMITED");
+    });
+
+    await check("signup IP rate limit returns 429", async () => {
+      const headers = { "X-Forwarded-For": `203.0.113.30` };
+
+      for (let index = 0; index < 5; index += 1) {
+        await request("/api/auth/signup", {
+          method: "POST",
+          headers,
+          body: {
+            name: "",
+            email: `signup-limit-${RUN_ID}-${index}@testflow.local`,
+            password: "short",
+          },
+          expectedStatus: 400,
+        });
+      }
+
+      const limited = await request("/api/auth/signup", {
+        method: "POST",
+        headers,
+        body: {
+          name: "",
+          email: `signup-limit-${RUN_ID}-limited@testflow.local`,
+          password: "short",
+        },
+        expectedStatus: 429,
+      });
+
+      assert(limited.json?.error?.code === "RATE_LIMITED", "Expected RATE_LIMITED");
     });
 
     await check("admin login succeeds", async () => {

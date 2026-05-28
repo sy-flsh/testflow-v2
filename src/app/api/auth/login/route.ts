@@ -5,8 +5,19 @@ import { verifyPassword } from "@/lib/auth/password";
 import { createSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db/prisma";
 import { enforceCsrfProtection } from "@/lib/security/csrf";
+import {
+  checkRateLimit,
+  getClientIp,
+  normalizeRateLimitEmail,
+  rateLimitErrorResponse,
+  resetRateLimit,
+} from "@/lib/security/rate-limit";
 
 export const runtime = "nodejs";
+
+const LOGIN_WINDOW_MS = 10 * 60 * 1000;
+const LOGIN_IP_LIMIT = 10;
+const LOGIN_EMAIL_FAILURE_LIMIT = 5;
 
 export async function POST(request: Request) {
   try {
@@ -16,12 +27,23 @@ export async function POST(request: Request) {
       return csrfError;
     }
 
+    const ipLimit = await checkRateLimit({
+      scope: "auth:login:ip",
+      key: getClientIp(request),
+      limit: LOGIN_IP_LIMIT,
+      windowMs: LOGIN_WINDOW_MS,
+    });
+
+    if (!ipLimit.allowed) {
+      return rateLimitErrorResponse(ipLimit);
+    }
+
     const body = await readJsonBody(request);
     const email = normalizeEmail(body.email);
     const password = readTrimmedString(body.password);
 
     if (!email || !password) {
-      return invalidCredentials();
+      return invalidCredentials(email);
     }
 
     const user = await prisma.user.findUnique({
@@ -29,13 +51,13 @@ export async function POST(request: Request) {
     });
 
     if (!user?.passwordHash) {
-      return invalidCredentials();
+      return invalidCredentials(email);
     }
 
     const isPasswordValid = await verifyPassword(password, user.passwordHash);
 
     if (!isPasswordValid) {
-      return invalidCredentials();
+      return invalidCredentials(email);
     }
 
     const membership = await resolveActiveMembership(user.id);
@@ -48,6 +70,7 @@ export async function POST(request: Request) {
       where: { id: user.id },
       data: { lastLoginAt: new Date() },
     });
+    await resetRateLimit({ scope: "auth:login:email-failure", key: email });
     await createSession(user.id, membership.workspaceId);
 
     return apiSuccess(
@@ -67,6 +90,19 @@ function normalizeEmail(value: unknown) {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
 
-function invalidCredentials() {
+async function invalidCredentials(email?: string) {
+  if (email) {
+    const emailFailureLimit = await checkRateLimit({
+      scope: "auth:login:email-failure",
+      key: normalizeRateLimitEmail(email),
+      limit: LOGIN_EMAIL_FAILURE_LIMIT,
+      windowMs: LOGIN_WINDOW_MS,
+    });
+
+    if (!emailFailureLimit.allowed) {
+      return rateLimitErrorResponse(emailFailureLimit);
+    }
+  }
+
   return apiError("이메일 또는 비밀번호가 올바르지 않습니다.", 401, "AUTH_INVALID_CREDENTIALS");
 }
