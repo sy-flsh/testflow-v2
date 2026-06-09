@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TMS — 로그인 (S-AUTH-LOGIN)</title>
+  <link rel="preconnect" href="https://rsms.me/" />
+  <link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
+  <link rel="stylesheet" href="_shell/shell.css" />
+  <link rel="stylesheet" href="_shell/components/button.css" />
+  <link rel="stylesheet" href="_shell/components/text-input.css" />
+  <link rel="stylesheet" href="_shell/components/checkbox.css" />
+  <style>
+    /* S-AUTH-LOGIN — 새 화면 (App-shell 미사용, pub-shell 사용). Figma 342:12913 정합 */
+
+    /* Auth shell */
+    .auth-main {
+      min-height: calc(100vh - var(--header-h));
+      display: flex; align-items: flex-start; justify-content: center;
+      padding: 80px 24px 48px;
+    }
+    .auth-card {
+      width: 100%; max-width: 360px;
+      display: flex; flex-direction: column; gap: 32px;
+    }
+    .auth-brand {
+      display: flex; flex-direction: column; align-items: center; gap: 16px;
+      text-align: center;
+    }
+    .auth-brand-mark {
+      width: 56px; height: 56px; border-radius: 12px;
+      background: transparent; display: grid; place-items: center;
+      overflow: hidden;
+    }
+    .auth-brand-mark svg { width: 36px; height: 36px; color: var(--brand-600); }
+    .auth-brand-mark > img { width: 100%; height: 100%; object-fit: contain; display: block; }
+    .auth-title {
+      font-size: 22px; line-height: 30px; font-weight: 700;
+      letter-spacing: -0.2px; color: var(--bunker); margin: 0;
+    }
+    .auth-subtitle {
+      font-size: 13px; line-height: 20px; color: var(--grey-44);
+      margin: 0; text-align: center;
+    }
+
+    .auth-form { display: flex; flex-direction: column; gap: 16px; }
+    .auth-helpers {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 12px; margin-top: 4px;
+    }
+    .auth-footer {
+      text-align: center;
+      font-size: 13px; line-height: 18px; color: var(--grey-44);
+    }
+    .auth-footer .btn-link { margin-left: 4px; font-size: 13px; }
+
+    @media (max-width: 480px) {
+      .auth-main { padding: 48px 16px; }
+    }
+  </style>
+</head>
+<body>
+  <!-- ─── Public Header (shell.js 가 _shell/pub-header.html inject) ─── -->
+  <div id="pub-shell" data-pub-active="login">
+    <header class="pub-header"></header>
+  </div>
+
+  <main class="auth-main" aria-labelledby="auth-title">
+    <div class="auth-card">
+
+      <div class="auth-brand">
+        <div class="auth-brand-mark" aria-hidden="true">
+          <img src="_shell/logo.png" alt="" />
+        </div>
+        <h1 class="auth-title" id="auth-title">테스트관리도구</h1>
+        <p class="auth-subtitle">
+          다시 오신 것을 환영합니다!<br/>
+          로그인 정보를 입력해 주세요.
+        </p>
+      </div>
+
+      <form class="auth-form" id="login-form" novalidate>
+        <div class="field">
+          <label class="field-label" for="login-id">아이디</label>
+          <input
+            id="login-id"
+            class="field-input"
+            type="text"
+            placeholder="아이디를 입력해주세요"
+            autocomplete="username"
+            aria-required="true"
+            aria-describedby="login-id-error"
+          />
+          <p class="field-error" id="login-id-error" role="alert" hidden></p>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="login-pw">비밀번호</label>
+          <input
+            id="login-pw"
+            class="field-input"
+            type="password"
+            placeholder="비밀번호를 입력해주세요"
+            autocomplete="current-password"
+            aria-required="true"
+            aria-describedby="login-pw-error"
+          />
+          <p class="field-error" id="login-pw-error" role="alert" hidden></p>
+        </div>
+
+        <div class="auth-helpers">
+          <label class="cbx">
+            <input type="checkbox" class="cbx-input" id="login-remember" />
+            <span class="cbx-box" aria-hidden="true"></span>
+            <span class="cbx-label">30일 동안 기억하기</span>
+          </label>
+          <a href="s-auth-forgot-password.html" class="btn btn-link">아이디/비밀번호를 잊으셨나요</a>
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-lg btn-block" id="login-submit">로그인</button>
+      </form>
+
+      <p class="auth-footer">
+        계정이 없으신가요?
+        <a href="s-auth-signup-co.html" class="btn btn-link">가입하기</a>
+      </p>
+
+    </div>
+  </main>
+
+  <div class="screen-meta">S-AUTH-LOGIN · 새 화면 · `/login` · node-id=342-12913</div>
+
+  <script src="_shell/shell.js"></script>
+  <script>
+    /* S-AUTH-LOGIN — 입력 검증 + 데모 submit
+       i18n 키 정합: validation.* (text-input.md §7, design-system §6 정본)
+       검증 타이밍: onSubmit 전체 검증, onChange 에러 해제 (design-system §6.2 정합)
+    */
+    (function () {
+      const I18N = {
+        'validation.username.required': '아이디를 입력해주세요.',
+        'validation.password.required': '비밀번호를 입력해주세요.',
+        'validation.auth.invalid':      '아이디 또는 비밀번호가 올바르지 않습니다.',
+      };
+      const t = k => I18N[k] || k;
+
+      const form     = document.getElementById('login-form');
+      const idEl     = document.getElementById('login-id');
+      const pwEl     = document.getElementById('login-pw');
+      const idErr    = document.getElementById('login-id-error');
+      const pwErr    = document.getElementById('login-pw-error');
+      const remember = document.getElementById('login-remember');
+
+      function setErr(input, errEl, key) {
+        if (key) {
+          input.classList.add('is-error');
+          input.setAttribute('aria-invalid', 'true');
+          errEl.textContent = t(key);
+          errEl.hidden = false;
+          errEl.setAttribute('data-i18n-key', key);
+        } else {
+          input.classList.remove('is-error');
+          input.removeAttribute('aria-invalid');
+          errEl.textContent = '';
+          errEl.hidden = true;
+          errEl.removeAttribute('data-i18n-key');
+        }
+      }
+
+      [idEl, pwEl].forEach(el => {
+        el.addEventListener('input', () => {
+          if (el.classList.contains('is-error')) {
+            const errEl = el === idEl ? idErr : pwErr;
+            if (el.value.trim().length > 0) setErr(el, errEl, null);
+          }
+        });
+      });
+
+      form.addEventListener('submit', e => {
+        e.preventDefault();
+        let firstErr = null;
+        if (idEl.value.trim().length === 0) {
+          setErr(idEl, idErr, 'validation.username.required');
+          if (!firstErr) firstErr = idEl;
+        } else { setErr(idEl, idErr, null); }
+        if (pwEl.value.length === 0) {
+          setErr(pwEl, pwErr, 'validation.password.required');
+          if (!firstErr) firstErr = pwEl;
+        } else { setErr(pwEl, pwErr, null); }
+        if (firstErr) { firstErr.focus(); return; }
+
+        // 데모 success — 실제: POST /auth/login → JWT 저장 → role 별 라우팅
+        try { localStorage.setItem('tms.auth.remember', remember.checked ? 'true' : 'false'); }
+        catch (_) { /* private mode */ }
+        alert('데모 로그인 성공 → 실제: 라우팅 가드가 role 확인 후 분기\n' +
+              'CO → /dashboard (S-WS-DASHBOARD Company-wide)\n' +
+              '그 외 → /workspaces?view=list (S-WS-LIST)');
+      });
+
+      setTimeout(() => idEl.focus(), 100);
+    })();
+  </script>
+</body>
+</html>

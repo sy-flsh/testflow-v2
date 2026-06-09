@@ -1,0 +1,111 @@
+/* ════════════════════════════════════════════════════════════════════
+   ConfirmDialog — components/confirm-dialog.md 정합 (위험·경고·정보)
+   Variant: danger (기본) / warning / info
+   사용 (danger 예시):
+     <div class="modal-backdrop" data-modal="...">
+       <div class="modal-confirm tone-danger"
+            role="alertdialog" aria-modal="true"
+            aria-labelledby="..." aria-describedby="...">
+         <div class="modal-confirm-icon" aria-hidden="true">
+           <svg viewBox="0 0 24 24" ...>...</svg>
+         </div>
+         <div class="modal-confirm-text">
+           <h2 class="modal-confirm-title" id="...">제목</h2>
+           <p class="modal-confirm-desc" id="...">설명</p>
+         </div>
+         <div class="modal-confirm-actions">
+           <button class="btn btn-tertiary btn-md">취소</button>
+           <button class="btn btn-danger btn-md">비활성화</button>
+         </div>
+       </div>
+     </div>
+
+   Pair (좌측 Tertiary [취소] + 우측 Variant 액션) — button.md §5 정합.
+   ════════════════════════════════════════════════════════════════════ */
+
+.modal-confirm {
+  background: #fff;
+  border-radius: 12px;
+  padding: 24px;
+  width: 440px;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  box-shadow: var(--shadow-xl, 0 20px 24px -4px rgba(0,0,0,0.08), 0 8px 8px -4px rgba(0,0,0,0.03));
+  animation: modal-confirm-in 150ms ease-out;
+}
+@keyframes modal-confirm-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ─── Icon (tone별 색상) ─── */
+.modal-confirm-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+.modal-confirm-icon svg { width: 22px; height: 22px; }
+
+.modal-confirm.tone-danger .modal-confirm-icon {
+  background: var(--red-50, #FEF2F2);
+  color: var(--red-600, #DC2626);
+}
+.modal-confirm.tone-warning .modal-confirm-icon {
+  background: #FFFBEB;
+  color: #D97706;
+}
+.modal-confirm.tone-info .modal-confirm-icon {
+  background: var(--brand-50, #F9F5FF);
+  color: var(--brand-600, #7F56D9);
+}
+.modal-confirm.tone-success .modal-confirm-icon {
+  background: #F0FDF4;
+  color: #16A34A;
+}
+
+/* ─── Text block ─── */
+.modal-confirm-text {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.modal-confirm-title {
+  font-size: 18px;
+  line-height: 28px;
+  font-weight: 700;
+  color: var(--bunker);
+  margin: 0;
+}
+.modal-confirm-desc {
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--neutral-600);
+  margin: 0;
+}
+
+/* ─── Actions (button pair) ─── */
+.modal-confirm-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  width: 100%;
+}
+
+/* ─── Mobile bottom sheet ─── */
+@media (max-width: 767px) {
+  .modal-confirm {
+    width: 100%;
+    border-radius: 16px 16px 0 0;
+    animation: modal-confirm-sheet-in 200ms ease-out;
+  }
+  @keyframes modal-confirm-sheet-in {
+    from { transform: translateY(100%); }
+    to { transform: translateY(0); }
+  }
+}

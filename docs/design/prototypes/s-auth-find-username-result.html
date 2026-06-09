@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TMS — 아이디 찾기 결과 (S-AUTH-FIND-USERNAME-RESULT)</title>
+  <link rel="preconnect" href="https://rsms.me/" />
+  <link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
+  <link rel="stylesheet" href="_shell/shell.css" />
+  <link rel="stylesheet" href="_shell/components/button.css" />
+  <style>
+    /* ════════════════════════════════════════════════════════
+       S-AUTH-FIND-USERNAME-RESULT — 새 화면 (Shell 미사용)
+       Figma node-id=342-13056 (결과 페이지)
+       라우트 `/find-username/result`
+       이전 화면: S-AUTH-FIND-USERNAME (`/find-username`)
+       성공·실패(미가입 이메일) 모두 본 페이지로 도달 (존재 은닉, AC-17)
+       ════════════════════════════════════════════════════════ */
+
+    .auth-main {
+      min-height: calc(100vh - var(--header-h));
+      display: flex; align-items: flex-start; justify-content: center;
+      padding: 80px 24px 48px;
+    }
+    .auth-card {
+      width: 100%; max-width: 360px;
+      display: flex; flex-direction: column; gap: 24px;
+    }
+    .auth-brand {
+      display: flex; flex-direction: column; align-items: center; gap: 16px;
+      text-align: center;
+    }
+    .auth-brand-mark {
+      width: 56px; height: 56px; border-radius: 12px;
+      background: transparent; display: grid; place-items: center;
+      overflow: hidden;
+    }
+    .auth-brand-mark svg { width: 36px; height: 36px; color: var(--brand-600); }
+    .auth-brand-mark > img { width: 100%; height: 100%; object-fit: contain; display: block; }
+    .auth-title {
+      font-size: 22px; line-height: 30px; font-weight: 700;
+      letter-spacing: -0.2px; color: var(--bunker); margin: 0;
+    }
+    .auth-subtitle {
+      font-size: 13px; line-height: 20px; color: var(--grey-44);
+      margin: 0; text-align: center;
+    }
+
+    /* 결과 카드 — Figma 342:13056 정합 (회색 배경, 좌측 정렬, label + value + 가입일) */
+    .find-id-result {
+      display: flex; flex-direction: column; gap: 6px;
+      align-items: flex-start;
+      padding: 16px 18px;
+      background: var(--neutral-50);
+      border: 1px solid var(--porcelain);
+      border-radius: 10px;
+    }
+    .find-id-result-label {
+      font-size: 12px; line-height: 16px; color: var(--grey-44); margin: 0;
+    }
+    .find-id-result-value {
+      font-size: 18px; line-height: 26px; font-weight: 700;
+      color: var(--bunker); margin: 0;
+      letter-spacing: -0.1px;
+      font-feature-settings: "tnum" 1;
+    }
+    .find-id-result-meta {
+      font-size: 12px; line-height: 16px; color: var(--neutral-600);
+      margin: 0;
+    }
+
+    .auth-footer {
+      text-align: center;
+      font-size: 13px; line-height: 18px; color: var(--grey-44);
+    }
+    .auth-footer .btn-link { margin-left: 4px; font-size: 13px; }
+
+    .screen-meta {
+      position: fixed; bottom: 12px; left: 12px;
+      font-size: 11px; line-height: 16px;
+      color: var(--neutral-500);
+      background: #fff; border: 1px solid var(--porcelain);
+      padding: 4px 8px; border-radius: 6px;
+      z-index: 300;
+    }
+
+    @media (max-width: 480px) {
+      .auth-main { padding: 48px 16px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="pub-shell">
+    <header class="pub-header"></header>
+  </div>
+
+  <main class="auth-main" aria-labelledby="auth-title">
+    <div class="auth-card">
+
+      <div class="auth-brand">
+        <div class="auth-brand-mark" aria-hidden="true">
+          <img src="_shell/logo.png" alt="" />
+        </div>
+        <h1 class="auth-title" id="auth-title">아이디 찾기</h1>
+        <p class="auth-subtitle">입력하신 정보와 일치하는 아이디를 찾았습니다.</p>
+      </div>
+
+      <section class="find-id-result" aria-live="polite">
+        <p class="find-id-result-label">확인된 아이디</p>
+        <p class="find-id-result-value" id="find-id-result-value">****</p>
+        <p class="find-id-result-meta" id="find-id-result-meta">가입일: —</p>
+      </section>
+
+      <a class="btn btn-primary btn-lg btn-block" href="s-auth-login.html">로그인</a>
+
+      <footer class="auth-footer">
+        비밀번호가 기억나지 않으세요?
+        <a class="btn btn-link" href="s-auth-forgot-password.html">비밀번호 찾기</a>
+      </footer>
+
+    </div>
+  </main>
+
+  <div class="screen-meta">S-AUTH-FIND-USERNAME-RESULT · 새 화면 · `/find-username/result` · node-id=342-13056</div>
+
+  <script src="_shell/shell.js"></script>
+  <script>
+    /* URL 쿼리 `?u=<masked>&joined=<YYYY-MM>` 에서 결과 데이터 추출 노출.
+       실제 구현 시 URL 쿼리 대신 세션/임시 토큰 권장 (URL 노출/이력 잔존 위험).
+       성공·실패(미가입) 모두 본 페이지로 도달 (존재 은닉, AC-17 정합) —
+       실제는 서버가 마스킹 placeholder 또는 동일 메시지 반환. */
+    (function () {
+      const params = new URLSearchParams(window.location.search);
+      const masked = params.get('u') || '****';
+      const joined = params.get('joined') || '';
+      document.getElementById('find-id-result-value').textContent = masked;
+
+      // 가입일 표시 — `YYYY-MM` 또는 `YYYY-MM-DD` 입력 시 한글 포맷 (예: "2026년 6월")
+      function formatJoined(s) {
+        const m = /^(\d{4})-(\d{1,2})/.exec(s);
+        if (!m) return s ? `가입일: ${s}` : '가입일: 2026년 6월';
+        return `가입일: ${m[1]}년 ${parseInt(m[2], 10)}월`;
+      }
+      document.getElementById('find-id-result-meta').textContent = formatJoined(joined);
+    })();
+  </script>
+</body>
+</html>

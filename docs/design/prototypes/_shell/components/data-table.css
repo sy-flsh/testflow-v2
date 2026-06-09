@@ -1,0 +1,225 @@
+/* ════════════════════════════════════════════════════════════════════
+   DataTable — components/data-table.md 정합
+   행 State: header / default / hover / selected / focused / disabled / highlighted
+   Figma: 342:19294 (Body sample), 351:13302 (full)
+   사용:
+     <div class="table-card">
+       <div class="table" role="table">
+         <div class="t-header" role="row">
+           <div class="t-cell" role="columnheader">이름 <span class="sort">↓</span></div>
+           ...
+         </div>
+         <div class="t-body">
+           <div class="t-row" role="row">
+             <div class="t-data" role="cell">
+               <span class="row-title">이름</span>
+               <span class="row-sub">서브텍스트</span>
+             </div>
+             ...
+           </div>
+         </div>
+       </div>
+     </div>
+   ════════════════════════════════════════════════════════════════════ */
+
+/* Table card wrapper */
+.table-card {
+  background: #fff;
+  border: 1px solid var(--porcelain);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.table {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+/* ─── Header row ─── */
+.t-header {
+  display: flex;
+  background: #FBFCFD;
+  border-bottom: 1px solid var(--porcelain);
+  min-height: 48px;
+}
+.t-cell {
+  flex: 1 0 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 14px 24px;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--grey-44);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.t-cell .sort {
+  font-size: 9px;
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--grey-44);
+}
+.t-cell[aria-sort="ascending"] .sort::before { content: "↑"; }
+.t-cell[aria-sort="descending"] .sort::before { content: "↓"; }
+
+/* Sticky header option */
+.table-card.is-sticky-header .t-header {
+  position: sticky; top: 0; z-index: 1;
+}
+
+/* ─── Body ─── */
+.t-body { display: flex; flex-direction: column; }
+
+.t-row {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  transition: background 100ms;
+}
+
+/* Default / Hover / Selected / Focused / Disabled / Highlighted */
+.t-row.is-clickable { cursor: pointer; }
+.t-row.is-clickable:hover,
+.t-row.is-hover { background: var(--neutral-50); }
+.t-row.is-selected { background: var(--brand-50); }
+.t-row.is-selected:hover { background: var(--brand-100); }
+.t-row.is-focused {
+  background: var(--neutral-50);
+  outline: 2px solid var(--brand-500);
+  outline-offset: -2px;
+}
+.t-row.is-disabled {
+  background: var(--slate-50);
+  color: var(--slate-400);
+  cursor: not-allowed;
+}
+.t-row.is-disabled .row-title,
+.t-row.is-disabled .row-sub { color: var(--slate-400); }
+.t-row.is-highlighted { background: var(--yellow-50); }
+
+.t-data {
+  flex: 1 0 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--porcelain);
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--bunker);
+}
+.t-data.has-actions {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.t-row:last-child .t-data { border-bottom: none; }
+
+.row-title { color: var(--bunker); }
+.row-sub { color: var(--grey-44); margin-top: 2px; font-size: 13px; line-height: 18px; }
+
+/* Action button (more menu trigger) */
+.more-btn {
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  color: var(--neutral-600);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.more-btn:hover { color: var(--neutral-900); background: var(--neutral-100); }
+.more-btn svg { width: 16px; height: 16px; }
+
+/* Checkbox column (Multi 모드) — components/checkbox.css 와 합성 */
+.t-col-select { flex: 0 0 48px; padding-left: 16px; padding-right: 0; }
+
+/* ─── Table-wide states (Empty / Loading / Error) ─── */
+.t-empty,
+.t-error,
+.t-loading {
+  display: grid;
+  place-items: center;
+  padding: 48px 24px;
+  text-align: center;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--grey-44);
+}
+.t-empty[role="status"],
+.t-error[role="status"],
+.t-loading[role="status"] { /* a11y noop */ }
+
+.t-loading-skeleton {
+  display: flex; flex-direction: column;
+}
+.t-loading-skeleton .t-row {
+  pointer-events: none;
+  animation: t-skeleton-pulse 1.4s ease-in-out infinite;
+}
+@keyframes t-skeleton-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.7; }
+}
+
+/* ─── Toolbar (테이블 상단 검색·필터·일괄액션 row) ─── */
+.t-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+.search-input {
+  width: 100%;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #fff;
+  border: 1px solid var(--slate-300);
+  border-radius: 8px;
+  padding: 10px 14px;
+  filter: drop-shadow(0 1px 1px rgba(0,0,0,0.05));
+}
+.search-input:hover { border-color: var(--slate-400); }
+.search-input:focus-within {
+  border-color: var(--brand-500);
+  box-shadow: 0 0 0 4px var(--brand-100);
+}
+.search-input svg { width: 20px; height: 20px; color: var(--slate-500); flex-shrink: 0; }
+.search-input input {
+  flex: 1 0 0; min-width: 0;
+  border: none; outline: none; background: transparent;
+  font-family: inherit;
+  font-size: 14px; line-height: 20px;
+  color: var(--bunker);
+}
+.search-input input::placeholder { color: var(--slate-500); }
+
+/* ─── Bulk action bar (Multi 모드 선택 시 노출) ─── */
+.t-bulk-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--brand-50);
+  border-bottom: 1px solid var(--brand-100);
+  font-size: 14px;
+  color: var(--brand-800);
+}
+
+/* ─── Responsive ─── */
+@media (max-width: 767px) {
+  .t-cell, .t-data { padding: 12px 16px; }
+}

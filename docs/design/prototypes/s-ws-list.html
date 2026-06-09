@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TMS — 워크스페이스 (S-WS-LIST)</title>
+  <link rel="preconnect" href="https://rsms.me/" />
+  <link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
+  <link rel="stylesheet" href="_shell/shell.css" />
+  <link rel="stylesheet" href="_shell/components/button.css" />
+  <link rel="stylesheet" href="_shell/components/data-table.css" />
+  <link rel="stylesheet" href="_shell/components/pagination.css" />
+  <link rel="stylesheet" href="_shell/components/page-header.css" />
+  <style>
+    /* 페이지 전용 — content 영역만 (page-header/table/pagination/search는 components/ 사용)
+       마이그 (2026-06-09): title-bar 인라인 → components/page-header.css
+       빈 상태 (Figma node-id=342-14862) — URL `?empty=1` 로 토글 */
+
+    .content { display: flex; flex-direction: column; gap: 16px; padding: 0 16px 24px; }
+    .actions { display: flex; align-items: center; width: 100%; }
+
+    /* ─── Empty state (Figma 342:14862 정합) ─── */
+    .empty-state {
+      display: flex; flex-direction: column; align-items: center; gap: 16px;
+      padding: 88px 24px 40px;
+      text-align: center;
+    }
+    .empty-state-title {
+      font-size: 15px; line-height: 22px; font-weight: 700;
+      color: var(--bunker); margin: 0;
+    }
+    .empty-state-desc {
+      font-size: 13px; line-height: 20px; color: var(--neutral-600); margin: 0;
+    }
+    .empty-state .btn { margin-top: 8px; }
+    .empty-state .btn svg { width: 18px; height: 18px; }
+
+    [hidden] { display: none !important; }
+
+    @media (max-width: 767px) {
+      .content { padding: 0 16px 16px; }
+      .empty-state { padding: 56px 16px 32px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="app-shell"
+       data-mode="workspace"
+       data-workspace-name="R&amp;D 개발팀"
+       data-top-nav="workspace"
+       data-user-initial="이"
+       data-user-name="이주환">
+    <header class="app-header topbar"></header>
+    <div class="app-shell">
+      <aside class="app-sidebar sidebar" aria-label="워크스페이스 설정 네비게이션"></aside>
+
+      <!-- ─── Content Area (페이지: 워크스페이스 목록) ─── -->
+      <main class="main">
+        <header class="page-header size-sm">
+          <p class="page-header-breadcrumb">워크스페이스 설정</p>
+          <div class="page-header-row">
+            <div class="page-header-text">
+              <h1 class="page-header-title">워크스페이스</h1>
+              <p class="page-header-desc">설명</p>
+            </div>
+            <button class="btn btn-primary btn-md" type="button">
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="10" y1="5" x2="10" y2="15" />
+                <line x1="5" y1="10" x2="15" y2="10" />
+              </svg>
+              워크스페이스 생성
+            </button>
+          </div>
+        </header>
+
+        <section class="content" aria-labelledby="ws-table-title">
+          <div class="actions">
+            <div class="search-input">
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.67" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="9" cy="9" r="6" />
+                <line x1="17" y1="17" x2="13.5" y2="13.5" />
+              </svg>
+              <input type="search" placeholder="워크스페이스명 검색..." aria-label="워크스페이스명 검색" />
+            </div>
+          </div>
+
+          <!-- ─── Empty state (Figma 342:14862) — `?empty=1` 시 노출 ─── -->
+          <div class="empty-state" id="ws-empty-state" hidden role="status" aria-live="polite">
+            <h2 class="empty-state-title">워크스페이스를 생성해 보세요</h2>
+            <p class="empty-state-desc">
+              새 워크스페이스를 만들어 프로젝트를 시작해 보세요.<br/>
+              필요한 설정을 간단히 완료할 수 있습니다.
+            </p>
+            <button class="btn btn-primary btn-md" type="button">
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="10" y1="5" x2="10" y2="15" />
+                <line x1="5" y1="10" x2="15" y2="10" />
+              </svg>
+              워크스페이스 생성
+            </button>
+          </div>
+
+          <div class="table-card" id="ws-table-card">
+            <div class="table" role="table" id="ws-table-title" aria-label="워크스페이스 목록">
+              <div class="t-header" role="row">
+                <div class="t-cell" role="columnheader" aria-sort="ascending">
+                  워크스페이스명 <span class="sort" aria-hidden="true"></span>
+                </div>
+                <div class="t-cell" role="columnheader">참여자</div>
+                <div class="t-cell" role="columnheader">프로젝트</div>
+              </div>
+
+              <div class="t-body">
+                <div class="t-row is-clickable" role="row">
+                  <div class="t-data" role="cell">
+                    <span class="row-title">R&amp;D 개발팀</span>
+                    <span class="row-sub">안녕하세요. R&amp;D 개발팀입니다.</span>
+                  </div>
+                  <div class="t-data" role="cell">1명</div>
+                  <div class="t-data has-actions" role="cell">
+                    <span>0개의 프로젝트</span>
+                    <button class="more-btn" aria-label="액션 메뉴">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="8" cy="3" r="1" fill="currentColor" />
+                        <circle cx="8" cy="8" r="1" fill="currentColor" />
+                        <circle cx="8" cy="13" r="1" fill="currentColor" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+
+                <div class="t-row is-clickable" role="row">
+                  <div class="t-data" role="cell">
+                    <span class="row-title">결제 플랫폼</span>
+                    <span class="row-sub">PG 통합 결제 모듈 테스트 그룹.</span>
+                  </div>
+                  <div class="t-data" role="cell">5명</div>
+                  <div class="t-data has-actions" role="cell">
+                    <span>3개의 프로젝트</span>
+                    <button class="more-btn" aria-label="액션 메뉴">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="8" cy="3" r="1" fill="currentColor" />
+                        <circle cx="8" cy="8" r="1" fill="currentColor" />
+                        <circle cx="8" cy="13" r="1" fill="currentColor" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+
+                <div class="t-row is-clickable" role="row">
+                  <div class="t-data" role="cell">
+                    <span class="row-title">AI 서비스 QA</span>
+                    <span class="row-sub">생성형 AI 응답 검증 워크스페이스.</span>
+                  </div>
+                  <div class="t-data" role="cell">8명</div>
+                  <div class="t-data has-actions" role="cell">
+                    <span>2개의 프로젝트</span>
+                    <button class="more-btn" aria-label="액션 메뉴">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="8" cy="3" r="1" fill="currentColor" />
+                        <circle cx="8" cy="8" r="1" fill="currentColor" />
+                        <circle cx="8" cy="13" r="1" fill="currentColor" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="pagination">
+                <button class="page-btn" type="button">
+                  <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.67" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="16" y1="10" x2="4" y2="10" />
+                    <polyline points="10,4 4,10 10,16" />
+                  </svg>
+                  Previous
+                </button>
+                <div class="page-numbers" role="navigation" aria-label="페이지">
+                  <button class="page-num is-active" aria-current="page">1</button>
+                </div>
+                <button class="page-btn" type="button">
+                  Next
+                  <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.67" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="4" y1="10" x2="16" y2="10" />
+                    <polyline points="10,4 16,10 10,16" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <script src="_shell/shell.js"></script>
+  <script>
+    /* 빈 상태 토글 — URL `?empty=1` 또는 `#empty` 시 테이블 숨김 + empty-state 노출.
+       Figma node-id=342-14862 (빈 상태 변형). */
+    (function () {
+      const params = new URLSearchParams(window.location.search);
+      const isEmpty = params.get('empty') === '1' || window.location.hash === '#empty';
+      if (!isEmpty) return;
+      const tableCard = document.getElementById('ws-table-card');
+      const emptyState = document.getElementById('ws-empty-state');
+      if (tableCard) tableCard.hidden = true;
+      if (emptyState) emptyState.hidden = false;
+    })();
+  </script>
+</body>
+</html>

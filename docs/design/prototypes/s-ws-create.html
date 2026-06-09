@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TMS — 워크스페이스 생성 (S-WS-CREATE)</title>
+  <link rel="preconnect" href="https://rsms.me/" />
+  <link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
+  <link rel="stylesheet" href="_shell/shell.css" />
+  <link rel="stylesheet" href="_shell/components/button.css" />
+  <link rel="stylesheet" href="_shell/components/text-input.css" />
+  <link rel="stylesheet" href="_shell/components/modal.css" />
+  <link rel="stylesheet" href="_shell/components/data-table.css" />
+  <link rel="stylesheet" href="_shell/components/pagination.css" />
+  <link rel="stylesheet" href="_shell/components/page-header.css" />
+  <style>
+    /* ════════════════════════════════════════════════════════
+       S-WS-CREATE — 백그라운드(S-WS-LIST) + 모달
+       토큰 / 모달 / 버튼 / 폼 입력 / 테이블 / 페이지네이션 / 페이지헤더 = components/* 정합
+
+       마이그 (2026-06-09):
+       - 백그라운드 table 인라인 → components/data-table.css
+       - 백그라운드 pagination 인라인 → components/pagination.css
+       - 백그라운드 search-input 인라인 → data-table.css (.search-input 포함됨)
+       - 백그라운드 title-bar 인라인 → components/page-header.css (figma-master.md §7.4 amend)
+       ════════════════════════════════════════════════════════ */
+
+    .content { display: flex; flex-direction: column; gap: 16px; padding: 0 16px 24px; }
+    .actions { display: flex; align-items: center; width: 100%; }
+
+    /* Modal 페이지 보강 — 본 화면 모달은 size-xl(840px), textarea 134px */
+    .modal-body textarea.field-textarea { min-height: 134px; }
+
+    @media (max-width: 767px) {
+      .content { padding: 0 16px 16px; }
+    }
+  </style>
+</head>
+<body>
+  <!-- ─── Background: S-WS-LIST 컨텍스트 ─── -->
+  <div id="app-shell"
+       data-mode="workspace"
+       data-workspace-name="R&amp;D 개발팀"
+       data-top-nav="workspace"
+       data-user-initial="이"
+       data-user-name="이주환">
+    <header class="app-header topbar"></header>
+    <div class="app-shell">
+      <aside class="app-sidebar sidebar" aria-hidden="true"></aside>
+
+      <main class="main" aria-hidden="true">
+        <header class="page-header size-sm">
+          <p class="page-header-breadcrumb">워크스페이스 설정</p>
+          <div class="page-header-row">
+            <div class="page-header-text">
+              <h1 class="page-header-title">워크스페이스</h1>
+              <p class="page-header-desc">설명</p>
+            </div>
+            <button class="btn btn-primary btn-md" type="button" tabindex="-1">
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="10" y1="5" x2="10" y2="15" /><line x1="5" y1="10" x2="15" y2="10" />
+              </svg>
+              워크스페이스 생성
+            </button>
+          </div>
+        </header>
+        <section class="content">
+          <div class="actions">
+            <div class="search-input">
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.67" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="9" cy="9" r="6" /><line x1="17" y1="17" x2="13.5" y2="13.5" />
+              </svg>
+              <input type="search" placeholder="워크스페이스명 검색..." tabindex="-1" />
+            </div>
+          </div>
+          <div class="table-card">
+            <div class="table" role="table">
+              <div class="t-header" role="row">
+                <div class="t-cell" role="columnheader" aria-sort="descending">워크스페이스명 <span class="sort"></span></div>
+                <div class="t-cell" role="columnheader">참여자</div>
+                <div class="t-cell" role="columnheader">프로젝트</div>
+              </div>
+              <div class="t-body">
+                <div class="t-row" role="row">
+                  <div class="t-data" role="cell">
+                    <span class="row-title">R&amp;D 개발팀</span>
+                    <span class="row-sub">안녕하세요. R&amp;D 개발팀입니다.</span>
+                  </div>
+                  <div class="t-data" role="cell">1명</div>
+                  <div class="t-data has-actions" role="cell">
+                    <span>0개의 프로젝트</span>
+                    <button class="more-btn" tabindex="-1" aria-label="액션">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="8" cy="3" r="1" fill="currentColor" /><circle cx="8" cy="8" r="1" fill="currentColor" /><circle cx="8" cy="13" r="1" fill="currentColor" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div class="pagination">
+                <button class="page-btn" tabindex="-1" disabled>
+                  <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.67" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="16" y1="10" x2="4" y2="10" /><polyline points="10,4 4,10 10,16" />
+                  </svg>
+                  Previous
+                </button>
+                <div class="page-numbers">
+                  <button class="page-num is-active" tabindex="-1" aria-current="page">1</button>
+                </div>
+                <button class="page-btn" tabindex="-1" disabled>
+                  Next
+                  <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.67" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="4" y1="10" x2="16" y2="10" /><polyline points="10,4 16,10 10,16" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════════
+       Modal: S-WS-CREATE (워크스페이스 생성)
+       components/modal.css size-xl(840px) + components/text-input.css + components/button.css
+       ════════════════════════════════════════════════════════ -->
+  <div class="modal-backdrop" id="modal-create-ws" data-modal="create-ws">
+    <div class="modal size-xl"
+         role="dialog"
+         aria-modal="true"
+         aria-labelledby="modal-create-ws-title">
+
+      <div class="modal-header">
+        <h2 class="modal-title" id="modal-create-ws-title">워크스페이스 생성</h2>
+        <button class="modal-close" type="button" aria-label="닫기" id="btn-modal-close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="6" y1="6" x2="18" y2="18" />
+            <line x1="18" y1="6" x2="6" y2="18" />
+          </svg>
+        </button>
+      </div>
+
+      <div class="modal-body">
+        <div class="field">
+          <label class="field-label" for="ws-name">
+            워크스페이스<span class="field-req" aria-hidden="true">*</span>
+          </label>
+          <input
+            id="ws-name"
+            class="field-input"
+            type="text"
+            placeholder="워크스페이스명을 입력하세요"
+            aria-required="true"
+            aria-describedby="ws-name-error"
+            autocomplete="off"
+            maxlength="80"
+          />
+          <p class="field-error" id="ws-name-error" role="alert" hidden></p>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="ws-desc">설명</label>
+          <textarea
+            id="ws-desc"
+            class="field-textarea"
+            placeholder="설명을 입력하세요"
+            rows="5"
+          ></textarea>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-tertiary btn-md" type="button" id="btn-modal-cancel">취소</button>
+        <button class="btn btn-primary btn-md" type="submit" id="btn-modal-submit">생성</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="screen-meta">S-WS-CREATE · 모달 · `?modal=create-ws` · node-id=284-6852</div>
+
+  <script src="_shell/shell.js"></script>
+  <script>
+    /* 모달 매트릭스 + 동적 validation
+       - Esc / Backdrop click / Close button → close (dirty 시 변경 손실 경고)
+       - 포커스 트랩 (Tab/Shift+Tab)
+       - Validation: onChange 에러 해제 + onSubmit 전체 검사 (design-system §6.2)
+       - i18n 키: validation.workspace.name.* (정본 확정 시 갱신)
+    */
+    (function () {
+      const I18N = {
+        'validation.workspace.name.required':  '워크스페이스명을 입력해주세요.',
+        'validation.workspace.name.maxLength': '워크스페이스명은 50자 이내로 입력해주세요.',
+        'validation.workspace.name.duplicate': '이미 사용 중인 워크스페이스명입니다.',
+      };
+      const t = k => I18N[k] || k;
+
+      const backdrop  = document.getElementById('modal-create-ws');
+      const modal     = backdrop.querySelector('.modal');
+      const closeBtn  = document.getElementById('btn-modal-close');
+      const cancelBtn = document.getElementById('btn-modal-cancel');
+      const submitBtn = document.getElementById('btn-modal-submit');
+      const nameInput = document.getElementById('ws-name');
+      const descInput = document.getElementById('ws-desc');
+      const nameError = document.getElementById('ws-name-error');
+
+      const TAKEN_NAMES = ['r&d 개발팀', 'qa', '인사팀'];
+      const NAME_MAX = 50;
+
+      let isDirty = false;
+
+      function validateName(value, opts) {
+        opts = opts || {};
+        const v = value.trim();
+        if (v.length === 0) return 'validation.workspace.name.required';
+        if (v.length > NAME_MAX) return 'validation.workspace.name.maxLength';
+        if (opts.checkDuplicate && TAKEN_NAMES.indexOf(v.toLowerCase()) !== -1) {
+          return 'validation.workspace.name.duplicate';
+        }
+        return null;
+      }
+
+      function setFieldError(input, errorEl, i18nKey) {
+        if (i18nKey) {
+          input.classList.add('is-error');
+          input.setAttribute('aria-invalid', 'true');
+          errorEl.textContent = t(i18nKey);
+          errorEl.hidden = false;
+          errorEl.setAttribute('data-i18n-key', i18nKey);
+        } else {
+          input.classList.remove('is-error');
+          input.removeAttribute('aria-invalid');
+          errorEl.textContent = '';
+          errorEl.hidden = true;
+          errorEl.removeAttribute('data-i18n-key');
+        }
+      }
+
+      nameInput.addEventListener('input', () => {
+        isDirty = true;
+        if (nameInput.classList.contains('is-error')) {
+          const key = validateName(nameInput.value);
+          setFieldError(nameInput, nameError, key);
+        }
+      });
+      descInput.addEventListener('input', () => { isDirty = true; });
+
+      function confirmClose() {
+        if (!isDirty) return true;
+        return window.confirm('변경 사항이 저장되지 않습니다. 닫으시겠습니까?');
+      }
+      function closeModal() {
+        if (!confirmClose()) return;
+        backdrop.style.display = 'none';
+      }
+
+      document.addEventListener('keydown', e => {
+        if (e.key === 'Escape') { e.preventDefault(); closeModal(); }
+      });
+      backdrop.addEventListener('mousedown', e => {
+        if (e.target === backdrop) closeModal();
+      });
+      closeBtn.addEventListener('click', closeModal);
+      cancelBtn.addEventListener('click', closeModal);
+
+      submitBtn.addEventListener('click', () => {
+        const key = validateName(nameInput.value, { checkDuplicate: true });
+        if (key) {
+          setFieldError(nameInput, nameError, key);
+          nameInput.focus();
+          return;
+        }
+        isDirty = false;
+        alert('데모: POST /workspaces 호출 → Toast(useToast.success) → 모달 닫기');
+        backdrop.style.display = 'none';
+      });
+
+      setTimeout(() => nameInput.focus(), 150);
+
+      const focusables = [closeBtn, nameInput, descInput, cancelBtn, submitBtn];
+      modal.addEventListener('keydown', e => {
+        if (e.key !== 'Tab') return;
+        const enabled = focusables.filter(el => !el.disabled);
+        const first = enabled[0];
+        const last  = enabled[enabled.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault(); last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault(); first.focus();
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

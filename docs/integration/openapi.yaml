@@ -1,0 +1,1674 @@
+openapi: 3.0.3
+info:
+  title: TMS API
+  description: |
+    TMS (Test Management System) REST API 정본.
+    - 정본 분리: 본 문서 = 인터페이스 계약 / `docs/features/` = 비즈니스 규칙 / `docs/standards/backend-coding-standard.md` = 구현 규약.
+    - HTTP 메서드: GET / POST 만 사용 (backend-standard §4.2 락).
+    - 응답 래퍼: ApiResponse 단일 구조 (backend-standard §4.5).
+    - ErrorCode: `code` 필드는 backend-standard §5.2 enum. i18n 매핑 = `docs/integration/error-code-mapping.md`.
+  version: "0.1.0"
+  contact:
+    name: TMS PM
+servers:
+  - url: https://api.tms.example.com/api/v1
+    description: Production (TBD)
+  - url: http://localhost:8080/api/v1
+    description: Local dev
+
+tags:
+  - name: Auth
+    description: F-AUTH — 인증·회원가입 2경로·초대·비번 리셋
+  - name: Master
+    description: F-COMPANY (Master 전용) — Company 생성·비활성·전역 조회
+  - name: Company
+    description: F-COMPANY (CO) — 자기 회사 조회·수정·이관·CO 승격
+  - name: Workspace
+    description: F-WS — WO 생성/CO 비활성/소유자 이관/멤버 초대
+  - name: User
+    description: F-USER — Company 사용자 관리 + Role 매트릭스
+  - name: Project
+    description: F-PROJ — 프로젝트 CRUD·멤버
+  - name: TestSuite
+    description: F-TS — 폴더 트리
+  - name: TestCase
+    description: F-TC — TC CRUD (Scope 3종)
+  - name: TestPlan
+    description: F-PLAN — 계획·할당·사이클
+  - name: TestRun
+    description: F-RUN — 실행 결과 (단계별·자동 종료)
+  - name: Defect
+    description: F-DEF — 결함 관리
+  - name: Attachment
+    description: F-ATTACH — 이미지 단일 업로드
+  - name: Report
+    description: F-REPORT — Pass율·결함 카운트
+  - name: Codes
+    description: metadata-service codes (정본: docs/integration/codes.md)
+
+paths:
+  # ===== Auth =====
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: 로그인
+      operationId: authLogin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LoginRequest" }
+      responses:
+        "200":
+          description: 로그인 성공 (세션 쿠키 발급)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseBase"
+                  - properties:
+                      data: { $ref: "#/components/schemas/AuthSession" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: 로그아웃
+      operationId: authLogout
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+  /auth/signup:
+    post:
+      tags: [Auth]
+      summary: 셀프 가입 (경로 B — CO 신규 회사 자동 생성)
+      operationId: authSignup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SignupSelfRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /auth/verify-email:
+    post:
+      tags: [Auth]
+      summary: 이메일 인증 토큰 검증
+      operationId: authVerifyEmail
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+        "410": { $ref: "#/components/responses/Gone" }
+  /auth/invite/accept:
+    post:
+      tags: [Auth]
+      summary: 초대 토큰 수락 (경로 C)
+      operationId: authAcceptInvite
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/InviteAcceptRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "410": { $ref: "#/components/responses/Gone" }
+  /auth/password/forgot:
+    post:
+      tags: [Auth]
+      summary: 비밀번호 재설정 메일 요청
+      operationId: authPasswordForgot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+  /auth/password/reset:
+    post:
+      tags: [Auth]
+      summary: 비밀번호 재설정 적용
+      operationId: authPasswordReset
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, password]
+              properties:
+                token: { type: string }
+                password: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+        "410": { $ref: "#/components/responses/Gone" }
+  /auth/password/change-first:
+    post:
+      tags: [Auth]
+      summary: 임시비번 강제 변경 (Master·CO 등록 첫 로그인)
+      operationId: authPasswordChangeFirst
+      security: [{ session: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [currentPassword, newPassword]
+              properties:
+                currentPassword: { type: string }
+                newPassword: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # ===== Master · F-COMPANY =====
+  /master/companies:
+    get:
+      tags: [Master]
+      summary: Company 목록 (Master)
+      operationId: masterListCompanies
+      security: [{ session: [] }]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+        - $ref: "#/components/parameters/Sort"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseBase"
+                  - properties:
+                      data: { $ref: "#/components/schemas/PaginatedCompanyList" }
+    post:
+      tags: [Master]
+      summary: Company + CO 동시 생성 (Master 등록 경로 A)
+      operationId: masterCreateCompany
+      security: [{ session: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CompanyCreateRequest" }
+      responses:
+        "200":
+          description: 생성 성공 (CO 임시비번 메일 발송)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseBase"
+                  - properties:
+                      data: { $ref: "#/components/schemas/Company" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /master/companies/{id}:
+    get:
+      tags: [Master]
+      operationId: masterGetCompany
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathId" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseBase"
+                  - properties:
+                      data: { $ref: "#/components/schemas/Company" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /master/companies/{id}/deactivate:
+    post:
+      tags: [Master]
+      operationId: masterDeactivateCompany
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathId" }]
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /master/companies/{id}/activate:
+    post:
+      tags: [Master]
+      operationId: masterActivateCompany
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathId" }]
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+
+  # ===== Company (CO) =====
+  /company:
+    get:
+      tags: [Company]
+      summary: 자기 회사 조회
+      operationId: getOwnCompany
+      security: [{ session: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseBase"
+                  - properties:
+                      data: { $ref: "#/components/schemas/Company" }
+  /company/update:
+    post:
+      tags: [Company]
+      summary: 자기 회사 정보 수정 (CO)
+      operationId: updateOwnCompany
+      security: [{ session: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CompanyUpdateRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /company/transfer-ownership:
+    post:
+      tags: [Company]
+      operationId: transferCompanyOwnership
+      security: [{ session: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [targetUserId]
+              properties:
+                targetUserId: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /company/users/{userId}/grant-co:
+    post:
+      tags: [Company]
+      operationId: grantCoRole
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathUserId" }]
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+
+  # ===== Workspace · F-WS =====
+  /workspaces:
+    get:
+      tags: [Workspace]
+      operationId: listWorkspaces
+      security: [{ session: [] }]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseBase"
+                  - properties:
+                      data: { $ref: "#/components/schemas/PaginatedWorkspaceList" }
+    post:
+      tags: [Workspace]
+      summary: Workspace 생성 (WO)
+      operationId: createWorkspace
+      security: [{ session: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WorkspaceCreateRequest" }
+      responses:
+        "200":
+          description: 생성 성공
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseBase"
+                  - properties:
+                      data: { $ref: "#/components/schemas/Workspace" }
+  /workspaces/{id}:
+    get:
+      tags: [Workspace]
+      operationId: getWorkspace
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathId" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseBase"
+                  - properties:
+                      data: { $ref: "#/components/schemas/Workspace" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /workspaces/{id}/update:
+    post:
+      tags: [Workspace]
+      operationId: updateWorkspace
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WorkspaceUpdateRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+  /workspaces/{id}/deactivate:
+    post:
+      tags: [Workspace]
+      operationId: deactivateWorkspace
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathId" }]
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+  /workspaces/{id}/activate:
+    post:
+      tags: [Workspace]
+      operationId: activateWorkspace
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathId" }]
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+  /workspaces/{id}/transfer:
+    post:
+      tags: [Workspace]
+      operationId: transferWorkspace
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [targetWorkspaceOwnerId]
+              properties:
+                targetWorkspaceOwnerId: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+  /workspaces/{id}/members:
+    get:
+      tags: [Workspace]
+      operationId: listWorkspaceMembers
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathId" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseBase"
+                  - properties:
+                      data: { $ref: "#/components/schemas/MemberList" }
+  /workspaces/{id}/members/invite:
+    post:
+      tags: [Workspace]
+      operationId: inviteWorkspaceMember
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/InviteMemberRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+  /workspaces/{id}/members/{userId}/remove:
+    post:
+      tags: [Workspace]
+      operationId: removeWorkspaceMember
+      security: [{ session: [] }]
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+        - $ref: "#/components/parameters/PathUserId"
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+
+  # ===== User · F-USER =====
+  /users:
+    get:
+      tags: [User]
+      summary: Company 사용자 목록
+      operationId: listUsers
+      security: [{ session: [] }]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+        - in: query
+          name: q
+          schema: { type: string }
+          description: 검색 (이름·이메일)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseBase"
+                  - properties:
+                      data: { $ref: "#/components/schemas/PaginatedUserList" }
+  /users/{userId}:
+    get:
+      tags: [User]
+      operationId: getUser
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathUserId" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseBase"
+                  - properties:
+                      data: { $ref: "#/components/schemas/UserDetail" }
+  /users/invite:
+    post:
+      tags: [User]
+      summary: 일반 사용자 초대 (CO, 경로 C)
+      operationId: inviteUser
+      security: [{ session: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/InviteUserRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+  /users/{userId}/deactivate:
+    post:
+      tags: [User]
+      operationId: deactivateUser
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathUserId" }]
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+  /users/{userId}/password-reset:
+    post:
+      tags: [User]
+      summary: 사용자 비밀번호 재설정 메일 발송 (CO)
+      operationId: triggerUserPasswordReset
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathUserId" }]
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+  /users/{userId}/roles/sync:
+    post:
+      tags: [User]
+      summary: 사용자 Role 매트릭스 일괄 동기화 (단일 트랜잭션, ★15)
+      operationId: syncUserRoles
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathUserId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RoleSyncRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  # ===== Project · F-PROJ =====
+  /workspaces/{workspaceId}/projects:
+    get:
+      tags: [Project]
+      operationId: listProjects
+      security: [{ session: [] }]
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseBase"
+                  - properties:
+                      data: { $ref: "#/components/schemas/PaginatedProjectList" }
+    post:
+      tags: [Project]
+      summary: Project 생성 (WO/PO/Member, code 자동 제안)
+      operationId: createProject
+      security: [{ session: [] }]
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProjectCreateRequest" }
+      responses:
+        "200":
+          description: 생성 성공
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseBase"
+                  - properties:
+                      data: { $ref: "#/components/schemas/Project" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /projects/{code}:
+    get:
+      tags: [Project]
+      operationId: getProjectByCode
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathCode" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseBase"
+                  - properties:
+                      data: { $ref: "#/components/schemas/Project" }
+  /projects/{code}/update:
+    post:
+      tags: [Project]
+      operationId: updateProject
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathCode" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProjectUpdateRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+  /projects/{code}/deactivate:
+    post:
+      tags: [Project]
+      operationId: deactivateProject
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathCode" }]
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+  /projects/{code}/members:
+    get:
+      tags: [Project]
+      operationId: listProjectMembers
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathCode" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseBase"
+                  - properties:
+                      data: { $ref: "#/components/schemas/MemberList" }
+  /projects/{code}/members/invite:
+    post:
+      tags: [Project]
+      operationId: inviteProjectMember
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathCode" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/InviteMemberRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+
+  # ===== TestSuite · F-TS =====
+  /projects/{code}/suites:
+    get:
+      tags: [TestSuite]
+      operationId: listSuites
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathCode" }]
+      responses:
+        "200":
+          description: 트리 응답
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseBase"
+                  - properties:
+                      data: { $ref: "#/components/schemas/SuiteTree" }
+    post:
+      tags: [TestSuite]
+      operationId: createSuite
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathCode" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SuiteCreateRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseBase"
+                  - properties:
+                      data: { $ref: "#/components/schemas/Suite" }
+  /projects/{code}/suites/{suiteId}/rename:
+    post:
+      tags: [TestSuite]
+      operationId: renameSuite
+      security: [{ session: [] }]
+      parameters:
+        - $ref: "#/components/parameters/PathCode"
+        - in: path
+          name: suiteId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+  /projects/{code}/suites/{suiteId}/move:
+    post:
+      tags: [TestSuite]
+      operationId: moveSuite
+      security: [{ session: [] }]
+      parameters:
+        - $ref: "#/components/parameters/PathCode"
+        - in: path
+          name: suiteId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                parentSuiteId: { type: string, nullable: true }
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /projects/{code}/suites/{suiteId}/delete:
+    post:
+      tags: [TestSuite]
+      summary: Suite 삭제 (작성자 한정, ★16 Rule 1)
+      operationId: deleteSuite
+      security: [{ session: [] }]
+      parameters:
+        - $ref: "#/components/parameters/PathCode"
+        - in: path
+          name: suiteId
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  # ===== TestCase · F-TC =====
+  /test-cases:
+    get:
+      tags: [TestCase]
+      summary: TC 목록 (Scope 3종 합본 — Rule 3)
+      operationId: listTestCases
+      security: [{ session: [] }]
+      parameters:
+        - in: query
+          name: scope
+          schema: { type: string, enum: [PROJECT, WORKSPACE, GLOBAL, ALL] }
+        - in: query
+          name: projectCode
+          schema: { type: string }
+        - in: query
+          name: workspaceId
+          schema: { type: string }
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseBase"
+                  - properties:
+                      data: { $ref: "#/components/schemas/PaginatedTestCaseList" }
+    post:
+      tags: [TestCase]
+      operationId: createTestCase
+      security: [{ session: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TestCaseCreateRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseBase"
+                  - properties:
+                      data: { $ref: "#/components/schemas/TestCase" }
+  /test-cases/{id}:
+    get:
+      tags: [TestCase]
+      operationId: getTestCase
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathId" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseBase"
+                  - properties:
+                      data: { $ref: "#/components/schemas/TestCase" }
+  /test-cases/{id}/update:
+    post:
+      tags: [TestCase]
+      summary: TC 수정 (변경 시 영향 Run UNTESTED 처리 — Rule 4·5)
+      operationId: updateTestCase
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TestCaseUpdateRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+  /test-cases/{id}/delete:
+    post:
+      tags: [TestCase]
+      summary: TC 삭제 (작성자 한정 — Rule 1 / ★16)
+      operationId: deleteTestCase
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathId" }]
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  # ===== TestPlan · F-PLAN =====
+  /projects/{code}/test-plans:
+    get:
+      tags: [TestPlan]
+      operationId: listTestPlans
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathCode" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseBase"
+                  - properties:
+                      data: { $ref: "#/components/schemas/PaginatedTestPlanList" }
+    post:
+      tags: [TestPlan]
+      operationId: createTestPlan
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathCode" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TestPlanCreateRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseBase"
+                  - properties:
+                      data: { $ref: "#/components/schemas/TestPlan" }
+  /test-plans/{id}:
+    get:
+      tags: [TestPlan]
+      operationId: getTestPlan
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathId" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseBase"
+                  - properties:
+                      data: { $ref: "#/components/schemas/TestPlan" }
+  /test-plans/{id}/update:
+    post:
+      tags: [TestPlan]
+      operationId: updateTestPlan
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TestPlanUpdateRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+
+  # ===== TestRun · F-RUN =====
+  /projects/{code}/test-runs:
+    get:
+      tags: [TestRun]
+      operationId: listTestRuns
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathCode" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseBase"
+                  - properties:
+                      data: { $ref: "#/components/schemas/PaginatedTestRunList" }
+  /test-runs/{id}:
+    get:
+      tags: [TestRun]
+      operationId: getTestRun
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathId" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseBase"
+                  - properties:
+                      data: { $ref: "#/components/schemas/TestRun" }
+  /test-runs/{id}/steps/{stepId}/result:
+    post:
+      tags: [TestRun]
+      summary: 단계별 결과 기록 (Rule 2 — 자동 종료·소요시간 계산)
+      operationId: recordStepResult
+      security: [{ session: [] }]
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+        - in: path
+          name: stepId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StepResultRequest" }
+      responses:
+        "200":
+          description: 단계 결과 기록 + Run 자동 종료 여부 반환
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseBase"
+                  - properties:
+                      data: { $ref: "#/components/schemas/TestRun" }
+  /test-runs/{id}/complete:
+    post:
+      tags: [TestRun]
+      operationId: completeTestRun
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathId" }]
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  # ===== Defect · F-DEF =====
+  /projects/{code}/defects:
+    get:
+      tags: [Defect]
+      operationId: listDefects
+      security: [{ session: [] }]
+      parameters:
+        - $ref: "#/components/parameters/PathCode"
+        - in: query
+          name: status
+          schema: { type: string, enum: [OPEN, IN_PROGRESS, RESOLVED, CLOSED] }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseBase"
+                  - properties:
+                      data: { $ref: "#/components/schemas/PaginatedDefectList" }
+    post:
+      tags: [Defect]
+      operationId: createDefect
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathCode" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DefectCreateRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseBase"
+                  - properties:
+                      data: { $ref: "#/components/schemas/Defect" }
+  /defects/{id}:
+    get:
+      tags: [Defect]
+      operationId: getDefect
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathId" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseBase"
+                  - properties:
+                      data: { $ref: "#/components/schemas/Defect" }
+  /defects/{id}/update:
+    post:
+      tags: [Defect]
+      operationId: updateDefect
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DefectUpdateRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  # ===== Attachment · F-ATTACH =====
+  /attachments:
+    post:
+      tags: [Attachment]
+      summary: 단일 이미지 업로드 (multipart/form-data)
+      operationId: uploadAttachment
+      security: [{ session: [] }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, ownerType, ownerId]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                ownerType:
+                  type: string
+                  enum: [DEFECT, TEST_RUN, TEST_CASE]
+                ownerId:
+                  type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseBase"
+                  - properties:
+                      data: { $ref: "#/components/schemas/Attachment" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "413":
+          description: 파일 크기 초과 (ATTACHMENT_TOO_LARGE)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+
+  # ===== Report · F-REPORT =====
+  /projects/{code}/reports/pass-rate:
+    get:
+      tags: [Report]
+      operationId: getPassRateReport
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathCode" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseBase"
+                  - properties:
+                      data: { $ref: "#/components/schemas/PassRateReport" }
+  /projects/{code}/reports/defect-count:
+    get:
+      tags: [Report]
+      operationId: getDefectCountReport
+      security: [{ session: [] }]
+      parameters: [{ $ref: "#/components/parameters/PathCode" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseBase"
+                  - properties:
+                      data: { $ref: "#/components/schemas/DefectCountReport" }
+
+  # ===== Codes (metadata-service 정본) =====
+  /codes/{group}:
+    get:
+      tags: [Codes]
+      summary: 코드 그룹 조회 (정본 docs/integration/codes.md)
+      operationId: getCodes
+      parameters:
+        - in: path
+          name: group
+          required: true
+          schema:
+            type: string
+            enum: [execution_result, defect_status, defect_severity, priority, invite_status]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseBase"
+                  - properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Code" }
+
+components:
+  securitySchemes:
+    session:
+      type: apiKey
+      in: cookie
+      name: TMS_SESSION
+
+  parameters:
+    Page:
+      in: query
+      name: page
+      schema: { type: integer, default: 0, minimum: 0 }
+    Size:
+      in: query
+      name: size
+      schema: { type: integer, default: 20, minimum: 1, maximum: 100 }
+    Sort:
+      in: query
+      name: sort
+      schema: { type: string }
+      description: "예: createdAt,desc"
+    PathId:
+      in: path
+      name: id
+      required: true
+      schema: { type: string }
+    PathUserId:
+      in: path
+      name: userId
+      required: true
+      schema: { type: string }
+    PathCode:
+      in: path
+      name: code
+      required: true
+      schema: { type: string }
+      description: Project code (Company unique, 불변)
+
+  responses:
+    Empty:
+      description: 성공 (data null)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiResponseEmpty" }
+    BadRequest:
+      description: 400 — COMMON_INVALID_INPUT 등
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+    Unauthorized:
+      description: 401 — AUTH_UNAUTHORIZED, AUTH_TOKEN_EXPIRED
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+    Forbidden:
+      description: 403 — AUTH_FORBIDDEN, COMPANY_INACTIVE, TESTCASE_DELETE_NOT_AUTHOR
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+    NotFound:
+      description: 404 — *_NOT_FOUND
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+    Conflict:
+      description: 409 — *_DUPLICATE, *_INVALID_STATUS_TRANSITION, *_ALREADY_COMPLETED
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+    Gone:
+      description: 410 — *_TOKEN_EXPIRED (invite·verify·reset)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+
+  schemas:
+    # ---- 공용 ----
+    ApiResponseBase:
+      type: object
+      required: [success, code]
+      properties:
+        success: { type: boolean }
+        code: { type: string, description: "성공 시 'OK', 에러 시 ErrorCode" }
+        message: { type: string, nullable: true }
+        traceId: { type: string }
+        timestamp: { type: string, format: date-time }
+        path: { type: string }
+    ApiResponseEmpty:
+      allOf:
+        - $ref: "#/components/schemas/ApiResponseBase"
+        - properties:
+            data: { type: object, nullable: true }
+    ApiErrorResponse:
+      allOf:
+        - $ref: "#/components/schemas/ApiResponseBase"
+        - properties:
+            success: { type: boolean, enum: [false] }
+            data: { type: object, nullable: true }
+            errors:
+              type: array
+              items:
+                type: object
+                properties:
+                  field: { type: string }
+                  reason: { type: string, description: "ErrorCode 또는 i18n 키" }
+
+    PageMeta:
+      type: object
+      properties:
+        page: { type: integer }
+        size: { type: integer }
+        total: { type: integer }
+        totalPages: { type: integer }
+
+    # ---- 도메인 ----
+    AuthSession:
+      type: object
+      properties:
+        userId: { type: string }
+        companyId: { type: string }
+        roles:
+          type: array
+          items: { type: string }
+        passwordChangeRequired: { type: boolean }
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string }
+
+    SignupSelfRequest:
+      type: object
+      required: [email, password, companyName, name]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string }
+        companyName: { type: string }
+        name: { type: string }
+
+    InviteAcceptRequest:
+      type: object
+      required: [token, password, name]
+      properties:
+        token: { type: string }
+        password: { type: string }
+        name: { type: string }
+
+    Company:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        active: { type: boolean }
+        createdAt: { type: string, format: date-time }
+    CompanyCreateRequest:
+      type: object
+      required: [name, coEmail, coName]
+      properties:
+        name: { type: string }
+        coEmail: { type: string, format: email }
+        coName: { type: string }
+    CompanyUpdateRequest:
+      type: object
+      properties:
+        name: { type: string }
+    PaginatedCompanyList:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Company" }
+        page: { $ref: "#/components/schemas/PageMeta" }
+
+    Workspace:
+      type: object
+      properties:
+        id: { type: string }
+        companyId: { type: string }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        active: { type: boolean }
+        ownerId: { type: string }
+    WorkspaceCreateRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        description: { type: string }
+    WorkspaceUpdateRequest:
+      type: object
+      properties:
+        name: { type: string }
+        description: { type: string }
+    PaginatedWorkspaceList:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Workspace" }
+        page: { $ref: "#/components/schemas/PageMeta" }
+
+    UserDetail:
+      type: object
+      properties:
+        id: { type: string }
+        email: { type: string }
+        name: { type: string }
+        companyId: { type: string }
+        roles:
+          type: array
+          items: { $ref: "#/components/schemas/RoleAssignment" }
+        active: { type: boolean }
+    RoleAssignment:
+      type: object
+      properties:
+        role: { type: string, enum: [MASTER, CO, WO, PO, MEMBER, VIEWER] }
+        scopeType: { type: string, enum: [SYSTEM, COMPANY, WORKSPACE, PROJECT] }
+        scopeId: { type: string, nullable: true }
+    PaginatedUserList:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/UserDetail" }
+        page: { $ref: "#/components/schemas/PageMeta" }
+    InviteUserRequest:
+      type: object
+      required: [email, role, scopeType]
+      properties:
+        email: { type: string, format: email }
+        name: { type: string }
+        role: { type: string, enum: [CO, WO, PO, MEMBER, VIEWER] }
+        scopeType: { type: string, enum: [COMPANY, WORKSPACE, PROJECT] }
+        scopeId: { type: string, nullable: true }
+    InviteMemberRequest:
+      type: object
+      required: [userId, role]
+      properties:
+        userId: { type: string }
+        role: { type: string, enum: [WO, PO, MEMBER, VIEWER] }
+    RoleSyncRequest:
+      type: object
+      required: [assignments]
+      properties:
+        assignments:
+          type: array
+          items: { $ref: "#/components/schemas/RoleAssignment" }
+    MemberList:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/UserDetail" }
+
+    Project:
+      type: object
+      properties:
+        id: { type: string }
+        code: { type: string, description: "Company unique, 불변" }
+        workspaceId: { type: string }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        active: { type: boolean }
+    ProjectCreateRequest:
+      type: object
+      required: [name, code]
+      properties:
+        name: { type: string }
+        code: { type: string }
+        description: { type: string }
+    ProjectUpdateRequest:
+      type: object
+      properties:
+        name: { type: string }
+        description: { type: string }
+    PaginatedProjectList:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Project" }
+        page: { $ref: "#/components/schemas/PageMeta" }
+
+    Suite:
+      type: object
+      properties:
+        id: { type: string }
+        projectId: { type: string }
+        parentSuiteId: { type: string, nullable: true }
+        name: { type: string }
+        position: { type: integer }
+    SuiteTree:
+      type: array
+      items:
+        allOf:
+          - $ref: "#/components/schemas/Suite"
+          - properties:
+              children:
+                type: array
+                items: { $ref: "#/components/schemas/Suite" }
+    SuiteCreateRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        parentSuiteId: { type: string, nullable: true }
+
+    TestCase:
+      type: object
+      properties:
+        id: { type: string }
+        scope: { type: string, enum: [PROJECT, WORKSPACE, GLOBAL] }
+        scopeId: { type: string, nullable: true }
+        suiteId: { type: string, nullable: true }
+        title: { type: string }
+        priority: { type: string, enum: [HIGH, MEDIUM, LOW] }
+        steps:
+          type: array
+          items: { $ref: "#/components/schemas/TestStep" }
+        tags:
+          type: array
+          items: { type: string }
+        authorId: { type: string }
+        createdAt: { type: string, format: date-time }
+    TestStep:
+      type: object
+      properties:
+        id: { type: string }
+        order: { type: integer }
+        action: { type: string }
+        expected: { type: string }
+    TestCaseCreateRequest:
+      type: object
+      required: [title, scope]
+      properties:
+        title: { type: string }
+        scope: { type: string, enum: [PROJECT, WORKSPACE, GLOBAL] }
+        scopeId: { type: string, nullable: true }
+        suiteId: { type: string, nullable: true }
+        priority: { type: string, enum: [HIGH, MEDIUM, LOW] }
+        steps:
+          type: array
+          items:
+            type: object
+            properties:
+              action: { type: string }
+              expected: { type: string }
+        tags:
+          type: array
+          items: { type: string }
+    TestCaseUpdateRequest:
+      allOf:
+        - $ref: "#/components/schemas/TestCaseCreateRequest"
+    PaginatedTestCaseList:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/TestCase" }
+        page: { $ref: "#/components/schemas/PageMeta" }
+
+    TestPlan:
+      type: object
+      properties:
+        id: { type: string }
+        projectId: { type: string }
+        name: { type: string }
+        cycleStart: { type: string, format: date }
+        cycleEnd: { type: string, format: date }
+        testCaseIds:
+          type: array
+          items: { type: string }
+        assignments:
+          type: array
+          items:
+            type: object
+            properties:
+              testCaseId: { type: string }
+              assigneeId: { type: string }
+    TestPlanCreateRequest:
+      type: object
+      required: [name, testCaseIds]
+      properties:
+        name: { type: string }
+        cycleStart: { type: string, format: date }
+        cycleEnd: { type: string, format: date }
+        testCaseIds:
+          type: array
+          items: { type: string }
+    TestPlanUpdateRequest:
+      allOf:
+        - $ref: "#/components/schemas/TestPlanCreateRequest"
+    PaginatedTestPlanList:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/TestPlan" }
+        page: { $ref: "#/components/schemas/PageMeta" }
+
+    TestRun:
+      type: object
+      properties:
+        id: { type: string }
+        testPlanId: { type: string }
+        testCaseId: { type: string }
+        status: { type: string, enum: [IN_PROGRESS, COMPLETED] }
+        executionResult:
+          type: string
+          enum: [PASS, FAIL, BLOCK, SKIP, UNTESTED, PENDING]
+        assigneeId: { type: string }
+        startedAt: { type: string, format: date-time, nullable: true }
+        completedAt: { type: string, format: date-time, nullable: true }
+        durationMs: { type: integer, nullable: true }
+        stepResults:
+          type: array
+          items: { $ref: "#/components/schemas/StepResult" }
+    StepResult:
+      type: object
+      properties:
+        stepId: { type: string }
+        result: { type: string, enum: [PASS, FAIL, BLOCK, SKIP, UNTESTED] }
+        note: { type: string, nullable: true }
+        recordedAt: { type: string, format: date-time }
+    StepResultRequest:
+      type: object
+      required: [result]
+      properties:
+        result: { type: string, enum: [PASS, FAIL, BLOCK, SKIP, UNTESTED] }
+        note: { type: string }
+    PaginatedTestRunList:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/TestRun" }
+        page: { $ref: "#/components/schemas/PageMeta" }
+
+    Defect:
+      type: object
+      properties:
+        id: { type: string }
+        projectId: { type: string }
+        title: { type: string }
+        description: { type: string }
+        status: { type: string, enum: [OPEN, IN_PROGRESS, RESOLVED, CLOSED] }
+        severity: { type: string, enum: [CRITICAL, MAJOR, MINOR, TRIVIAL] }
+        priority: { type: string, enum: [HIGH, MEDIUM, LOW] }
+        assigneeId: { type: string, nullable: true }
+        testRunId: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+    DefectCreateRequest:
+      type: object
+      required: [title, severity]
+      properties:
+        title: { type: string }
+        description: { type: string }
+        severity: { type: string, enum: [CRITICAL, MAJOR, MINOR, TRIVIAL] }
+        priority: { type: string, enum: [HIGH, MEDIUM, LOW] }
+        assigneeId: { type: string }
+        testRunId: { type: string }
+    DefectUpdateRequest:
+      type: object
+      properties:
+        title: { type: string }
+        description: { type: string }
+        status: { type: string, enum: [OPEN, IN_PROGRESS, RESOLVED, CLOSED] }
+        severity: { type: string, enum: [CRITICAL, MAJOR, MINOR, TRIVIAL] }
+        priority: { type: string, enum: [HIGH, MEDIUM, LOW] }
+        assigneeId: { type: string }
+    PaginatedDefectList:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Defect" }
+        page: { $ref: "#/components/schemas/PageMeta" }
+
+    Attachment:
+      type: object
+      properties:
+        id: { type: string }
+        ownerType: { type: string, enum: [DEFECT, TEST_RUN, TEST_CASE] }
+        ownerId: { type: string }
+        filename: { type: string }
+        mimeType: { type: string }
+        sizeBytes: { type: integer }
+        url: { type: string }
+        uploadedAt: { type: string, format: date-time }
+
+    PassRateReport:
+      type: object
+      properties:
+        total: { type: integer }
+        passed: { type: integer }
+        failed: { type: integer }
+        blocked: { type: integer }
+        skipped: { type: integer }
+        untested: { type: integer }
+        passRate: { type: number, format: float, description: "0.0 ~ 1.0" }
+    DefectCountReport:
+      type: object
+      properties:
+        byStatus:
+          type: object
+          additionalProperties: { type: integer }
+        bySeverity:
+          type: object
+          additionalProperties: { type: integer }
+        total: { type: integer }
+
+    Code:
+      type: object
+      properties:
+        group: { type: string }
+        code: { type: string }
+        labelKo: { type: string }
+        labelEn: { type: string }
+        active: { type: boolean }
+        order: { type: integer }
+        data:
+          type: object
+          additionalProperties: true
+          description: "color 등 메타 (정본 docs/integration/codes.md)"

@@ -1,0 +1,160 @@
+/* ════════════════════════════════════════════════════════════════════
+   TextInput / Textarea / Password — components/text-input.md 정합
+   State: default / filled / hover / focused / disabled / read-only / error / success
+   Variant: input / textarea / password (눈 토글)
+   사용:
+     <div class="field">
+       <label class="field-label" for="x">라벨<span class="field-req">*</span></label>
+       <input id="x" class="field-input" type="text" placeholder="..." />
+       <p class="field-error" role="alert" hidden></p>
+       <p class="field-helper">선택 가능 형식</p>
+     </div>
+   ════════════════════════════════════════════════════════════════════ */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+.field-label {
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+  color: var(--neutral-700);
+  margin: 0;
+}
+.field-req {
+  color: var(--red-error-fig);
+  margin-left: 2px;
+}
+.field-optional {
+  color: var(--slate-500);
+  margin-left: 4px;
+  font-weight: 400;
+}
+
+.field-input,
+.field-textarea {
+  background: #fff;
+  border: 1px solid var(--slate-300);
+  border-radius: 8px;
+  padding: 9px 14px;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--neutral-900);
+  box-shadow: var(--shadow-xs);
+  outline: none;
+  transition: border-color 120ms, box-shadow 120ms;
+  width: 100%;
+}
+.field-input::placeholder,
+.field-textarea::placeholder { color: var(--slate-400); }
+
+.field-input:hover:not(:disabled):not([readonly]),
+.field-textarea:hover:not(:disabled):not([readonly]) {
+  border-color: var(--slate-400);
+}
+.field-input:focus,
+.field-textarea:focus {
+  border-color: var(--brand-500);
+  box-shadow: 0 0 0 4px var(--brand-100);
+}
+.field-input:disabled,
+.field-textarea:disabled {
+  background: var(--slate-50);
+  border-color: var(--slate-200);
+  color: var(--slate-400);
+  cursor: not-allowed;
+}
+.field-input[readonly],
+.field-textarea[readonly] {
+  background: var(--slate-50);
+  border-color: var(--slate-200);
+  color: var(--neutral-700);
+}
+
+/* Error state */
+.field-input.is-error,
+.field-textarea.is-error,
+.field-input[aria-invalid="true"],
+.field-textarea[aria-invalid="true"] {
+  border-color: var(--red-500);
+}
+.field-input.is-error:focus,
+.field-textarea.is-error:focus,
+.field-input[aria-invalid="true"]:focus,
+.field-textarea[aria-invalid="true"]:focus {
+  box-shadow: 0 0 0 4px var(--red-100);
+}
+
+/* Success state */
+.field-input.is-success,
+.field-textarea.is-success {
+  border-color: var(--green-500);
+}
+.field-input.is-success:focus,
+.field-textarea.is-success:focus {
+  box-shadow: 0 0 0 4px var(--green-50);
+}
+
+/* Textarea */
+.field-textarea {
+  resize: vertical;
+  min-height: 80px;
+}
+
+/* Sizes (text-input.md §2 — Input 사이즈) */
+.field-input.size-sm, .field-textarea.size-sm { padding: 7px 12px; font-size: 13px; line-height: 18px; border-radius: 6px; }
+.field-input.size-lg, .field-textarea.size-lg { padding: 11px 16px; font-size: 15px; line-height: 22px; }
+.field-input.size-xl, .field-textarea.size-xl { padding: 13px 18px; font-size: 16px; line-height: 24px; border-radius: 10px; }
+
+/* Helper / error / success text */
+.field-helper {
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--slate-600);
+  margin: 0;
+}
+.field-error {
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--red-600);
+  margin: 0;
+}
+.field-error[hidden] { display: none; }
+.field-success {
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--green-600);
+  margin: 0;
+}
+
+/* Leading / trailing 아이콘 (input wrapper) */
+.field-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+.field-input-wrap > .field-input { padding-left: 14px; padding-right: 14px; }
+.field-input-wrap.has-leading > .field-input { padding-left: 38px; }
+.field-input-wrap.has-trailing > .field-input { padding-right: 38px; }
+.field-input-icon {
+  position: absolute;
+  display: grid; place-items: center;
+  width: 20px; height: 20px;
+  color: var(--slate-500);
+  pointer-events: none;
+}
+.field-input-icon.leading { left: 12px; }
+.field-input-icon.trailing { right: 12px; }
+.field-input-icon button,
+.field-input-icon.is-button {
+  pointer-events: auto;
+  background: transparent; border: none; padding: 0;
+  color: inherit; cursor: pointer;
+}
+.field-input-wrap.is-error .field-input-icon { color: var(--red-500); }
+.field-input-wrap.is-success .field-input-icon { color: var(--green-500); }

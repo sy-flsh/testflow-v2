@@ -1,0 +1,127 @@
+/* ════════════════════════════════════════════════════════════════════
+   Modal (BaseModal) — components/modal.md 정합
+   State: default / filled / focused / error-label (height +26)
+   z-index: --z-modal (200)
+   Backdrop: --bg-overlay (rgba 15,23,42, 0.5)
+   사용:
+     <div class="modal-backdrop" data-modal="...">
+       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="...">
+         <div class="modal-header">
+           <h2 class="modal-title" id="...">제목</h2>
+           <button class="modal-close" aria-label="닫기">×</button>
+         </div>
+         <div class="modal-body">...</div>
+         <div class="modal-footer">
+           <button class="btn btn-tertiary btn-md">취소</button>
+           <button class="btn btn-primary btn-md">저장</button>
+         </div>
+       </div>
+     </div>
+   ════════════════════════════════════════════════════════════════════ */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--bg-overlay);
+  z-index: var(--z-modal);
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  animation: modal-bd-in 150ms ease-out;
+}
+@keyframes modal-bd-in {
+  from { background: rgba(15, 23, 42, 0); }
+}
+
+.modal {
+  background: #fff;
+  border-radius: 12px;
+  padding: 24px;
+  width: 480px;
+  max-width: 100%;
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  box-shadow: var(--shadow-xl);
+  overflow: auto;
+  animation: modal-in 150ms ease-out;
+}
+@keyframes modal-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Sizes (frame 폭) */
+.modal.size-sm  { width: 400px; }
+.modal.size-md  { width: 480px; }
+.modal.size-lg  { width: 640px; }
+.modal.size-xl  { width: 840px; }
+.modal.size-2xl { width: 1040px; }
+
+/* Header */
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+}
+.modal-title {
+  font-size: 18px;
+  line-height: 28px;
+  font-weight: 600;
+  color: var(--neutral-900);
+  margin: 0;
+}
+.modal-close {
+  width: 24px;
+  height: 24px;
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--neutral-700);
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.modal-close:hover { background: var(--neutral-100); }
+.modal-close svg { width: 24px; height: 24px; }
+
+/* Body */
+.modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+}
+
+/* Footer (button pair) */
+.modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  width: 100%;
+}
+.modal-footer.is-start { justify-content: flex-start; }
+.modal-footer.is-between { justify-content: space-between; }
+
+/* Mobile bottom sheet (≤767px) */
+@media (max-width: 767px) {
+  .modal-backdrop {
+    padding: 0;
+    align-items: flex-end;
+  }
+  .modal {
+    width: 100%;
+    max-height: 90vh;
+    border-radius: 16px 16px 0 0;
+    animation: modal-sheet-in 200ms ease-out;
+  }
+  @keyframes modal-sheet-in {
+    from { transform: translateY(100%); }
+    to { transform: translateY(0); }
+  }
+}

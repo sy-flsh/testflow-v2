@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TMS — 워크스페이스 대시보드 (S-WS-DASHBOARD)</title>
+  <link rel="preconnect" href="https://rsms.me/" />
+  <link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
+  <link rel="stylesheet" href="_shell/shell.css" />
+  <style>
+    /* 페이지 전용 스타일 — 콘텐츠 영역만 */
+    .content-placeholder {
+      flex: 1 0 0;
+      display: grid;
+      place-items: center;
+      color: var(--grey-44);
+      font-size: 12px;
+      padding: 24px;
+      text-align: center;
+    }
+    .content-placeholder small {
+      display: block;
+      margin-top: 4px;
+      color: var(--neutral-500);
+    }
+  </style>
+</head>
+<body>
+  <!-- ─── AppShell (Header + Sidebar — _shell/* 에서 inject) ─── -->
+  <div id="app-shell"
+       data-top-nav="workspace"
+       data-active-menu="ws-dashboard">
+    <header class="app-header topbar"></header>
+    <div class="app-shell">
+      <aside class="app-sidebar sidebar" aria-label="워크스페이스 설정 네비게이션"></aside>
+
+      <!-- ─── Content Area (콘텐츠 노드: TBD-S-WS-DASHBOARD) ─── -->
+      <main class="main" aria-label="대시보드">
+        <!-- Figma 콘텐츠 노드 매핑 지점. Header/Sidebar는 _shell/* 공통. -->
+        <div class="content-placeholder" role="status">
+          <span>콘텐츠 영역 (페이지 노드 작성 대기)</span>
+          <small>figma-master.md §1: S-WS-DASHBOARD `TBD-S-WS-DASHBOARD` — Shell `402-3089` 합성</small>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <div class="screen-meta">
+    S-WS-DASHBOARD · 페이지 · `/workspaces` · Shell=402-3089 · 콘텐츠=TBD
+  </div>
+
+  <script src="_shell/shell.js"></script>
+</body>
+</html>

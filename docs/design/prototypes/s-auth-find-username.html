@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TMS — 아이디 찾기 (S-AUTH-FIND-USERNAME)</title>
+  <link rel="preconnect" href="https://rsms.me/" />
+  <link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
+  <link rel="stylesheet" href="_shell/shell.css" />
+  <link rel="stylesheet" href="_shell/components/button.css" />
+  <link rel="stylesheet" href="_shell/components/text-input.css" />
+  <style>
+    /* ════════════════════════════════════════════════════════
+       S-AUTH-FIND-USERNAME — 새 화면 (Shell 미사용)
+       Figma node-id=295-7469 (요청)
+       표현 패턴 락: 새 화면 / 라우트 `/find-username`
+       탭: 아이디 찾기 (활성) | 비밀번호 찾기 (S-AUTH-FORGOT)
+       제출 성공 시 → `s-auth-find-username-result.html` 별도 페이지로 이동 (Figma 342:13056)
+       성공·실패(미가입) 모두 동일 결과 페이지로 이동 (존재 은닉)
+       ════════════════════════════════════════════════════════ */
+
+    .auth-main {
+      min-height: calc(100vh - var(--header-h));
+      display: flex; align-items: flex-start; justify-content: center;
+      padding: 80px 24px 48px;
+    }
+    .auth-card {
+      width: 100%; max-width: 360px;
+      display: flex; flex-direction: column; gap: 24px;
+    }
+    .auth-brand {
+      display: flex; flex-direction: column; align-items: center; gap: 16px;
+      text-align: center;
+    }
+    .auth-brand-mark {
+      width: 56px; height: 56px; border-radius: 12px;
+      background: transparent; display: grid; place-items: center;
+      overflow: hidden;
+    }
+    .auth-brand-mark svg { width: 36px; height: 36px; color: var(--brand-600); }
+    .auth-brand-mark > img { width: 100%; height: 100%; object-fit: contain; display: block; }
+    .auth-title {
+      font-size: 22px; line-height: 30px; font-weight: 700;
+      letter-spacing: -0.2px; color: var(--bunker); margin: 0;
+    }
+    .auth-subtitle {
+      font-size: 13px; line-height: 20px; color: var(--grey-44);
+      margin: 0; text-align: center;
+    }
+
+    /* Tab switcher (Figma 정합) */
+    .auth-tabs {
+      display: grid; grid-template-columns: 1fr 1fr;
+      background: var(--neutral-100);
+      border-radius: 8px;
+      padding: 4px;
+      gap: 4px;
+    }
+    .auth-tab {
+      appearance: none; background: transparent; border: none;
+      padding: 8px 12px; border-radius: 6px;
+      font-size: 13.5px; font-weight: 500;
+      color: var(--neutral-600); cursor: pointer;
+      text-align: center;
+      text-decoration: none;
+      transition: background 120ms, color 120ms, box-shadow 120ms;
+    }
+    .auth-tab:hover { color: var(--bunker); }
+    .auth-tab[aria-selected="true"] {
+      background: #fff; color: var(--bunker); font-weight: 600;
+      box-shadow: var(--shadow-xs);
+    }
+
+    .auth-form { display: flex; flex-direction: column; gap: 16px; }
+
+    .auth-footer {
+      text-align: center;
+      font-size: 13px; line-height: 18px; color: var(--grey-44);
+    }
+    .auth-footer .btn-link { margin-left: 4px; font-size: 13px; }
+
+    .screen-meta {
+      position: fixed; bottom: 12px; left: 12px;
+      font-size: 11px; line-height: 16px;
+      color: var(--neutral-500);
+      background: #fff; border: 1px solid var(--porcelain);
+      padding: 4px 8px; border-radius: 6px;
+      z-index: 300;
+    }
+
+    @media (max-width: 480px) {
+      .auth-main { padding: 48px 16px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="pub-shell">
+    <header class="pub-header"></header>
+  </div>
+
+  <main class="auth-main" aria-labelledby="auth-title">
+    <div class="auth-card">
+
+      <div class="auth-brand">
+        <div class="auth-brand-mark" aria-hidden="true">
+          <img src="_shell/logo.png" alt="" />
+        </div>
+        <h1 class="auth-title" id="auth-title">아이디 찾기</h1>
+        <p class="auth-subtitle" id="auth-subtitle">가입시 등록한 이메일 정보를 입력해 주세요.</p>
+      </div>
+
+      <div class="auth-tabs" role="tablist" aria-label="계정 정보 찾기">
+        <button class="auth-tab" type="button" role="tab"
+                id="tab-find-id" aria-selected="true" aria-controls="form-find-id">아이디 찾기</button>
+        <a class="auth-tab" role="tab" aria-selected="false"
+           href="s-auth-forgot-password.html">비밀번호 찾기</a>
+      </div>
+
+      <!-- ─── Form: 요청 state ─── -->
+      <form class="auth-form" id="form-find-id" role="tabpanel" aria-labelledby="tab-find-id" novalidate>
+        <div class="field">
+          <label class="field-label" for="email">이메일</label>
+          <input class="field-input"
+                 type="email"
+                 id="email"
+                 name="email"
+                 placeholder="이메일을 입력해주세요"
+                 autocomplete="email"
+                 required
+                 aria-describedby="email-error" />
+          <p class="field-error" id="email-error" role="alert" hidden></p>
+        </div>
+        <button class="btn btn-primary btn-lg btn-block" type="submit" id="btn-submit">아이디 확인</button>
+      </form>
+
+      <footer class="auth-footer">
+        계정이 없으신가요?
+        <a class="btn btn-link" href="s-auth-signup-co.html">가입하기</a>
+      </footer>
+
+    </div>
+  </main>
+
+  <div class="screen-meta">S-AUTH-FIND-USERNAME · 새 화면 · `/find-username` · node-id=295-7469 (요청)</div>
+
+  <script src="_shell/shell.js"></script>
+  <script>
+    /* ════════════════════════════════════════════════════════
+       Interaction:
+       - 이메일 입력 → 형식 valid 시 CTA 활성
+       - submit → POST /api/v1/auth/find-username (가정)
+       - 성공·실패(미가입 이메일) 모두 동일 결과 페이지로 이동 (존재 은닉)
+         · `s-auth-find-username-result.html?u=<masked>` (Figma 342:13056)
+         · 실제 구현 시 `u` 는 URL 쿼리 아닌 세션/임시 토큰 권장 (URL 노출 시 누설 위험)
+       ════════════════════════════════════════════════════════ */
+    (function () {
+      const form       = document.getElementById('form-find-id');
+      const emailInput = document.getElementById('email');
+      const emailError = document.getElementById('email-error');
+      const submitBtn  = document.getElementById('btn-submit');
+
+      const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+      function setError(msg) {
+        emailInput.classList.add('is-error');
+        emailInput.setAttribute('aria-invalid', 'true');
+        emailError.textContent = msg;
+        emailError.hidden = false;
+      }
+      function clearError() {
+        emailInput.classList.remove('is-error');
+        emailInput.removeAttribute('aria-invalid');
+        emailError.textContent = '';
+        emailError.hidden = true;
+      }
+
+      emailInput.addEventListener('input', function () {
+        const v = (emailInput.value || '').trim();
+        if (emailInput.classList.contains('is-error') && EMAIL_RE.test(v)) clearError();
+      });
+
+      function maskUsername(s) {
+        if (!s) return '****';
+        if (s.length <= 3) return s[0] + '*'.repeat(Math.max(1, s.length - 1));
+        return s.slice(0, 3) + '*'.repeat(Math.max(2, s.length - 3));
+      }
+
+      form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        const email = (emailInput.value || '').trim();
+        if (!EMAIL_RE.test(email)) {
+          setError('올바른 이메일 형식이 아닙니다.');
+          emailInput.focus();
+          return;
+        }
+        clearError();
+        submitBtn.disabled = true;
+        submitBtn.textContent = '확인 중…';
+
+        // 데모: POST /api/v1/auth/find-username
+        // 성공·실패(미가입) 모두 동일 결과 페이지로 이동 (존재 은닉, AC-17 정합)
+        setTimeout(function () {
+          const demoUsername = 'mjiwhan';
+          const demoJoined = '2026-06';   // YYYY-MM. 결과 페이지에서 "2026년 6월" 포맷
+          const masked = maskUsername(demoUsername);
+          const qs = new URLSearchParams({ u: masked, joined: demoJoined });
+          window.location.href = 's-auth-find-username-result.html?' + qs.toString();
+        }, 400);
+      });
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,211 @@
+/* ════════════════════════════════════════════════════════════════════
+   Button — components/button.md 정합
+   Variant: Primary / Secondary / Tertiary / Ghost / Link / Destructive
+   Size: sm / md(기본) / lg / xl
+   State: default / hover / pressed / focused / disabled / loading
+   사용:
+     <button class="btn btn-primary btn-md">저장</button>
+     <button class="btn btn-tertiary btn-md">취소</button>
+     <a class="btn btn-link">상세 보기</a>
+   ════════════════════════════════════════════════════════════════════ */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font-family: inherit;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: var(--shadow-xs);
+  transition: background 120ms, border-color 120ms, color 120ms, box-shadow 120ms;
+  user-select: none;
+}
+.btn:focus-visible {
+  outline: 2px solid var(--brand-500);
+  outline-offset: 2px;
+}
+.btn:disabled,
+.btn[aria-disabled="true"] {
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.btn[aria-busy="true"] {
+  cursor: progress;
+}
+.btn > svg { width: 1em; height: 1em; flex-shrink: 0; }
+
+/* ─── Variants ─── */
+
+.btn-primary {
+  background: var(--brand-600);
+  border-color: var(--brand-600);
+  color: #fff;
+}
+.btn-primary:hover:not(:disabled):not([aria-disabled="true"]) {
+  background: var(--brand-700);
+  border-color: var(--brand-700);
+}
+.btn-primary:active:not(:disabled):not([aria-disabled="true"]) {
+  background: var(--brand-800);
+  border-color: var(--brand-800);
+}
+.btn-primary:disabled,
+.btn-primary[aria-disabled="true"] {
+  background: #E9D7FE;
+  border-color: #E9D7FE;
+  color: #fff;
+}
+
+.btn-secondary {
+  background: var(--brand-50);
+  border-color: var(--brand-50);
+  color: var(--brand-700);
+}
+.btn-secondary:hover:not(:disabled) {
+  background: var(--brand-100);
+  border-color: var(--brand-100);
+}
+.btn-secondary:active:not(:disabled) {
+  background: #E9D7FE;
+  border-color: #E9D7FE;
+  color: var(--brand-800);
+}
+.btn-secondary:disabled {
+  background: var(--neutral-100);
+  border-color: var(--neutral-100);
+  color: var(--slate-400);
+}
+
+.btn-tertiary {
+  background: #fff;
+  border-color: var(--slate-300);
+  color: var(--neutral-700);
+}
+.btn-tertiary:hover:not(:disabled) {
+  border-color: var(--slate-400);
+  background: var(--neutral-50);
+}
+.btn-tertiary:active:not(:disabled) {
+  background: var(--neutral-100);
+}
+.btn-tertiary:disabled {
+  background: #fff;
+  border-color: var(--slate-200);
+  color: var(--slate-400);
+}
+
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--brand-700);
+  box-shadow: none;
+}
+.btn-ghost:hover:not(:disabled) { background: var(--brand-50); }
+.btn-ghost:active:not(:disabled) { background: var(--brand-100); color: var(--brand-800); }
+.btn-ghost:disabled { color: var(--slate-400); }
+
+.btn-link {
+  background: transparent;
+  border-color: transparent;
+  color: var(--brand-700);
+  box-shadow: none;
+  padding: 0;
+  height: auto;
+  text-decoration: none;
+}
+.btn-link:hover:not(:disabled) { text-decoration: underline; color: var(--brand-800); }
+.btn-link:disabled { color: var(--slate-400); }
+
+/* Text — 투명 배경 + 중성 텍스트 (헤더 nav 등). ghost(brand 텍스트) 와 구분. */
+.btn-text {
+  background: transparent;
+  border-color: transparent;
+  color: var(--bunker);
+  box-shadow: none;
+}
+.btn-text:hover:not(:disabled) { background: var(--neutral-50); }
+.btn-text:active:not(:disabled) { background: var(--neutral-100); }
+.btn-text:disabled { color: var(--slate-400); }
+
+.btn-destructive {
+  background: var(--red-600);
+  border-color: var(--red-600);
+  color: #fff;
+}
+.btn-destructive:hover:not(:disabled) {
+  background: #B91C1C;
+  border-color: #B91C1C;
+}
+.btn-destructive:active:not(:disabled) {
+  background: #991B1B;
+  border-color: #991B1B;
+}
+.btn-destructive:disabled {
+  background: #FECACA;
+  border-color: #FECACA;
+}
+
+/* ─── Sizes (Variant 의 padding/height 제어) ─── */
+
+.btn-sm {
+  height: 34px;
+  padding: 0 12px;
+  font-size: 14px;
+  line-height: 20px;
+  border-radius: 6px;
+}
+.btn-md { /* 기본 */
+  height: 38px;
+  padding: 0 14px;
+  font-size: 14px;
+  line-height: 20px;
+  border-radius: 8px;
+}
+.btn-lg {
+  height: 42px;
+  padding: 0 16px;
+  font-size: 16px;
+  line-height: 24px;
+  border-radius: 8px;
+}
+.btn-xl {
+  height: 44px;
+  padding: 0 18px;
+  font-size: 16px;
+  line-height: 24px;
+  border-radius: 10px;
+}
+
+/* Link variant: size 의 height/padding 무시 (인라인 텍스트) */
+.btn-link.btn-sm,
+.btn-link.btn-md,
+.btn-link.btn-lg,
+.btn-link.btn-xl {
+  height: auto;
+  padding: 0;
+  border-radius: 0;
+}
+
+/* ─── Full width ─── */
+.btn-block { width: 100%; }
+
+/* ─── Icon button ─── */
+.btn-icon {
+  width: 38px; padding: 0;
+}
+.btn-icon.btn-sm { width: 34px; }
+.btn-icon.btn-lg { width: 42px; }
+.btn-icon.btn-xl { width: 44px; }
+.btn-icon > svg { width: 18px; height: 18px; }
+
+/* ─── 페어 패턴 (components/button.md §5) ─── */
+.btn-pair {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}

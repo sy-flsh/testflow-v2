@@ -1,0 +1,71 @@
+/* ════════════════════════════════════════════════════════════════════
+   Select (native trigger) — components/select.md 정합
+   Trigger State: default(empty/filled) / hover / focused / disabled / error
+   Note: 커스텀 dropdown panel(Combobox/Multi-select)은 별도 컴포넌트.
+         본 CSS는 native <select> 의 trigger 시각만 정합.
+   사용:
+     <div class="field">
+       <label class="field-label" for="x">역할<span class="field-req">*</span></label>
+       <select id="x" class="field-select">
+         <option value="" disabled selected>선택해주세요</option>
+         ...
+       </select>
+       <p class="field-error" hidden></p>
+     </div>
+   ════════════════════════════════════════════════════════════════════ */
+
+.field-select {
+  background: #fff;
+  border: 1px solid var(--slate-300);
+  border-radius: 8px;
+  padding: 9px 36px 9px 14px;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--neutral-900);
+  box-shadow: var(--shadow-xs);
+  outline: none;
+  transition: border-color 120ms, box-shadow 120ms;
+  width: 100%;
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' fill='none' stroke='%236A6F76' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='4,6 8,10 12,6'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+}
+.field-select:hover:not(:disabled) {
+  border-color: var(--slate-400);
+}
+.field-select:focus {
+  border-color: var(--brand-500);
+  box-shadow: 0 0 0 4px var(--brand-100);
+}
+.field-select:disabled {
+  background-color: var(--slate-50);
+  border-color: var(--slate-200);
+  color: var(--slate-400);
+  cursor: not-allowed;
+}
+
+/* Empty / placeholder option 색상 (option value="" 선택 시) */
+.field-select:invalid,
+.field-select:has(option[value=""]:checked) {
+  color: var(--slate-400);
+}
+.field-select option {
+  color: var(--neutral-900);
+}
+
+/* Error */
+.field-select.is-error,
+.field-select[aria-invalid="true"] {
+  border-color: var(--red-500);
+}
+.field-select.is-error:focus,
+.field-select[aria-invalid="true"]:focus {
+  box-shadow: 0 0 0 4px var(--red-100);
+}
+
+/* Sizes */
+.field-select.size-sm { padding: 7px 32px 7px 12px; font-size: 13px; line-height: 18px; border-radius: 6px; }
+.field-select.size-lg { padding: 11px 38px 11px 16px; font-size: 15px; line-height: 22px; }

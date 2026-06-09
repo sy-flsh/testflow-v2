@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TMS — 가입하기 (S-AUTH-SIGNUP-CO)</title>
+  <link rel="preconnect" href="https://rsms.me/" />
+  <link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
+  <link rel="stylesheet" href="_shell/shell.css" />
+  <link rel="stylesheet" href="_shell/components/button.css" />
+  <link rel="stylesheet" href="_shell/components/text-input.css" />
+  <link rel="stylesheet" href="_shell/components/checkbox.css" />
+  <link rel="stylesheet" href="_shell/components/select.css" />
+  <style>
+    /* S-AUTH-SIGNUP-CO — 셀프 회원가입 (신규 Company + 첫 CO). Figma 342:12836 정합
+       ⚠ permissions.md §1·★1: 셀프 가입 = CO 자동. Figma "역할*" select 는 정합 미확정.
+          본 목업은 Figma 그대로. PM 확정 시 정정. */
+
+    .auth-main {
+      min-height: calc(100vh - var(--header-h));
+      display: flex; align-items: flex-start; justify-content: center;
+      padding: 64px 24px 48px;
+    }
+    .auth-card {
+      width: 100%; max-width: 360px;
+      display: flex; flex-direction: column; gap: 28px;
+    }
+    .auth-brand {
+      display: flex; flex-direction: column; align-items: center; gap: 14px;
+      text-align: center;
+    }
+    .auth-brand-mark {
+      width: 56px; height: 56px; border-radius: 12px;
+      background: transparent; display: grid; place-items: center;
+      overflow: hidden;
+    }
+    .auth-brand-mark svg { width: 36px; height: 36px; color: var(--brand-600); }
+    .auth-brand-mark > img { width: 100%; height: 100%; object-fit: contain; display: block; }
+    .auth-title {
+      font-size: 22px; line-height: 30px; font-weight: 700;
+      letter-spacing: -0.2px; color: var(--bunker); margin: 0;
+    }
+    .auth-subtitle {
+      font-size: 13px; line-height: 20px; color: var(--grey-44);
+      margin: 0; text-align: center;
+    }
+
+    .auth-form { display: flex; flex-direction: column; gap: 14px; }
+    .auth-terms { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+    .auth-footer {
+      text-align: center;
+      font-size: 13px; line-height: 18px; color: var(--grey-44);
+    }
+    .auth-footer .btn-link { margin-left: 4px; font-size: 13px; }
+
+    @media (max-width: 480px) {
+      .auth-main { padding: 32px 16px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="pub-shell" data-pub-active="signup">
+    <header class="pub-header"></header>
+  </div>
+
+  <main class="auth-main" aria-labelledby="auth-title">
+    <div class="auth-card">
+
+      <div class="auth-brand">
+        <div class="auth-brand-mark" aria-hidden="true">
+          <img src="_shell/logo.png" alt="" />
+        </div>
+        <h1 class="auth-title" id="auth-title">계정 만들기</h1>
+        <p class="auth-subtitle">30일 무료 체험을 시작하세요.(미정)</p>
+      </div>
+
+      <form class="auth-form" id="signup-form" novalidate>
+
+        <div class="field">
+          <label class="field-label" for="su-name">성명<span class="field-req">*</span></label>
+          <input id="su-name" class="field-input" type="text" placeholder="성명을 입력해주세요"
+                 aria-required="true" aria-describedby="su-name-error" autocomplete="name" maxlength="80" />
+          <p class="field-error" id="su-name-error" role="alert" hidden></p>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="su-email">이메일<span class="field-req">*</span></label>
+          <input id="su-email" class="field-input" type="email" placeholder="이메일을 입력해주세요"
+                 aria-required="true" aria-describedby="su-email-error" autocomplete="email" />
+          <p class="field-error" id="su-email-error" role="alert" hidden></p>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="su-id">아이디<span class="field-req">*</span></label>
+          <input id="su-id" class="field-input" type="text" placeholder="아이디를 입력해주세요"
+                 aria-required="true" aria-describedby="su-id-error" autocomplete="username" />
+          <p class="field-error" id="su-id-error" role="alert" hidden></p>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="su-pw">비밀번호<span class="field-req">*</span></label>
+          <input id="su-pw" class="field-input" type="password" placeholder="비밀번호를 입력해주세요"
+                 aria-required="true" aria-describedby="su-pw-error" autocomplete="new-password" />
+          <p class="field-error" id="su-pw-error" role="alert" hidden></p>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="su-pw2">비밀번호 확인<span class="field-req">*</span></label>
+          <input id="su-pw2" class="field-input" type="password" placeholder="비밀번호를 입력해주세요"
+                 aria-required="true" aria-describedby="su-pw2-error" autocomplete="new-password" />
+          <p class="field-error" id="su-pw2-error" role="alert" hidden></p>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="su-role">역할<span class="field-req">*</span></label>
+          <select id="su-role" class="field-select" required aria-required="true" aria-describedby="su-role-error">
+            <option value="" disabled selected>역할을 선택해주세요</option>
+            <option value="CO">기업 관리자 (CO)</option>
+            <option value="WO">워크스페이스 오너 (WO)</option>
+            <option value="PO">프로젝트 오너 (PO)</option>
+            <option value="Member">멤버</option>
+          </select>
+          <p class="field-error" id="su-role-error" role="alert" hidden></p>
+        </div>
+
+        <div class="auth-terms">
+          <label class="cbx">
+            <input type="checkbox" class="cbx-input" id="su-tos" />
+            <span class="cbx-box" aria-hidden="true"></span>
+            <span class="cbx-label">서비스 약관 동의</span>
+          </label>
+          <label class="cbx">
+            <input type="checkbox" class="cbx-input" id="su-privacy" />
+            <span class="cbx-box" aria-hidden="true"></span>
+            <span class="cbx-label">개인정보 동의 약관</span>
+          </label>
+          <p class="field-error" id="su-terms-error" role="alert" hidden></p>
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-lg btn-block" id="su-submit">가입</button>
+      </form>
+
+      <p class="auth-footer">
+        이미 계정이 있으신가요?
+        <a href="s-auth-login.html" class="btn btn-link">로그인</a>
+      </p>
+
+    </div>
+  </main>
+
+  <div class="screen-meta">S-AUTH-SIGNUP-CO · 새 화면 · `/signup` · node-id=342-12836</div>
+
+  <script src="_shell/shell.js"></script>
+  <script>
+    /* S-AUTH-SIGNUP-CO — 입력 검증 + 데모 submit
+       i18n 키 정본: validation.* (text-input.md §7, design-system §6)
+       검증 타이밍: onSubmit 전체 + onChange 에러 해제 (design-system §6.2)
+
+       ⚠ 정합 이슈 — permissions.md §1·★1 (셀프 가입 = CO 자동) vs Figma 342:12836 (role select 노출).
+          본 목업 Figma 그대로 유지. PM 확정 후 정정.
+    */
+    (function () {
+      const I18N = {
+        'validation.name.required':            '성명을 입력해주세요.',
+        'validation.email.required':           '이메일을 입력해주세요.',
+        'validation.email.format':             '이메일 형식이 올바르지 않습니다.',
+        'validation.username.required':        '아이디를 입력해주세요.',
+        'validation.username.format':          '아이디는 4자 이상이어야 합니다.',
+        'validation.password.required':        '비밀번호를 입력해주세요.',
+        'validation.password.format':          '비밀번호는 8자 이상이어야 합니다.',
+        'validation.passwordConfirm.required': '비밀번호 확인을 입력해주세요.',
+        'validation.passwordConfirm.mismatch': '비밀번호가 일치하지 않습니다.',
+        'validation.role.required':            '역할을 선택해주세요.',
+        'validation.terms.required':           '약관에 모두 동의해주세요.',
+      };
+      const t = k => I18N[k] || k;
+
+      const form    = document.getElementById('signup-form');
+      const els = {
+        name:    document.getElementById('su-name'),
+        email:   document.getElementById('su-email'),
+        id:      document.getElementById('su-id'),
+        pw:      document.getElementById('su-pw'),
+        pw2:     document.getElementById('su-pw2'),
+        role:    document.getElementById('su-role'),
+        tos:     document.getElementById('su-tos'),
+        privacy: document.getElementById('su-privacy'),
+      };
+      const errs = {
+        name:  document.getElementById('su-name-error'),
+        email: document.getElementById('su-email-error'),
+        id:    document.getElementById('su-id-error'),
+        pw:    document.getElementById('su-pw-error'),
+        pw2:   document.getElementById('su-pw2-error'),
+        role:  document.getElementById('su-role-error'),
+        terms: document.getElementById('su-terms-error'),
+      };
+
+      function setErr(input, errEl, key) {
+        if (key) {
+          input.classList.add('is-error');
+          input.setAttribute('aria-invalid', 'true');
+          errEl.textContent = t(key);
+          errEl.hidden = false;
+          errEl.setAttribute('data-i18n-key', key);
+        } else {
+          input.classList.remove('is-error');
+          input.removeAttribute('aria-invalid');
+          errEl.textContent = '';
+          errEl.hidden = true;
+          errEl.removeAttribute('data-i18n-key');
+        }
+      }
+
+      Object.entries(els).forEach(([k, el]) => {
+        if (el.type === 'checkbox') return;
+        el.addEventListener('input', () => {
+          if (el.classList.contains('is-error')) {
+            const key = validateField(k);
+            setErr(el, errs[k], key);
+          }
+        });
+        if (el.tagName === 'SELECT') {
+          el.addEventListener('change', () => {
+            if (el.classList.contains('is-error')) setErr(el, errs[k], null);
+          });
+        }
+      });
+
+      function validateField(k) {
+        const v = (els[k].value || '').trim();
+        switch (k) {
+          case 'name':  return v ? null : 'validation.name.required';
+          case 'email':
+            if (!v) return 'validation.email.required';
+            return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) ? null : 'validation.email.format';
+          case 'id':
+            if (!v) return 'validation.username.required';
+            return v.length >= 4 ? null : 'validation.username.format';
+          case 'pw':
+            if (!v) return 'validation.password.required';
+            return v.length >= 8 ? null : 'validation.password.format';
+          case 'pw2':
+            if (!v) return 'validation.passwordConfirm.required';
+            return v === els.pw.value ? null : 'validation.passwordConfirm.mismatch';
+          case 'role':
+            return v ? null : 'validation.role.required';
+        }
+        return null;
+      }
+
+      form.addEventListener('submit', e => {
+        e.preventDefault();
+        let firstErr = null;
+        ['name','email','id','pw','pw2','role'].forEach(k => {
+          const key = validateField(k);
+          setErr(els[k], errs[k], key);
+          if (key && !firstErr) firstErr = els[k];
+        });
+        const termsOk = els.tos.checked && els.privacy.checked;
+        if (!termsOk) {
+          errs.terms.textContent = t('validation.terms.required');
+          errs.terms.hidden = false;
+          errs.terms.setAttribute('data-i18n-key', 'validation.terms.required');
+          if (!firstErr) firstErr = els.tos;
+        } else {
+          errs.terms.hidden = true;
+          errs.terms.textContent = '';
+          errs.terms.removeAttribute('data-i18n-key');
+        }
+        if (firstErr) { firstErr.focus(); return; }
+
+        alert('데모 가입 성공 → 실제:\n' +
+              '1) POST /auth/signup (Company 자동 생성 + 첫 CO 부여, ★1)\n' +
+              '2) 이메일 인증 메일 발송 → /verify-email?token=...\n' +
+              '3) 인증 완료 후 /login 진입');
+      });
+
+      setTimeout(() => els.name.focus(), 100);
+    })();
+  </script>
+</body>
+</html>

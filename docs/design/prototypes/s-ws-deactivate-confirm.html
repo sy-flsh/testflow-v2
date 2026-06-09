@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TMS — 워크스페이스 비활성화 확인 (S-WS-DEACTIVATE-CONFIRM)</title>
+  <link rel="preconnect" href="https://rsms.me/" />
+  <link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
+  <link rel="stylesheet" href="_shell/shell.css" />
+  <link rel="stylesheet" href="_shell/components/button.css" />
+  <link rel="stylesheet" href="_shell/components/modal.css" />
+  <link rel="stylesheet" href="_shell/components/confirm-dialog.css" />
+  <link rel="stylesheet" href="_shell/components/page-header.css" />
+  <style>
+    /* ════════════════════════════════════════════════════════
+       페이지 전용: 위험 confirm 다이얼로그 (Figma node 342-20308)
+       표현 패턴 락: 모달 / URL `?modal=deactivate-ws&id=...`
+       성공 처리 시: tmsToast(success) + tmsNotify(success)
+
+       마이그 (2026-06-09):
+       - modal-backdrop/modal-confirm = components/modal.css + confirm-dialog.css
+       - page-header (breadcrumb/title/desc) = components/page-header.css (.is-settings)
+       - 페이지 전용 = settings-shell · settings-card · btn-danger-outline
+       ════════════════════════════════════════════════════════ */
+
+    /* ─── Background placeholder (S-WS-SETTINGS 컨텍스트) ─── */
+    .settings-shell { display: flex; flex-direction: column; gap: 24px; padding-bottom: 24px; }
+    .settings-shell > .settings-card-list { padding: 0 24px; display: flex; flex-direction: column; gap: 16px; }
+    .settings-card {
+      background: #fff; border: 1px solid var(--porcelain); border-radius: 12px;
+      padding: 20px 24px;
+      display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    }
+    .settings-card-text { display: flex; flex-direction: column; gap: 4px; }
+    .settings-card-title { font-size: 15px; font-weight: 600; color: var(--bunker); margin: 0; }
+    .settings-card-desc { font-size: 13px; color: var(--neutral-600); margin: 0; }
+    .btn-danger-outline {
+      display: inline-flex; align-items: center; justify-content: center;
+      padding: 8px 14px; border-radius: 8px;
+      background: #fff; border: 1px solid var(--red-500); color: var(--red-600);
+      font-size: 14px; font-weight: 600;
+      cursor: pointer; box-shadow: var(--shadow-xs);
+    }
+    .btn-danger-outline:hover { background: var(--red-50); }
+
+    .screen-meta { z-index: var(--z-toast); }
+
+    @media (max-width: 767px) {
+      .settings-card { flex-direction: column; align-items: flex-start; }
+    }
+  </style>
+</head>
+<body>
+  <!-- Background: S-WS-SETTINGS 컨텍스트 placeholder -->
+  <div id="app-shell"
+       data-mode="workspace"
+       data-workspace-name="R&amp;D 개발팀"
+       data-top-nav="workspace"
+       data-active-menu="ws-dashboard"
+       data-user-initial="이"
+       data-user-name="이주환">
+    <header class="app-header topbar"></header>
+    <div class="app-shell">
+      <aside class="app-sidebar sidebar" aria-hidden="true"></aside>
+      <main class="main" aria-hidden="true">
+        <div class="settings-shell">
+          <header class="page-header is-settings">
+            <p class="page-header-breadcrumb">워크스페이스 설정 · R&amp;D 개발팀</p>
+            <h1 class="page-header-title">워크스페이스 설정</h1>
+            <p class="page-header-desc">워크스페이스 정보 수정·소유권 이관·비활성화</p>
+          </header>
+          <div class="settings-card-list">
+            <div class="settings-card">
+              <div class="settings-card-text">
+                <p class="settings-card-title">워크스페이스 비활성화</p>
+                <p class="settings-card-desc">비활성화 시 멤버 접근이 차단됩니다. 추후 활성화 가능.</p>
+              </div>
+              <button class="btn-danger-outline" type="button" id="btn-open-deactivate">비활성화</button>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════════
+       Modal: S-WS-DEACTIVATE-CONFIRM
+       Figma node-id=342-20308
+       표현 패턴 락: 모달 / URL `?modal=deactivate-ws&id=...`
+       Esc·외부 클릭·취소 → 닫기
+       비활성화 클릭 → API 가정(success) → tmsToast + tmsNotify → 모달 닫기
+       마크업: components/confirm-dialog.css → .modal-confirm.tone-danger
+       ════════════════════════════════════════════════════════ -->
+  <div class="modal-backdrop" id="modal-deactivate-ws" data-modal="deactivate-ws" hidden>
+    <div class="modal-confirm tone-danger"
+         role="alertdialog"
+         aria-modal="true"
+         aria-labelledby="modal-deactivate-title"
+         aria-describedby="modal-deactivate-desc">
+      <div class="modal-confirm-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="9"/>
+          <line x1="12" y1="8" x2="12" y2="13"/>
+          <line x1="12" y1="16.5" x2="12" y2="16.5"/>
+        </svg>
+      </div>
+      <div class="modal-confirm-text">
+        <h2 class="modal-confirm-title" id="modal-deactivate-title">워크스페이스 비활성화</h2>
+        <p class="modal-confirm-desc" id="modal-deactivate-desc">
+          워크스페이스를 비활성화하시겠습니까? 이 작업은 되돌릴 수 없습니다.
+        </p>
+      </div>
+      <div class="modal-confirm-actions">
+        <button class="btn btn-tertiary btn-md" type="button" id="btn-deactivate-cancel">취소</button>
+        <button class="btn btn-destructive btn-md" type="button" id="btn-deactivate-confirm">비활성화</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="screen-meta">S-WS-DEACTIVATE-CONFIRM · 모달 · `?modal=deactivate-ws&amp;id=...` · node-id=342-20308 · alert node-id=342-20324</div>
+
+  <script src="_shell/shell.js"></script>
+  <script>
+    /* ════════════════════════════════════════════════════════
+       Interaction:
+       - 진입점 버튼(.btn-danger-outline) → 모달 open
+       - Esc / Backdrop / 취소 → 모달 close
+       - 비활성화 클릭 → (success 가정)
+         · window.tmsToast({variant:'success', title, desc})
+         · window.tmsNotify({type:'success', title, desc})
+         · 모달 닫기
+       - 추후 알림 메뉴 조회: 헤더 종 버튼 → 동일 항목 리스트
+       ════════════════════════════════════════════════════════ */
+    (function () {
+      const WS_NAME = 'R&D 개발팀';
+      const TOAST_TITLE = '워크스페이스가 비활성화되었습니다';
+      const TOAST_DESC  = WS_NAME + ' 워크스페이스가 비활성화되었습니다. 멤버 접근이 차단됩니다.';
+
+      const openBtn    = document.getElementById('btn-open-deactivate');
+      const backdrop   = document.getElementById('modal-deactivate-ws');
+      const cancelBtn  = document.getElementById('btn-deactivate-cancel');
+      const confirmBtn = document.getElementById('btn-deactivate-confirm');
+
+      function open() {
+        backdrop.hidden = false;
+        setTimeout(function () { cancelBtn.focus(); }, 80);
+      }
+      function close() { backdrop.hidden = true; openBtn.focus(); }
+
+      openBtn.addEventListener('click', open);
+      cancelBtn.addEventListener('click', close);
+      backdrop.addEventListener('mousedown', function (e) {
+        if (e.target === backdrop) close();
+      });
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && !backdrop.hidden) { e.preventDefault(); close(); }
+      });
+
+      confirmBtn.addEventListener('click', function () {
+        confirmBtn.disabled = true;
+        // 데모: PATCH /workspaces/:id/deactivate 호출 가정 → 성공 응답
+        setTimeout(function () {
+          confirmBtn.disabled = false;
+          close();
+          if (typeof window.tmsToast === 'function') {
+            window.tmsToast({
+              variant: 'success',
+              title: TOAST_TITLE,
+              desc: TOAST_DESC,
+              duration: 4500,
+            });
+          }
+          if (typeof window.tmsNotify === 'function') {
+            window.tmsNotify({
+              type: 'success',
+              title: TOAST_TITLE,
+              desc: TOAST_DESC,
+            });
+          }
+        }, 200);
+      });
+
+      // 데모 편의: 페이지 로드 직후 모달 자동 노출 (백그라운드 진입 흐름 시연용)
+      window.addEventListener('load', function () { setTimeout(open, 400); });
+
+      // Focus trap (취소 ↔ 비활성화)
+      backdrop.addEventListener('keydown', function (e) {
+        if (e.key !== 'Tab') return;
+        const enabled = [cancelBtn, confirmBtn].filter(function (el) { return !el.disabled; });
+        const first = enabled[0];
+        const last  = enabled[enabled.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      });
+    })();
+  </script>
+</body>
+</html>

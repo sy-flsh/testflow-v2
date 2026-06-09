@@ -1,0 +1,96 @@
+/* ════════════════════════════════════════════════════════════════════
+   PageHeader — components/page-header.md 정합 (figma-master.md §7.4)
+   적용 범위: 전 페이지 (LIST/CREATE/DETAIL/SETTINGS/DASHBOARD) — §7.4 amend (2026-06-09)
+   구성: breadcrumb? + (title + desc?) + 우측 action?
+
+   사용 (full):
+     <header class="page-header">
+       <p class="page-header-breadcrumb">워크스페이스 설정 · R&D 개발팀</p>
+       <div class="page-header-row">
+         <div class="page-header-text">
+           <h1 class="page-header-title">워크스페이스</h1>
+           <p class="page-header-desc">설명</p>
+         </div>
+         <button class="btn btn-primary btn-md">+ 워크스페이스 생성</button>
+       </div>
+     </header>
+
+   사용 (minimal — settings sub-page 등):
+     <header class="page-header">
+       <p class="page-header-breadcrumb">…</p>
+       <h1 class="page-header-title">제목</h1>
+       <p class="page-header-desc">설명</p>
+     </header>
+
+   Size variants:
+     .page-header.size-md (기본, 18/28 title)
+     .page-header.size-sm (compact, 16/24 title — list/create 등 sub-page 옵션)
+   ════════════════════════════════════════════════════════════════════ */
+
+.page-header {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 24px;
+}
+
+.page-header-breadcrumb {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--bunker);
+  margin: 0;
+}
+
+.page-header-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+}
+
+.page-header-text {
+  flex: 1 0 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.page-header-title {
+  font-size: 18px;
+  line-height: 28px;
+  font-weight: 700;
+  letter-spacing: -0.16px;
+  color: var(--bunker);
+  margin: 0;
+}
+
+.page-header-desc {
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--neutral-600);
+  margin: 0;
+}
+
+/* Compact variant — sub-page (LIST/CREATE 백그라운드 등) */
+.page-header.size-sm .page-header-title {
+  font-size: 16px;
+  line-height: 24px;
+}
+
+/* Settings sub-page (deactivate-confirm 등) — minimal markup gap */
+.page-header.is-settings {
+  gap: 0;
+}
+.page-header.is-settings .page-header-breadcrumb {
+  margin-bottom: 6px;
+}
+.page-header.is-settings .page-header-desc {
+  margin-top: 4px;
+}
+
+/* ─── Responsive ─── */
+@media (max-width: 767px) {
+  .page-header { padding: 16px; }
+  .page-header-row { flex-direction: column; align-items: stretch; }
+}

@@ -1,0 +1,3988 @@
+openapi: 3.1.0
+info:
+  title: TMS API (Test Management System)
+  version: 0.1.0
+  description: |
+    TMS(Test Management System) HTTP API 계약 정본 (P1 초안).
+
+    본 문서는 backend-standard `GET/POST 전용 룰`(§4.2)을 따른다. 상태 변경은 모두 `POST`로 표현하며
+    URL 패턴은 `POST /resources` (생성) · `POST /resources/{id}` (수정) · `POST /resources/{id}/{action}` (액션)을 사용한다.
+
+    공통 응답은 `ApiResponse<T>` 단일 래퍼이며 (success/code/message/data + 에러 진단 필드 traceId/timestamp/path/errors)
+    페이지네이션 응답은 `PagedResponse<T>` (content/totalElements/totalPages/currentPage/size).
+
+    인증은 JWT Bearer (`Authorization: Bearer <AccessToken>`, SRS §6.2). 인가는 (User × Scope) 다중 Role
+    매트릭스(`docs/permissions.md`)에 따른다. 모든 작성/삭제/액션 엔드포인트는 backend-standard `ErrorCode`
+    문자열 의미 코드(`{DOMAIN}_{상황}`)와 정합한다.
+
+    도메인 락 정합(features/README v2.3): 3-tier 격리(Company → Workspace → Project), Role 6단,
+    회원가입 2경로 + 초대, Project `code` 불변, TestCase Scope 3종, TestRun 단계별 실행 + 자동 종료 + duration,
+    TC 변경 시 영향 Run UNTESTED + 이력, 삭제 작성자 한정(★16).
+  contact:
+    name: TMS PM
+    email: pm@unione.example
+  license:
+    name: Proprietary
+servers:
+  - url: https://api.tms.dev.unione.example/api/v1
+    description: dev (개발)
+  - url: https://api.tms.stg.unione.example/api/v1
+    description: staging
+  - url: https://api.tms.unione.example/api/v1
+    description: production
+tags:
+  - name: F-COMPANY
+    description: 회사(Company) 관리 — Master·CO. 테넌트 격리 루트
+  - name: F-WS
+    description: 워크스페이스(Workspace) 관리 — WO 생성·CO 비활성·소유자 이관·멤버 초대
+  - name: F-AUTH
+    description: 인증(로그인·회원가입 2경로·초대 수락·이메일 인증·비번 리셋·토큰 갱신)
+  - name: F-USER
+    description: Company 사용자 관리 + Scope×Role 매트릭스 부여 (CO 전용 매트릭스)
+  - name: F-PROJ
+    description: 프로젝트(Project) 관리 — code 불변·멤버 초대
+  - name: F-TS
+    description: 테스트 스위트(TestSuite) 트리 — 폴더 구조
+  - name: F-TC
+    description: 테스트 케이스(TestCase) — Scope 3종(Global/Workspace/Project) + steps + tags
+  - name: F-PLAN
+    description: 테스트 계획(TestPlan) — PlanItem 묶기·담당자 할당·상태 전이
+  - name: F-RUN
+    description: 테스트 실행(TestRun) — 단계별 결과 + 자동 종료 + duration + 이력
+  - name: F-DEF
+    description: 결함(Defect) — 상태 4종 DAG + 담당자 + Run 연결
+  - name: F-ATTACH
+    description: 첨부(Attachment) — TestRun/Defect 종속, 로컬 디스크, 10MB 상한
+  - name: F-REPORT
+    description: 최소 리포트 — Plan별 Pass율 + 결함 상태 카운트
+paths:
+  # ============================================================================
+  # F-AUTH (인증) — 공개 + 인증 엔드포인트
+  # ============================================================================
+  /auth/login:
+    post:
+      tags: [F-AUTH]
+      operationId: login
+      summary: 로그인 (Master/Company User 통합)
+      description: |
+        이메일·비밀번호로 로그인하고 Access(30분)/Refresh(30일) 토큰을 발급한다.
+        `master_admins`를 우선 매칭하고, 미일치 시 `users.email`로 검색한다. 비활성 Company/User,
+        이메일 미인증 셀프 가입자는 차단된다. (Required Role: 미인증)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: 로그인 성공
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/LoginResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /auth/refresh:
+    post:
+      tags: [F-AUTH]
+      operationId: refreshToken
+      summary: Refresh Token 회전·Access 갱신
+      description: Refresh 회전(rotate) 정책. 신규 Refresh도 발급되며 기존 토큰은 즉시 폐기. (Required Role: 미인증, Refresh Token 보유자)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RefreshTokenRequest' }
+      responses:
+        '200':
+          description: 갱신 성공
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/TokenPairResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /auth/logout:
+    post:
+      tags: [F-AUTH]
+      operationId: logout
+      summary: 로그아웃 (Refresh Token 폐기)
+      description: 인증된 사용자가 본인의 Refresh Token을 폐기한다. Access는 자연 만료. (Required Role: 인증된 모든 사용자)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LogoutRequest' }
+      responses:
+        '200':
+          description: 로그아웃 성공
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /auth/signup-co:
+    post:
+      tags: [F-AUTH]
+      operationId: signupCompanyOwner
+      summary: 셀프 회원가입 (경로 B — CO + 신규 Company 자동 생성)
+      description: |
+        email·password·name·companyName 입력으로 신규 Company(`is_active=false`)와 첫 CO 사용자를 생성한다.
+        이메일 인증 완료 시 Company 활성화. (Required Role: 미인증)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SignupCompanyOwnerRequest' }
+      responses:
+        '200':
+          description: 가입 접수 (인증 메일 발송)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /auth/verify-email:
+    post:
+      tags: [F-AUTH]
+      operationId: verifyEmail
+      summary: 이메일 인증 토큰 확정
+      description: 셀프 가입 인증 메일 토큰을 검증·소비하고 사용자/Company를 활성화. (Required Role: 미인증)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VerifyEmailRequest' }
+      responses:
+        '200':
+          description: 인증 완료
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /auth/accept-invite:
+    post:
+      tags: [F-AUTH]
+      operationId: acceptInvite
+      summary: 초대 수락 (경로 C — 비번 설정 + 자동 로그인)
+      description: |
+        초대 토큰을 검증·소비하고 사용자를 가입 처리한다(`is_email_verified=true` 자동). 초대 발급 시
+        Scope×Role이 사전 지정되었으면 자동 부여. (Required Role: 미인증)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AcceptInviteRequest' }
+      responses:
+        '200':
+          description: 수락 완료 (Access/Refresh 발급)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/LoginResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /auth/forgot-password:
+    post:
+      tags: [F-AUTH]
+      operationId: forgotPassword
+      summary: 비밀번호 리셋 요청 (이메일 발송)
+      description: 존재 은닉. email 존재 여부와 무관하게 항상 200. 존재 시 토큰 생성·메일 발송. Rate Limit 5분당 3회. (Required Role: 미인증)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ForgotPasswordRequest' }
+      responses:
+        '200':
+          description: 동일 안내 응답
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /auth/reset-password:
+    post:
+      tags: [F-AUTH]
+      operationId: resetPassword
+      summary: 비밀번호 리셋 확정 (토큰 + 새 비번)
+      description: 리셋 토큰을 검증·소비하고 비밀번호를 BCrypt로 갱신. 모든 Refresh Token 폐기. (Required Role: 미인증)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ResetPasswordRequest' }
+      responses:
+        '200':
+          description: 비번 재설정 완료
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /auth/change-password:
+    post:
+      tags: [F-AUTH]
+      operationId: changePassword
+      summary: 본인 비밀번호 변경 (인증)
+      description: 현재 비번·새 비번 입력. mustChangePassword 플래그 해제. 타 세션 Refresh 일괄 폐기. (Required Role: 인증된 모든 사용자)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChangePasswordRequest' }
+      responses:
+        '200':
+          description: 변경 완료
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  # ============================================================================
+  # F-COMPANY (회사 관리)
+  # ============================================================================
+  /master/companies:
+    get:
+      tags: [F-COMPANY]
+      operationId: listCompaniesForMaster
+      summary: 전역 Company 목록 (Master)
+      description: Master 전용. 전체 Company 페이지네이션. (Required Role: Master)
+      parameters:
+        - $ref: '#/components/parameters/qQuery'
+        - $ref: '#/components/parameters/isActiveQuery'
+        - $ref: '#/components/parameters/pageQuery'
+        - $ref: '#/components/parameters/sizeQuery'
+        - $ref: '#/components/parameters/sortQuery'
+      responses:
+        '200':
+          description: 회사 목록
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PagedResponse'
+                          - properties:
+                              content:
+                                type: array
+                                items: { $ref: '#/components/schemas/CompanyResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    post:
+      tags: [F-COMPANY]
+      operationId: createCompanyByMaster
+      summary: Master 등록 경로 — 신규 Company + 첫 CO 생성
+      description: Master가 회사명·slug·첫 CO 이메일·이름으로 회사를 생성. 임시비번 메일 발송. (Required Role: Master)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateCompanyRequest' }
+      responses:
+        '201':
+          description: 생성 성공
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/CreatedCompanyResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /master/companies/{companyId}:
+    get:
+      tags: [F-COMPANY]
+      operationId: getCompanyForMaster
+      summary: Company 상세 (Master)
+      description: Master 전용 상세 조회. (Required Role: Master)
+      parameters:
+        - $ref: '#/components/parameters/companyIdPath'
+      responses:
+        '200':
+          description: 회사 상세
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/CompanyResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /master/companies/{companyId}/activate:
+    post:
+      tags: [F-COMPANY]
+      operationId: activateCompany
+      summary: Company 활성화 (Master)
+      description: Master가 Company를 활성화. (Required Role: Master)
+      parameters:
+        - $ref: '#/components/parameters/companyIdPath'
+      responses:
+        '200':
+          description: 활성화 완료
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /master/companies/{companyId}/deactivate:
+    post:
+      tags: [F-COMPANY]
+      operationId: deactivateCompany
+      summary: Company 비활성화 (Master)
+      description: Master가 Company를 비활성화. 하위 사용자 로그인은 403 `COMPANY_INACTIVE`로 차단된다. (Required Role: Master)
+      parameters:
+        - $ref: '#/components/parameters/companyIdPath'
+      responses:
+        '200':
+          description: 비활성화 완료
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /company:
+    get:
+      tags: [F-COMPANY]
+      operationId: getMyCompany
+      summary: 본인 Company 조회 (모든 인증 사용자)
+      description: 인증된 사용자가 본인 Company의 공개 필드 또는 CO/Master는 확장 필드를 조회. (Required Role: 인증된 모든 사용자)
+      responses:
+        '200':
+          description: 본인 Company
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/CompanyResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /company/update:
+    post:
+      tags: [F-COMPANY]
+      operationId: updateCompany
+      summary: 본인 Company 정보 수정 (CO)
+      description: 이름·연락처(확장 필드) 부분 변경. **slug 불변**. (Required Role: CO)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateCompanyRequest' }
+      responses:
+        '200':
+          description: 수정 완료
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/CompanyResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /company/transfer-ownership:
+    post:
+      tags: [F-COMPANY]
+      operationId: transferCompanyOwnership
+      summary: Company 소유자 이관 (CO → 다른 CO)
+      description: 대상은 현재 CO 보유자만. 본인 CO 권한은 별도 회수 절차 필요. (Required Role: CO)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TransferOwnershipRequest' }
+      responses:
+        '200':
+          description: 이관 완료
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /company/users/{userId}/grant-co:
+    post:
+      tags: [F-COMPANY]
+      operationId: grantCompanyOwnerRole
+      summary: 사용자 CO 권한 부여 (CO)
+      description: 대상 사용자에게 (COMPANY, companyId, CO) 행을 추가. 중복 시 무시. (Required Role: CO)
+      parameters:
+        - $ref: '#/components/parameters/userIdPath'
+      responses:
+        '200':
+          description: 부여 완료
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  # ============================================================================
+  # F-WS (워크스페이스)
+  # ============================================================================
+  /workspaces:
+    get:
+      tags: [F-WS]
+      operationId: listWorkspaces
+      summary: Workspace 목록 조회
+      description: |
+        Role 기반 가시 필터. CO는 Company 내 전체. 그 외 Role은 본인이 멤버인 WS만 노출.
+        (Required Role: 인증된 모든 사용자)
+      parameters:
+        - $ref: '#/components/parameters/qQuery'
+        - $ref: '#/components/parameters/isActiveQuery'
+        - { name: role, in: query, required: false, schema: { $ref: '#/components/schemas/Role' } }
+        - $ref: '#/components/parameters/pageQuery'
+        - $ref: '#/components/parameters/sizeQuery'
+        - $ref: '#/components/parameters/sortQuery'
+      responses:
+        '200':
+          description: 목록
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PagedResponse'
+                          - properties:
+                              content:
+                                type: array
+                                items: { $ref: '#/components/schemas/WorkspaceResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    post:
+      tags: [F-WS]
+      operationId: createWorkspace
+      summary: Workspace 생성 (WO)
+      description: 무제한 생성. 요청자는 자동 owner_user_id 등록 + (WORKSPACE, wsId, WO) 행 추가. (Required Role: WO)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateWorkspaceRequest' }
+      responses:
+        '201':
+          description: 생성 성공
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/WorkspaceResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /workspaces/{workspaceId}:
+    get:
+      tags: [F-WS]
+      operationId: getWorkspace
+      summary: Workspace 상세 조회
+      description: 본인이 멤버인 WS만 가시. CO는 본인 Company 내 모두. (Required Role: 인증된 모든 사용자)
+      parameters:
+        - $ref: '#/components/parameters/workspaceIdPath'
+      responses:
+        '200':
+          description: 상세
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/WorkspaceResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /workspaces/{workspaceId}/update:
+    post:
+      tags: [F-WS]
+      operationId: updateWorkspace
+      summary: Workspace 정보 수정 (CO·WO)
+      description: 이름·설명 부분 변경. (Required Role: CO, 또는 본인 WO인 WS의 WO)
+      parameters:
+        - $ref: '#/components/parameters/workspaceIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateWorkspaceRequest' }
+      responses:
+        '200':
+          description: 수정 완료
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/WorkspaceResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /workspaces/{workspaceId}/activate:
+    post:
+      tags: [F-WS]
+      operationId: activateWorkspace
+      summary: Workspace 활성화 (CO)
+      description: CO만 가능. (Required Role: CO)
+      parameters:
+        - $ref: '#/components/parameters/workspaceIdPath'
+      responses:
+        '200':
+          description: 활성화 완료
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /workspaces/{workspaceId}/deactivate:
+    post:
+      tags: [F-WS]
+      operationId: deactivateWorkspace
+      summary: Workspace 비활성화 (CO)
+      description: 비활성 WS 내 모든 액션은 403 `WS_INACTIVE`. (Required Role: CO)
+      parameters:
+        - $ref: '#/components/parameters/workspaceIdPath'
+      responses:
+        '200':
+          description: 비활성화 완료
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /workspaces/{workspaceId}/transfer-ownership:
+    post:
+      tags: [F-WS]
+      operationId: transferWorkspaceOwnership
+      summary: Workspace 소유자 이관 (CO)
+      description: 대상은 현재 WS의 WO 보유자만 가능. (Required Role: CO)
+      parameters:
+        - $ref: '#/components/parameters/workspaceIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TransferOwnershipRequest' }
+      responses:
+        '200':
+          description: 이관 완료
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /workspaces/{workspaceId}/members:
+    get:
+      tags: [F-WS]
+      operationId: listWorkspaceMembers
+      summary: Workspace 멤버 목록
+      description: CO·WO·본인 멤버 사용자 가시. (Required Role: CO·WO·해당 WS 멤버)
+      parameters:
+        - $ref: '#/components/parameters/workspaceIdPath'
+        - $ref: '#/components/parameters/qQuery'
+        - $ref: '#/components/parameters/pageQuery'
+        - $ref: '#/components/parameters/sizeQuery'
+      responses:
+        '200':
+          description: 멤버 목록
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PagedResponse'
+                          - properties:
+                              content:
+                                type: array
+                                items: { $ref: '#/components/schemas/WorkspaceMemberResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    post:
+      tags: [F-WS]
+      operationId: inviteWorkspaceMembers
+      summary: Workspace 멤버 초대 (WO)
+      description: 같은 Company 사용자만. 기본 Role = Member. 단 (userId, WORKSPACE, wsId) 행 이미 존재 시 기존 Role 유지(CO 사전 부여 우선). (Required Role: WO)
+      parameters:
+        - $ref: '#/components/parameters/workspaceIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InviteWorkspaceMembersRequest' }
+      responses:
+        '200':
+          description: 멤버 추가 완료
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /workspaces/{workspaceId}/members/{userId}/remove:
+    post:
+      tags: [F-WS]
+      operationId: removeWorkspaceMember
+      summary: Workspace 멤버 제거 (WO·CO)
+      description: 마지막 WO 제거 시도는 거부. 하위 Project 멤버 Role은 자동 삭제 X. (Required Role: WO 또는 CO)
+      parameters:
+        - $ref: '#/components/parameters/workspaceIdPath'
+        - $ref: '#/components/parameters/userIdPath'
+      responses:
+        '200':
+          description: 제거 완료
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  # ============================================================================
+  # F-USER (사용자 관리)
+  # ============================================================================
+  /company/users:
+    get:
+      tags: [F-USER]
+      operationId: listCompanyUsers
+      summary: Company 사용자 목록 (CO)
+      description: 검색·필터·요약 Role 카운트 포함. (Required Role: CO)
+      parameters:
+        - $ref: '#/components/parameters/qQuery'
+        - $ref: '#/components/parameters/isActiveQuery'
+        - { name: role, in: query, required: false, schema: { $ref: '#/components/schemas/Role' } }
+        - { name: scope, in: query, required: false, schema: { $ref: '#/components/schemas/Scope' } }
+        - $ref: '#/components/parameters/pageQuery'
+        - $ref: '#/components/parameters/sizeQuery'
+        - $ref: '#/components/parameters/sortQuery'
+      responses:
+        '200':
+          description: 사용자 목록
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PagedResponse'
+                          - properties:
+                              content:
+                                type: array
+                                items: { $ref: '#/components/schemas/UserListItemResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /company/users/{userId}:
+    get:
+      tags: [F-USER]
+      operationId: getCompanyUser
+      summary: Company 사용자 상세 + Role 매트릭스 (CO)
+      description: rolesByScope 직렬화 포함. (Required Role: CO)
+      parameters:
+        - $ref: '#/components/parameters/userIdPath'
+      responses:
+        '200':
+          description: 사용자 상세
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/UserDetailResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /company/users/{userId}/roles/sync:
+    post:
+      tags: [F-USER]
+      operationId: syncUserRoles
+      summary: (User × Scope × Role) 매트릭스 일괄 동기화 (CO, 정본)
+      description: |
+        매트릭스 UI 정본 경로. grants[] + revokes[] 단일 트랜잭션 + 멱등 처리.
+        시스템 잠금 방지 5종 위반 시 전체 롤백. (Required Role: CO)
+      parameters:
+        - $ref: '#/components/parameters/userIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SyncUserRolesRequest' }
+      responses:
+        '200':
+          description: 동기화 완료
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/UserDetailResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /company/users/{userId}/roles/grant:
+    post:
+      tags: [F-USER]
+      operationId: grantUserRoles
+      summary: 단일 Role 부여 (보조)
+      description: 단건/소량 부여용. 매트릭스는 sync 권장. (Required Role: CO)
+      parameters:
+        - $ref: '#/components/parameters/userIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [grants]
+              properties:
+                grants:
+                  type: array
+                  items: { $ref: '#/components/schemas/RoleGrantSpec' }
+      responses:
+        '200':
+          description: 부여 완료
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /company/users/{userId}/roles/revoke:
+    post:
+      tags: [F-USER]
+      operationId: revokeUserRoles
+      summary: 단일 Role 회수 (보조)
+      description: 단건/소량 회수용. 매트릭스는 sync 권장. (Required Role: CO)
+      parameters:
+        - $ref: '#/components/parameters/userIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [revokes]
+              properties:
+                revokes:
+                  type: array
+                  items: { $ref: '#/components/schemas/RoleGrantSpec' }
+      responses:
+        '200':
+          description: 회수 완료
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /company/users/{userId}/reset-password:
+    post:
+      tags: [F-USER]
+      operationId: resetUserPasswordByCompanyOwner
+      summary: CO 강제 비밀번호 리셋
+      description: 임시비번 생성·메일 발송 + Refresh Token 일괄 폐기. 응답에 임시비번 미노출. (Required Role: CO)
+      parameters:
+        - $ref: '#/components/parameters/userIdPath'
+      responses:
+        '200':
+          description: 리셋 발송 완료
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /company/users/{userId}/activate:
+    post:
+      tags: [F-USER]
+      operationId: activateUser
+      summary: 사용자 활성화 (CO)
+      description: (Required Role: CO)
+      parameters:
+        - $ref: '#/components/parameters/userIdPath'
+      responses:
+        '200':
+          description: 활성화 완료
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /company/users/{userId}/deactivate:
+    post:
+      tags: [F-USER]
+      operationId: deactivateUser
+      summary: 사용자 비활성화 (CO)
+      description: Refresh Token 일괄 폐기. 본인 비활성 시도 차단(`USER_SELF_DEACTIVATE_FORBIDDEN`). (Required Role: CO)
+      parameters:
+        - $ref: '#/components/parameters/userIdPath'
+      responses:
+        '200':
+          description: 비활성화 완료
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /company/users/{userId}/withdraw:
+    post:
+      tags: [F-USER]
+      operationId: withdrawUser
+      summary: 사용자 탈퇴 처리 (CO, soft)
+      description: is_deleted=true + user_roles 전부 회수. 마지막 CO 보호. (Required Role: CO)
+      parameters:
+        - $ref: '#/components/parameters/userIdPath'
+      responses:
+        '200':
+          description: 탈퇴 완료
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /company/invitations:
+    get:
+      tags: [F-USER]
+      operationId: listInvitations
+      summary: 활성 초대 목록 (CO)
+      description: 미만료·미수락 초대. (Required Role: CO)
+      parameters:
+        - $ref: '#/components/parameters/qQuery'
+        - $ref: '#/components/parameters/pageQuery'
+        - $ref: '#/components/parameters/sizeQuery'
+      responses:
+        '200':
+          description: 초대 목록
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PagedResponse'
+                          - properties:
+                              content:
+                                type: array
+                                items: { $ref: '#/components/schemas/InvitationResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    post:
+      tags: [F-USER]
+      operationId: createInvitation
+      summary: 사용자 초대 발송 (CO)
+      description: email·name·preassignedRoles[](선택) 입력. 24h 만료 토큰. (Required Role: CO)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateInvitationRequest' }
+      responses:
+        '201':
+          description: 초대 발송 완료
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/InvitationResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /company/invitations/{invitationId}/cancel:
+    post:
+      tags: [F-USER]
+      operationId: cancelInvitation
+      summary: 초대 취소 (CO)
+      description: 활성 토큰 폐기. (Required Role: CO)
+      parameters:
+        - $ref: '#/components/parameters/invitationIdPath'
+      responses:
+        '200':
+          description: 취소 완료
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /company/invitations/{invitationId}/resend:
+    post:
+      tags: [F-USER]
+      operationId: resendInvitation
+      summary: 초대 재발송 (CO)
+      description: 신규 토큰 생성 + 기존 토큰 폐기 + 메일 발송. Rate Limit 적용. (Required Role: CO)
+      parameters:
+        - $ref: '#/components/parameters/invitationIdPath'
+      responses:
+        '200':
+          description: 재발송 완료
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /users/me:
+    get:
+      tags: [F-USER]
+      operationId: getMyProfile
+      summary: 본인 프로필 조회 (모든 인증 사용자)
+      description: 본인 정보 + 보유 Role 목록(권한 가시화). (Required Role: 인증된 모든 사용자)
+      responses:
+        '200':
+          description: 본인 프로필
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/UserDetailResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /users/me/update:
+    post:
+      tags: [F-USER]
+      operationId: updateMyProfile
+      summary: 본인 프로필 수정 (이름)
+      description: (Required Role: 인증된 모든 사용자)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateMyProfileRequest' }
+      responses:
+        '200':
+          description: 수정 완료
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/UserDetailResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  # ============================================================================
+  # F-PROJ (프로젝트)
+  # ============================================================================
+  /workspaces/{workspaceId}/projects:
+    get:
+      tags: [F-PROJ]
+      operationId: listProjects
+      summary: Project 목록 조회
+      description: |
+        가시 필터: CO/WO는 WS 내 모든 Project, 그 외 Role은 본인이 멤버인 Project만.
+        (Required Role: 인증된 모든 사용자)
+      parameters:
+        - $ref: '#/components/parameters/workspaceIdPath'
+        - $ref: '#/components/parameters/qQuery'
+        - $ref: '#/components/parameters/isActiveQuery'
+        - { name: role, in: query, required: false, schema: { $ref: '#/components/schemas/Role' } }
+        - $ref: '#/components/parameters/pageQuery'
+        - $ref: '#/components/parameters/sizeQuery'
+        - $ref: '#/components/parameters/sortQuery'
+      responses:
+        '200':
+          description: Project 목록
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PagedResponse'
+                          - properties:
+                              content:
+                                type: array
+                                items: { $ref: '#/components/schemas/ProjectResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    post:
+      tags: [F-PROJ]
+      operationId: createProject
+      summary: Project 생성 (WO·PO·Member)
+      description: |
+        해당 WS에 WO 또는 PO 또는 Member 보유 시 생성 가능. PO 생성 시 자동 (PROJECT, projId, PO) 부여.
+        Member 생성 시 owner_user_id 설정만 + Member 유지(★8). code 형식 `^[A-Z][A-Z0-9]{1,9}$`, Company 내 unique, 불변.
+        (Required Role: WO 또는 PO 또는 Member)
+      parameters:
+        - $ref: '#/components/parameters/workspaceIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateProjectRequest' }
+      responses:
+        '201':
+          description: 생성 성공
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/ProjectResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}:
+    get:
+      tags: [F-PROJ]
+      operationId: getProject
+      summary: Project 상세 조회
+      description: 본인이 멤버인 Project만(CO/WO는 본인 Company/WS 범위). (Required Role: 인증된 모든 사용자)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+      responses:
+        '200':
+          description: 상세
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/ProjectResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}/update:
+    post:
+      tags: [F-PROJ]
+      operationId: updateProject
+      summary: Project 정보 수정 (WO·PO)
+      description: |
+        이름·설명 부분 변경. **code는 불변** — 요청 본문에 포함 시 400 `PROJ_CODE_IMMUTABLE`.
+        (Required Role: WO 또는 PO)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateProjectRequest' }
+      responses:
+        '200':
+          description: 수정 완료
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/ProjectResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}/activate:
+    post:
+      tags: [F-PROJ]
+      operationId: activateProject
+      summary: Project 활성화 (CO·WO·PO)
+      description: (Required Role: CO 또는 WO(★15) 또는 PO)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+      responses:
+        '200':
+          description: 활성화 완료
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}/deactivate:
+    post:
+      tags: [F-PROJ]
+      operationId: deactivateProject
+      summary: Project 비활성화 (CO·WO·PO)
+      description: 비활성 Project 내 모든 액션 403 `PROJ_INACTIVE`. (Required Role: CO 또는 WO(★15) 또는 PO)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+      responses:
+        '200':
+          description: 비활성화 완료
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}/members:
+    get:
+      tags: [F-PROJ]
+      operationId: listProjectMembers
+      summary: Project 멤버 목록
+      description: 본인이 멤버인 Project만 가시. CO·WO는 본인 범위 내. (Required Role: 인증된 모든 사용자)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+        - $ref: '#/components/parameters/qQuery'
+        - $ref: '#/components/parameters/pageQuery'
+        - $ref: '#/components/parameters/sizeQuery'
+      responses:
+        '200':
+          description: 멤버 목록
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PagedResponse'
+                          - properties:
+                              content:
+                                type: array
+                                items: { $ref: '#/components/schemas/ProjectMemberResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    post:
+      tags: [F-PROJ]
+      operationId: inviteProjectMembers
+      summary: Project 멤버 초대 (PO)
+      description: 대상은 같은 WS 멤버여야 함. 기본 Role = Member. 단 (userId, PROJECT, projId) 행 이미 존재 시 기존 Role 유지(CO 사전 부여 우선). (Required Role: PO)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InviteProjectMembersRequest' }
+      responses:
+        '200':
+          description: 멤버 추가 완료
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}/members/{userId}/remove:
+    post:
+      tags: [F-PROJ]
+      operationId: removeProjectMember
+      summary: Project 멤버 제거 (PO)
+      description: 마지막 PO 제거 시도는 거부(`PROJ_LAST_PO_FORBIDDEN`). (Required Role: PO)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+        - $ref: '#/components/parameters/userIdPath'
+      responses:
+        '200':
+          description: 제거 완료
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  # ============================================================================
+  # F-TS (테스트 스위트 트리)
+  # ============================================================================
+  /projects/{projectId}/suites/tree:
+    get:
+      tags: [F-TS]
+      operationId: getTestSuiteTree
+      summary: TestSuite 트리 1회 조회
+      description: Project 전체 트리. 각 노드 testCaseCount 포함. (Required Role: Project 멤버)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+      responses:
+        '200':
+          description: 트리
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/TestSuiteTreeNode' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}/suites:
+    post:
+      tags: [F-TS]
+      operationId: createTestSuite
+      summary: TestSuite 생성 (PO·Member)
+      description: parent_suite_id 검증(같은 Project). (Required Role: PO 또는 Member)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateTestSuiteRequest' }
+      responses:
+        '201':
+          description: 생성 완료
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/TestSuiteResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}/suites/{suiteId}/update:
+    post:
+      tags: [F-TS]
+      operationId: updateTestSuite
+      summary: TestSuite 이름 변경 (PO·Member)
+      description: (Required Role: PO 또는 Member)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+        - $ref: '#/components/parameters/suiteIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateTestSuiteRequest' }
+      responses:
+        '200':
+          description: 수정 완료
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/TestSuiteResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}/suites/{suiteId}/move:
+    post:
+      tags: [F-TS]
+      operationId: moveTestSuite
+      summary: TestSuite 이동 (PO·Member)
+      description: 새 부모가 본인 후손이면 안 됨(`TS_CYCLE_FORBIDDEN`). (Required Role: PO 또는 Member)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+        - $ref: '#/components/parameters/suiteIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MoveTestSuiteRequest' }
+      responses:
+        '200':
+          description: 이동 완료
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/TestSuiteResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}/suites/{suiteId}/delete:
+    post:
+      tags: [F-TS]
+      operationId: deleteTestSuite
+      summary: TestSuite soft 삭제 (작성자 한정 ★16)
+      description: |
+        `created_by = 요청자`인 작성자만 삭제 가능. PO/CO 우회 X.
+        비어있는 Suite만(`TS_NOT_EMPTY` 검증). (Required Role: 작성자)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+        - $ref: '#/components/parameters/suiteIdPath'
+      responses:
+        '200':
+          description: 삭제 완료
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  # ============================================================================
+  # F-TC (테스트 케이스 — Scope 3종)
+  # ============================================================================
+  /company/test-cases:
+    get:
+      tags: [F-TC]
+      operationId: listGlobalTestCases
+      summary: Global Scope TC 목록 (Company 라이브러리)
+      description: GLOBAL Scope TC만. Company 내 모든 사용자 조회 가능. (Required Role: 인증된 모든 사용자)
+      parameters:
+        - $ref: '#/components/parameters/qQuery'
+        - { name: priority, in: query, required: false, schema: { $ref: '#/components/schemas/Priority' } }
+        - { name: tag, in: query, required: false, schema: { type: string } }
+        - { name: createdBy, in: query, required: false, schema: { type: integer, format: int64 } }
+        - $ref: '#/components/parameters/pageQuery'
+        - $ref: '#/components/parameters/sizeQuery'
+        - $ref: '#/components/parameters/sortQuery'
+      responses:
+        '200':
+          description: TC 목록
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PagedResponse'
+                          - properties:
+                              content:
+                                type: array
+                                items: { $ref: '#/components/schemas/TestCaseListItemResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    post:
+      tags: [F-TC]
+      operationId: createGlobalTestCase
+      summary: Global Scope TC 생성 (모든 인증 사용자 ★18)
+      description: GLOBAL Scope TC 생성. Viewer 포함 모든 인증 사용자. suiteId 비전송. (Required Role: 인증된 모든 사용자)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateGlobalTestCaseRequest' }
+      responses:
+        '201':
+          description: 생성 완료
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/TestCaseResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /company/test-cases/{testCaseId}/update:
+    post:
+      tags: [F-TC]
+      operationId: updateGlobalTestCase
+      summary: Global Scope TC 수정 (Company 내 작업 권한 보유자)
+      description: |
+        title/precondition/expectedResult/steps[] 변경 시 영향 TestRun이 비동기로 UNTESTED 재설정 + step 이력 기록(Rule 4·5).
+        scopeType은 불변(`TC_SCOPE_IMMUTABLE`). (Required Role: 같은 Scope 작업 권한 보유자 ★17)
+      parameters:
+        - $ref: '#/components/parameters/testCaseIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateTestCaseRequest' }
+      responses:
+        '200':
+          description: 수정 완료. body의 트리거 필드 변경 시 영향 Run 비동기 갱신 시작.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/TestCaseResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /company/test-cases/{testCaseId}/delete:
+    post:
+      tags: [F-TC]
+      operationId: deleteGlobalTestCase
+      summary: Global Scope TC soft 삭제 (작성자 한정 ★16)
+      description: 작성자만. PlanItem 참조 중이면 400 `TC_IN_USE`. (Required Role: 작성자)
+      parameters:
+        - $ref: '#/components/parameters/testCaseIdPath'
+      responses:
+        '200':
+          description: 삭제 완료
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /workspaces/{workspaceId}/test-cases:
+    get:
+      tags: [F-TC]
+      operationId: listWorkspaceTestCases
+      summary: Workspace Scope TC 목록 (WS 라이브러리)
+      description: WS Scope + Global Scope TC 합본. (Required Role: WS 멤버)
+      parameters:
+        - $ref: '#/components/parameters/workspaceIdPath'
+        - $ref: '#/components/parameters/qQuery'
+        - { name: scope, in: query, required: false, schema: { $ref: '#/components/schemas/TestCaseScopeFilter' } }
+        - { name: priority, in: query, required: false, schema: { $ref: '#/components/schemas/Priority' } }
+        - { name: tag, in: query, required: false, schema: { type: string } }
+        - { name: createdBy, in: query, required: false, schema: { type: integer, format: int64 } }
+        - $ref: '#/components/parameters/pageQuery'
+        - $ref: '#/components/parameters/sizeQuery'
+        - $ref: '#/components/parameters/sortQuery'
+      responses:
+        '200':
+          description: TC 목록
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PagedResponse'
+                          - properties:
+                              content:
+                                type: array
+                                items: { $ref: '#/components/schemas/TestCaseListItemResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    post:
+      tags: [F-TC]
+      operationId: createWorkspaceTestCase
+      summary: Workspace Scope TC 생성 (WS 멤버 누구나 ★18)
+      description: WS Scope TC 생성. Viewer 포함 WS 멤버. suiteId 비전송. (Required Role: WS 멤버)
+      parameters:
+        - $ref: '#/components/parameters/workspaceIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateWorkspaceTestCaseRequest' }
+      responses:
+        '201':
+          description: 생성 완료
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/TestCaseResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /workspaces/{workspaceId}/test-cases/{testCaseId}/update:
+    post:
+      tags: [F-TC]
+      operationId: updateWorkspaceTestCase
+      summary: Workspace Scope TC 수정
+      description: 변경 트리거 시 WS 내 모든 Project의 영향 Run 비동기 갱신(Rule 4·5). (Required Role: WS 멤버 ★17)
+      parameters:
+        - $ref: '#/components/parameters/workspaceIdPath'
+        - $ref: '#/components/parameters/testCaseIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateTestCaseRequest' }
+      responses:
+        '200':
+          description: 수정 완료
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/TestCaseResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /workspaces/{workspaceId}/test-cases/{testCaseId}/delete:
+    post:
+      tags: [F-TC]
+      operationId: deleteWorkspaceTestCase
+      summary: Workspace Scope TC soft 삭제 (작성자 한정 ★16)
+      description: (Required Role: 작성자)
+      parameters:
+        - $ref: '#/components/parameters/workspaceIdPath'
+        - $ref: '#/components/parameters/testCaseIdPath'
+      responses:
+        '200':
+          description: 삭제 완료
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}/test-cases:
+    get:
+      tags: [F-TC]
+      operationId: listTestCases
+      summary: Project 컨텍스트 TC 목록 (Project Scope + 사용 가능 WS/Global)
+      description: |
+        기본 Project Scope. `?scope=ALL`이면 그 Project가 사용 가능한 WS/Global Scope TC도 합본.
+        (Required Role: Project 멤버)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+        - $ref: '#/components/parameters/qQuery'
+        - { name: scope, in: query, required: false, schema: { $ref: '#/components/schemas/TestCaseScopeFilter' } }
+        - { name: suiteId, in: query, required: false, schema: { type: integer, format: int64 } }
+        - { name: includeChildren, in: query, required: false, schema: { type: boolean, default: false } }
+        - { name: priority, in: query, required: false, schema: { $ref: '#/components/schemas/Priority' } }
+        - { name: tag, in: query, required: false, schema: { type: string } }
+        - { name: createdBy, in: query, required: false, schema: { type: integer, format: int64 } }
+        - $ref: '#/components/parameters/pageQuery'
+        - $ref: '#/components/parameters/sizeQuery'
+        - $ref: '#/components/parameters/sortQuery'
+      responses:
+        '200':
+          description: TC 목록
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PagedResponse'
+                          - properties:
+                              content:
+                                type: array
+                                items: { $ref: '#/components/schemas/TestCaseListItemResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    post:
+      tags: [F-TC]
+      operationId: createProjectTestCase
+      summary: Project Scope TC 생성 (PO·Member)
+      description: suiteId 필수. code 자동 발급 `TC-<project.code>-<seq>`. (Required Role: PO 또는 Member)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateProjectTestCaseRequest' }
+      responses:
+        '201':
+          description: 생성 완료
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/TestCaseResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}/test-cases/{testCaseId}:
+    get:
+      tags: [F-TC]
+      operationId: getTestCase
+      summary: TC 상세 조회
+      description: TC + steps + tags + 메타. (Required Role: Project 멤버)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+        - $ref: '#/components/parameters/testCaseIdPath'
+      responses:
+        '200':
+          description: 상세
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/TestCaseResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}/test-cases/{testCaseId}/update:
+    post:
+      tags: [F-TC]
+      operationId: updateProjectTestCase
+      summary: Project Scope TC 수정 (PO·Member)
+      description: 변경 트리거 시 그 Project 영향 Run 비동기 갱신(Rule 4·5). scopeType 불변. (Required Role: PO 또는 Member ★17)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+        - $ref: '#/components/parameters/testCaseIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateTestCaseRequest' }
+      responses:
+        '200':
+          description: 수정 완료. 트리거 필드 변경 시 영향 Run 비동기 갱신.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/TestCaseResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}/test-cases/{testCaseId}/delete:
+    post:
+      tags: [F-TC]
+      operationId: deleteProjectTestCase
+      summary: Project Scope TC soft 삭제 (작성자 한정 ★16)
+      description: PlanItem 참조 중 거부(`TC_IN_USE`). (Required Role: 작성자)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+        - $ref: '#/components/parameters/testCaseIdPath'
+      responses:
+        '200':
+          description: 삭제 완료
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}/test-cases/{testCaseId}/move:
+    post:
+      tags: [F-TC]
+      operationId: moveTestCase
+      summary: Project Scope TC Suite 이동
+      description: 같은 Project 한정. WS/Global Scope TC는 불가(`TC_SCOPE_NO_SUITE`). (Required Role: PO 또는 Member)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+        - $ref: '#/components/parameters/testCaseIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MoveTestCaseRequest' }
+      responses:
+        '200':
+          description: 이동 완료
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/TestCaseResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  # ============================================================================
+  # F-PLAN (테스트 계획)
+  # ============================================================================
+  /projects/{projectId}/plans:
+    get:
+      tags: [F-PLAN]
+      operationId: listTestPlans
+      summary: TestPlan 목록
+      description: 상태·키워드 필터. (Required Role: Project 멤버)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+        - $ref: '#/components/parameters/qQuery'
+        - { name: status, in: query, required: false, schema: { $ref: '#/components/schemas/TestPlanStatus' } }
+        - $ref: '#/components/parameters/pageQuery'
+        - $ref: '#/components/parameters/sizeQuery'
+        - $ref: '#/components/parameters/sortQuery'
+      responses:
+        '200':
+          description: Plan 목록
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PagedResponse'
+                          - properties:
+                              content:
+                                type: array
+                                items: { $ref: '#/components/schemas/TestPlanResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    post:
+      tags: [F-PLAN]
+      operationId: createTestPlan
+      summary: TestPlan 생성 (PO·Member)
+      description: 기본 status=DRAFT. (Required Role: PO 또는 Member)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateTestPlanRequest' }
+      responses:
+        '201':
+          description: 생성 완료
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/TestPlanResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}/plans/{planId}:
+    get:
+      tags: [F-PLAN]
+      operationId: getTestPlan
+      summary: TestPlan 상세 + PlanItem 목록 + 진척률
+      description: (Required Role: Project 멤버)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+        - $ref: '#/components/parameters/planIdPath'
+      responses:
+        '200':
+          description: Plan 상세
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/TestPlanDetailResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}/plans/{planId}/update:
+    post:
+      tags: [F-PLAN]
+      operationId: updateTestPlan
+      summary: TestPlan 수정 (PO·Member)
+      description: (Required Role: PO 또는 Member)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+        - $ref: '#/components/parameters/planIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateTestPlanRequest' }
+      responses:
+        '200':
+          description: 수정 완료
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/TestPlanResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}/plans/{planId}/delete:
+    post:
+      tags: [F-PLAN]
+      operationId: deleteTestPlan
+      summary: TestPlan soft 삭제 (작성자 한정 ★16, 빈 Plan만)
+      description: PlanItem 1건이라도 있으면 거부(`PLAN_NOT_EMPTY`). (Required Role: 작성자)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+        - $ref: '#/components/parameters/planIdPath'
+      responses:
+        '200':
+          description: 삭제 완료
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}/plans/{planId}/status:
+    post:
+      tags: [F-PLAN]
+      operationId: transitionTestPlanStatus
+      summary: TestPlan 상태 전이 (PO)
+      description: DRAFT → IN_PROGRESS → CLOSED 단방향. 역행/스킵 거부. (Required Role: PO)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+        - $ref: '#/components/parameters/planIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TransitionTestPlanStatusRequest' }
+      responses:
+        '200':
+          description: 전이 완료
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/TestPlanResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}/plans/{planId}/items:
+    post:
+      tags: [F-PLAN]
+      operationId: addPlanItems
+      summary: PlanItem 추가 (PO·Member)
+      description: 같은 Project TC. 담당자는 PO만 가능(Member는 미지정). CLOSED Plan은 거부. (Required Role: PO 또는 Member)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+        - $ref: '#/components/parameters/planIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AddPlanItemsRequest' }
+      responses:
+        '201':
+          description: 추가 완료
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/PlanItemResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}/plans/{planId}/items/{itemId}/assign:
+    post:
+      tags: [F-PLAN]
+      operationId: assignPlanItem
+      summary: PlanItem 담당자 할당/변경 (PO)
+      description: 같은 Project 멤버. 미할당으로 되돌리기는 assigneeUserId=null. (Required Role: PO)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+        - $ref: '#/components/parameters/planIdPath'
+        - $ref: '#/components/parameters/planItemIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AssignPlanItemRequest' }
+      responses:
+        '200':
+          description: 할당 완료
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/PlanItemResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}/plans/{planId}/items/{itemId}/remove:
+    post:
+      tags: [F-PLAN]
+      operationId: removePlanItem
+      summary: PlanItem 제거 (PO·Member)
+      description: TestRun 1건 이상 있으면 거부(`PLAN_ITEM_HAS_RUNS`). (Required Role: PO 또는 Member)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+        - $ref: '#/components/parameters/planIdPath'
+        - $ref: '#/components/parameters/planItemIdPath'
+      responses:
+        '200':
+          description: 제거 완료
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  # ============================================================================
+  # F-RUN (테스트 실행)
+  # ============================================================================
+  /projects/{projectId}/runs:
+    post:
+      tags: [F-RUN]
+      operationId: startTestRun
+      summary: TestRun 시작 (헤더 + step 초기화)
+      description: |
+        PlanItem 단위 실행 1회차. test_run_steps는 참조 TC step 수만큼 모두 UNTESTED 초기 상태로 생성.
+        Member는 본인 할당 PlanItem만 시작 가능(`RUN_NOT_ASSIGNED`). (Required Role: PO 또는 본인 할당 Member)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StartTestRunRequest' }
+      responses:
+        '201':
+          description: 시작 완료
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/TestRunDetailResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}/runs/{runId}:
+    get:
+      tags: [F-RUN]
+      operationId: getTestRun
+      summary: TestRun 상세 (헤더 + steps + 카운트)
+      description: (Required Role: Project 멤버)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+        - $ref: '#/components/parameters/runIdPath'
+      responses:
+        '200':
+          description: TestRun 상세
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/TestRunDetailResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}/runs/{runId}/update:
+    post:
+      tags: [F-RUN]
+      operationId: updateTestRunMeta
+      summary: TestRun 메타 수정 (environment 등)
+      description: 결과(step result)는 step 엔드포인트에서만. (Required Role: Run 작성자 또는 PO)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+        - $ref: '#/components/parameters/runIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateTestRunRequest' }
+      responses:
+        '200':
+          description: 수정 완료
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/TestRunDetailResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}/runs/{runId}/delete:
+    post:
+      tags: [F-RUN]
+      operationId: deleteTestRun
+      summary: TestRun soft 삭제 (작성자 한정 ★16)
+      description: PO/CO 우회 X. steps·history는 보존. (Required Role: 작성자)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+        - $ref: '#/components/parameters/runIdPath'
+      responses:
+        '200':
+          description: 삭제 완료
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}/runs/{runId}/step-history:
+    get:
+      tags: [F-RUN]
+      operationId: getTestRunStepHistory
+      summary: TC 변경으로 발생한 step 이력 조회
+      description: Rule 4·5. test_run_step_history 시간 역순. (Required Role: Project 멤버)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+        - $ref: '#/components/parameters/runIdPath'
+        - $ref: '#/components/parameters/pageQuery'
+        - $ref: '#/components/parameters/sizeQuery'
+      responses:
+        '200':
+          description: 이력
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PagedResponse'
+                          - properties:
+                              content:
+                                type: array
+                                items: { $ref: '#/components/schemas/TestRunStepHistoryResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}/runs/{runId}/steps/{stepId}/execute:
+    post:
+      tags: [F-RUN]
+      operationId: executeTestRunStep
+      summary: TestRun step 단계별 결과 입력 (자동 종료 + duration)
+      description: |
+        result + actualResult 입력. duration_ms = lastUpdatedAt - started_at 갱신.
+        모든 step이 비-UNTESTED면 자동 종료 (`status=COMPLETED`, `completed_at=now`, 집계 result 산출).
+        (Required Role: Run 작성자 또는 PO, Member는 본인 할당 Item Run만)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+        - $ref: '#/components/parameters/runIdPath'
+        - $ref: '#/components/parameters/runStepIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExecuteTestRunStepRequest' }
+      responses:
+        '200':
+          description: 결과 반영. 자동 종료 시 status/completed_at/aggregated result 포함.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/TestRunDetailResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}/plans/{planId}/items/{itemId}/runs:
+    get:
+      tags: [F-RUN]
+      operationId: listTestRunsByPlanItem
+      summary: PlanItem의 TestRun 이력 (시간 역순)
+      description: (Required Role: Project 멤버)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+        - $ref: '#/components/parameters/planIdPath'
+        - $ref: '#/components/parameters/planItemIdPath'
+        - $ref: '#/components/parameters/pageQuery'
+        - $ref: '#/components/parameters/sizeQuery'
+      responses:
+        '200':
+          description: Run 목록
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PagedResponse'
+                          - properties:
+                              content:
+                                type: array
+                                items: { $ref: '#/components/schemas/TestRunResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  # ============================================================================
+  # F-DEF (결함)
+  # ============================================================================
+  /projects/{projectId}/defects:
+    get:
+      tags: [F-DEF]
+      operationId: listDefects
+      summary: Defect 목록·검색
+      description: (Required Role: Project 멤버)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+        - $ref: '#/components/parameters/qQuery'
+        - { name: status, in: query, required: false, schema: { $ref: '#/components/schemas/DefectStatus' } }
+        - { name: severity, in: query, required: false, schema: { $ref: '#/components/schemas/Severity' } }
+        - { name: priority, in: query, required: false, schema: { $ref: '#/components/schemas/Priority' } }
+        - { name: reporterUserId, in: query, required: false, schema: { type: integer, format: int64 } }
+        - { name: assigneeUserId, in: query, required: false, schema: { type: integer, format: int64 } }
+        - $ref: '#/components/parameters/pageQuery'
+        - $ref: '#/components/parameters/sizeQuery'
+        - $ref: '#/components/parameters/sortQuery'
+      responses:
+        '200':
+          description: Defect 목록
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PagedResponse'
+                          - properties:
+                              content:
+                                type: array
+                                items: { $ref: '#/components/schemas/DefectListItemResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    post:
+      tags: [F-DEF]
+      operationId: createDefect
+      summary: Defect 등록 (PO·Member)
+      description: |
+        testRunId(선택, 같은 Project)·title·severity·priority·reproductionSteps·assigneeUserId(선택, PO만) 입력.
+        상태 자동 OPEN. code 자동 `DEF-<project.code>-<seq>`. (Required Role: PO 또는 Member)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateDefectRequest' }
+      responses:
+        '201':
+          description: 생성 완료
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/DefectResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}/defects/{defectId}:
+    get:
+      tags: [F-DEF]
+      operationId: getDefect
+      summary: Defect 상세
+      description: (Required Role: Project 멤버)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+        - $ref: '#/components/parameters/defectIdPath'
+      responses:
+        '200':
+          description: Defect 상세
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/DefectResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}/defects/{defectId}/update:
+    post:
+      tags: [F-DEF]
+      operationId: updateDefect
+      summary: Defect 수정
+      description: |
+        PO는 모든 필드. Member는 본인 reporter/assignee 때만(★11) 본문 필드 수정.
+        담당자 변경은 별도 /assign. (Required Role: PO 또는 본인 reporter/assignee Member)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+        - $ref: '#/components/parameters/defectIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateDefectRequest' }
+      responses:
+        '200':
+          description: 수정 완료
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/DefectResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}/defects/{defectId}/delete:
+    post:
+      tags: [F-DEF]
+      operationId: deleteDefect
+      summary: Defect soft 삭제 (작성자 한정 ★16)
+      description: reporter=요청자(=`created_by`)만. PO/CO 우회 X. (Required Role: 작성자)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+        - $ref: '#/components/parameters/defectIdPath'
+      responses:
+        '200':
+          description: 삭제 완료
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}/defects/{defectId}/status:
+    post:
+      tags: [F-DEF]
+      operationId: transitionDefectStatus
+      summary: Defect 상태 전이
+      description: |
+        DAG: OPEN→IN_PROGRESS→RESOLVED→CLOSED, RESOLVED→OPEN(재오픈). 그 외 거부.
+        Member는 본인 reporter/assignee만(★11). (Required Role: PO 또는 본인 reporter/assignee Member)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+        - $ref: '#/components/parameters/defectIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TransitionDefectStatusRequest' }
+      responses:
+        '200':
+          description: 전이 완료
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/DefectResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}/defects/{defectId}/assign:
+    post:
+      tags: [F-DEF]
+      operationId: assignDefect
+      summary: Defect 담당자 지정/변경 (PO)
+      description: 같은 Project 멤버. 미할당은 assigneeUserId=null. (Required Role: PO)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+        - $ref: '#/components/parameters/defectIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AssignDefectRequest' }
+      responses:
+        '200':
+          description: 할당 완료
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/DefectResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  # ============================================================================
+  # F-ATTACH (첨부)
+  # ============================================================================
+  /projects/{projectId}/attachments:
+    get:
+      tags: [F-ATTACH]
+      operationId: listAttachments
+      summary: 첨부 목록 (owner 필터 필수)
+      description: ownerType/ownerId 필수. (Required Role: Project 멤버)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+        - { name: ownerType, in: query, required: true, schema: { $ref: '#/components/schemas/AttachmentOwnerType' } }
+        - { name: ownerId, in: query, required: true, schema: { type: integer, format: int64 } }
+        - $ref: '#/components/parameters/pageQuery'
+        - $ref: '#/components/parameters/sizeQuery'
+      responses:
+        '200':
+          description: 첨부 목록
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PagedResponse'
+                          - properties:
+                              content:
+                                type: array
+                                items: { $ref: '#/components/schemas/AttachmentResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    post:
+      tags: [F-ATTACH]
+      operationId: uploadAttachment
+      summary: 첨부 업로드 (multipart, 단일 파일)
+      description: |
+        화이트리스트 확장자(png/jpg/jpeg/gif/webp/pdf/txt/log) + 10MB 이하. 로컬 디스크 저장.
+        ownerType/ownerId는 같은 Project. (Required Role: PO 또는 Member)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema: { $ref: '#/components/schemas/UploadAttachmentRequest' }
+      responses:
+        '201':
+          description: 업로드 완료
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/AttachmentResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}/attachments/{attachmentId}/download:
+    get:
+      tags: [F-ATTACH]
+      operationId: downloadAttachment
+      summary: 첨부 다운로드 (스트림)
+      description: Content-Disposition 원본명. (Required Role: Project 멤버 — Viewer 포함)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+        - $ref: '#/components/parameters/attachmentIdPath'
+      responses:
+        '200':
+          description: 파일 스트림
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+              description: 'attachment; filename="<원본명>"'
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /projects/{projectId}/attachments/{attachmentId}/delete:
+    post:
+      tags: [F-ATTACH]
+      operationId: deleteAttachment
+      summary: 첨부 soft 삭제 (작성자 한정 ★16)
+      description: 업로드자(=`created_by`)만. 24h 윈도·PO 우회 폐기. 메타만 soft, 파일은 보존. (Required Role: 업로드자)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+        - $ref: '#/components/parameters/attachmentIdPath'
+      responses:
+        '200':
+          description: 삭제 완료
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  # ============================================================================
+  # F-REPORT (최소 리포트)
+  # ============================================================================
+  /projects/{projectId}/report:
+    get:
+      tags: [F-REPORT]
+      operationId: getProjectReport
+      summary: Project 리포트 (Plan별 Pass율 + Defect 상태 카운트 + totals)
+      description: |
+        진척률·통과율은 F-PLAN·F-RUN v2 정합(최신 Run 기준, IN_PROGRESS는 미실행). 결함은 is_deleted=false만.
+        (Required Role: Project 멤버 — Viewer 포함)
+      parameters:
+        - $ref: '#/components/parameters/projectIdPath'
+        - { name: planStatus, in: query, required: false, schema: { $ref: '#/components/schemas/TestPlanStatus' } }
+        - { name: dateFrom, in: query, required: false, schema: { type: string, format: date-time } }
+        - { name: dateTo, in: query, required: false, schema: { type: string, format: date-time } }
+      responses:
+        '200':
+          description: 리포트
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/ProjectReportResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+# ============================================================================
+# Components
+# ============================================================================
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT Bearer 토큰. 클레임: `userId`, `companyId`(Master는 null), `isMaster`(bool), `iat`, `exp`.
+        Role은 미포함 — 매 요청 `user_roles` 조회로 인가 판정(SRS §6.2).
+
+  parameters:
+    companyIdPath:
+      name: companyId
+      in: path
+      required: true
+      schema: { type: integer, format: int64 }
+      description: Company id
+    workspaceIdPath:
+      name: workspaceId
+      in: path
+      required: true
+      schema: { type: integer, format: int64 }
+      description: Workspace id
+    projectIdPath:
+      name: projectId
+      in: path
+      required: true
+      schema: { type: integer, format: int64 }
+      description: Project id
+    userIdPath:
+      name: userId
+      in: path
+      required: true
+      schema: { type: integer, format: int64 }
+      description: User id
+    invitationIdPath:
+      name: invitationId
+      in: path
+      required: true
+      schema: { type: integer, format: int64 }
+      description: Invitation id
+    suiteIdPath:
+      name: suiteId
+      in: path
+      required: true
+      schema: { type: integer, format: int64 }
+      description: TestSuite id
+    testCaseIdPath:
+      name: testCaseId
+      in: path
+      required: true
+      schema: { type: integer, format: int64 }
+      description: TestCase id
+    planIdPath:
+      name: planId
+      in: path
+      required: true
+      schema: { type: integer, format: int64 }
+      description: TestPlan id
+    planItemIdPath:
+      name: itemId
+      in: path
+      required: true
+      schema: { type: integer, format: int64 }
+      description: PlanItem id
+    runIdPath:
+      name: runId
+      in: path
+      required: true
+      schema: { type: integer, format: int64 }
+      description: TestRun id
+    runStepIdPath:
+      name: stepId
+      in: path
+      required: true
+      schema: { type: integer, format: int64 }
+      description: TestRunStep id (이 Run의 step만 허용)
+    defectIdPath:
+      name: defectId
+      in: path
+      required: true
+      schema: { type: integer, format: int64 }
+      description: Defect id
+    attachmentIdPath:
+      name: attachmentId
+      in: path
+      required: true
+      schema: { type: integer, format: int64 }
+      description: Attachment id
+    idPath:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, format: int64 }
+      description: 범용 식별자
+    pageQuery:
+      name: page
+      in: query
+      required: false
+      schema: { type: integer, minimum: 0, default: 0 }
+      description: 0-based 페이지 번호 (SRS §6.1)
+    sizeQuery:
+      name: size
+      in: query
+      required: false
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      description: 페이지 크기 (max 100)
+    sortQuery:
+      name: sort
+      in: query
+      required: false
+      schema: { type: string }
+      description: '`field,asc|desc` (예: `createdAt,desc`). 콤마로 다중 정렬 가능'
+    qQuery:
+      name: q
+      in: query
+      required: false
+      schema: { type: string }
+      description: 부분일치 검색 키워드 (대상 필드는 기능별 명시)
+    isActiveQuery:
+      name: isActive
+      in: query
+      required: false
+      schema: { type: boolean }
+      description: 활성 상태 필터
+
+  responses:
+    Unauthorized:
+      description: 401 — 미인증 또는 토큰 만료/무효
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Forbidden:
+      description: 403 — 권한 없음 / 비활성 격리
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    NotFound:
+      description: 404 — 리소스 없음 / 격리 위반 은닉
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    ValidationError:
+      description: 400/422 — 입력 검증 실패 (필드별 errors[] 포함)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Conflict:
+      description: 409 — 상태 충돌 / 중복
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    TooManyRequests:
+      description: 429 — Rate Limit 초과
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    InternalError:
+      description: 500 — 서버 내부 오류
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  schemas:
+    # ----------------------------------------------------------------
+    # 공통 응답 래퍼 / 페이지네이션 / 에러
+    # ----------------------------------------------------------------
+    ApiResponse:
+      type: object
+      description: 공통 응답 래퍼 (backend §4.5). 에러 시 진단 필드 traceId/timestamp/path/errors 추가.
+      required: [success, code, message]
+      properties:
+        success: { type: boolean, example: true }
+        code: { type: string, example: SUCCESS, description: '성공=SUCCESS, 에러=문자열 의미 코드(예: TESTCASE_NOT_FOUND)' }
+        message: { type: string, example: 요청이 정상 처리되었습니다. }
+        data: { description: 응답 페이로드 (성공 시), 에러는 null }
+
+    PagedResponse:
+      type: object
+      description: 페이지네이션 응답
+      required: [content, totalElements, totalPages, currentPage, size]
+      properties:
+        content:
+          type: array
+          items: { type: object }
+        totalElements: { type: integer, format: int64 }
+        totalPages: { type: integer }
+        currentPage: { type: integer }
+        size: { type: integer }
+
+    ErrorResponse:
+      type: object
+      description: 표준 에러 응답 (ApiResponse + 진단 필드, backend §5.3)
+      required: [success, code, message]
+      properties:
+        success: { type: boolean, example: false }
+        code: { type: string, example: COMMON_INVALID_INPUT }
+        message: { type: string }
+        data:
+          type: object
+          nullable: true
+        traceId: { type: string, example: b1f3c2a4-8e7d-4a11-9f0c-2d3e4f5a6b7c }
+        timestamp: { type: string, format: date-time }
+        path: { type: string, example: /api/v1/test-cases }
+        errors:
+          type: array
+          items: { $ref: '#/components/schemas/FieldError' }
+
+    FieldError:
+      type: object
+      properties:
+        field: { type: string, example: title }
+        reason: { type: string, example: 필수 항목입니다. }
+
+    # ----------------------------------------------------------------
+    # Enums (ERD §4)
+    # ----------------------------------------------------------------
+    Role:
+      type: string
+      description: |
+        user_roles.role (5종). Master는 master_admins로 표현되어 user_roles 행이 없으므로
+        본 enum에서 제외 (ERD §5 Role enum 정본, permissions §3 표).
+      enum: [CO, WO, PO, MEMBER, VIEWER]
+
+    Scope:
+      type: string
+      description: user_roles.scope_type / invitations.scope_type (ERD §5 ScopeType)
+      enum: [COMPANY, WORKSPACE, PROJECT]
+
+    Priority:
+      type: string
+      description: TC·Defect priority (ERD §5 + glossary §4.2, PascalCase 정본)
+      enum: [Urgent, High, Medium, Low]
+
+    Severity:
+      type: string
+      description: Defect severity (ERD §5 + glossary §4.1, PascalCase 정본)
+      enum: [Critical, Major, Minor, Trivial]
+
+    DefectStatus:
+      type: string
+      description: MVP 4종 (DAG OPEN→IN_PROGRESS→RESOLVED→CLOSED, RESOLVED→OPEN)
+      enum: [OPEN, IN_PROGRESS, RESOLVED, CLOSED]
+
+    TestPlanStatus:
+      type: string
+      description: 단방향 전이 (DRAFT→IN_PROGRESS→CLOSED)
+      enum: [DRAFT, IN_PROGRESS, CLOSED]
+
+    TestRunStatus:
+      type: string
+      description: 자동 종료 enum (Rule 2)
+      enum: [IN_PROGRESS, COMPLETED]
+
+    ExecutionResult:
+      type: string
+      description: MVP 5종 (UNTESTED 활성, Retest는 Phase 2)
+      enum: [UNTESTED, PASS, FAIL, BLOCKED, SKIPPED]
+
+    TestCaseScope:
+      type: string
+      description: TC Scope 3종 (Rule 3, 불변)
+      enum: [GLOBAL, WORKSPACE, PROJECT]
+
+    TestCaseScopeFilter:
+      type: string
+      description: 목록 필터용 (`ALL` 합본 포함)
+      enum: [GLOBAL, WORKSPACE, PROJECT, ALL]
+
+    AttachmentOwnerType:
+      type: string
+      description: 첨부 owner_type
+      enum: [TEST_RUN, DEFECT]
+
+    TestRunStepHistoryReason:
+      type: string
+      description: TC 변경 이력 사유 (Rule 4·5)
+      enum: [TC_UPDATED, TC_STEP_ADDED, TC_STEP_DELETED]
+
+    # ----------------------------------------------------------------
+    # 공통 요약 객체
+    # ----------------------------------------------------------------
+    UserSummary:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        email: { type: string, format: email }
+        name: { type: string }
+
+    WorkspaceSummary:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+
+    ProjectSummary:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        code: { type: string }
+
+    TestCaseSummary:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string }
+        title: { type: string }
+
+    # ----------------------------------------------------------------
+    # F-COMPANY
+    # ----------------------------------------------------------------
+    CompanyResponse:
+      type: object
+      required: [id, name, slug, isActive]
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        slug: { type: string, description: 시스템 유일, 불변 }
+        isActive: { type: boolean }
+        ownerUser:
+          allOf:
+            - $ref: '#/components/schemas/UserSummary'
+          nullable: true
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    CreateCompanyRequest:
+      type: object
+      required: [name, firstCoEmail, firstCoName]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        slug:
+          type: string
+          nullable: true
+          description: 미전송 시 자동 생성 (kebab-case, 시스템 유일)
+          pattern: '^[a-z0-9]+(-[a-z0-9]+)*$'
+          minLength: 3
+          maxLength: 50
+        firstCoEmail: { type: string, format: email }
+        firstCoName: { type: string, minLength: 1, maxLength: 50 }
+
+    CreatedCompanyResponse:
+      type: object
+      properties:
+        company: { $ref: '#/components/schemas/CompanyResponse' }
+        firstCoUser: { $ref: '#/components/schemas/UserSummary' }
+
+    UpdateCompanyRequest:
+      type: object
+      description: 본인 Company 정보 부분 변경. slug는 포함 시 무시(불변).
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+
+    TransferOwnershipRequest:
+      type: object
+      required: [targetUserId]
+      properties:
+        targetUserId: { type: integer, format: int64 }
+
+    # ----------------------------------------------------------------
+    # F-WS
+    # ----------------------------------------------------------------
+    WorkspaceResponse:
+      type: object
+      required: [id, name, isActive]
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        isActive: { type: boolean }
+        ownerUser:
+          allOf:
+            - $ref: '#/components/schemas/UserSummary'
+        memberCount: { type: integer }
+        projectCount: { type: integer }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    CreateWorkspaceRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        description: { type: string, maxLength: 500, nullable: true }
+
+    UpdateWorkspaceRequest:
+      type: object
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        description: { type: string, maxLength: 500, nullable: true }
+
+    WorkspaceMemberResponse:
+      type: object
+      properties:
+        userId: { type: integer, format: int64 }
+        email: { type: string, format: email }
+        name: { type: string }
+        roles:
+          type: array
+          description: 이 WS Scope에서 보유한 Role 목록
+          items: { $ref: '#/components/schemas/Role' }
+
+    InviteWorkspaceMembersRequest:
+      type: object
+      required: [userIds]
+      properties:
+        userIds:
+          type: array
+          minItems: 1
+          items: { type: integer, format: int64 }
+
+    # ----------------------------------------------------------------
+    # F-AUTH
+    # ----------------------------------------------------------------
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, format: password }
+
+    LoginResponse:
+      type: object
+      required: [accessToken, refreshToken, user]
+      properties:
+        accessToken: { type: string }
+        refreshToken: { type: string }
+        mustChangePassword: { type: boolean, default: false }
+        user: { $ref: '#/components/schemas/AuthUserContext' }
+
+    AuthUserContext:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        email: { type: string, format: email }
+        name: { type: string }
+        companyId:
+          type: integer
+          format: int64
+          nullable: true
+          description: Master는 null
+        isMaster: { type: boolean }
+
+    RefreshTokenRequest:
+      type: object
+      required: [refreshToken]
+      properties:
+        refreshToken: { type: string }
+
+    TokenPairResponse:
+      type: object
+      required: [accessToken, refreshToken]
+      properties:
+        accessToken: { type: string }
+        refreshToken: { type: string }
+
+    LogoutRequest:
+      type: object
+      required: [refreshToken]
+      properties:
+        refreshToken: { type: string }
+
+    SignupCompanyOwnerRequest:
+      type: object
+      required: [email, password, name, companyName]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, format: password, minLength: 8 }
+        name: { type: string, minLength: 1, maxLength: 50 }
+        companyName: { type: string, minLength: 1, maxLength: 100 }
+
+    VerifyEmailRequest:
+      type: object
+      required: [token]
+      properties:
+        token: { type: string }
+
+    AcceptInviteRequest:
+      type: object
+      required: [token, password]
+      properties:
+        token: { type: string }
+        password: { type: string, format: password, minLength: 8 }
+        name: { type: string, minLength: 1, maxLength: 50, nullable: true }
+
+    ForgotPasswordRequest:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, format: email }
+
+    ResetPasswordRequest:
+      type: object
+      required: [token, newPassword]
+      properties:
+        token: { type: string }
+        newPassword: { type: string, format: password, minLength: 8 }
+
+    ChangePasswordRequest:
+      type: object
+      required: [currentPassword, newPassword]
+      properties:
+        currentPassword: { type: string, format: password }
+        newPassword: { type: string, format: password, minLength: 8 }
+
+    # ----------------------------------------------------------------
+    # F-USER
+    # ----------------------------------------------------------------
+    UserListItemResponse:
+      type: object
+      required: [id, email, name, isActive]
+      properties:
+        id: { type: integer, format: int64 }
+        email: { type: string, format: email }
+        name: { type: string }
+        isActive: { type: boolean }
+        isEmailVerified: { type: boolean }
+        roleCount: { type: string, description: '예: CO·WO×2·M(W)×1·M(P)×3 (Scope suffix W=WORKSPACE, P=PROJECT 필수)' }
+        createdAt: { type: string, format: date-time }
+
+    UserDetailResponse:
+      type: object
+      required: [id, email, name, isActive]
+      properties:
+        id: { type: integer, format: int64 }
+        email: { type: string, format: email }
+        name: { type: string }
+        isActive: { type: boolean }
+        isEmailVerified: { type: boolean }
+        mustChangePassword: { type: boolean }
+        lastLoginAt: { type: string, format: date-time, nullable: true }
+        rolesByScope: { $ref: '#/components/schemas/RolesByScope' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    RolesByScope:
+      type: object
+      description: 매트릭스 UI 직렬화 (Scope별 Role 목록)
+      properties:
+        COMPANY:
+          type: array
+          items: { $ref: '#/components/schemas/Role' }
+        WORKSPACE:
+          type: array
+          items: { $ref: '#/components/schemas/WorkspaceRoleAssignment' }
+        PROJECT:
+          type: array
+          items: { $ref: '#/components/schemas/ProjectRoleAssignment' }
+
+    WorkspaceRoleAssignment:
+      type: object
+      properties:
+        workspaceId: { type: integer, format: int64 }
+        workspaceName: { type: string }
+        role: { $ref: '#/components/schemas/Role' }
+
+    ProjectRoleAssignment:
+      type: object
+      properties:
+        workspaceId: { type: integer, format: int64 }
+        projectId: { type: integer, format: int64 }
+        projectName: { type: string }
+        role: { $ref: '#/components/schemas/Role' }
+
+    RoleGrantSpec:
+      type: object
+      required: [scopeType, scopeId, role]
+      properties:
+        scopeType: { $ref: '#/components/schemas/Scope' }
+        scopeId: { type: integer, format: int64 }
+        role: { $ref: '#/components/schemas/Role' }
+
+    SyncUserRolesRequest:
+      type: object
+      description: 단일 트랜잭션 + 멱등. grants/revokes 둘 중 1개 이상 필수.
+      properties:
+        grants:
+          type: array
+          items: { $ref: '#/components/schemas/RoleGrantSpec' }
+        revokes:
+          type: array
+          items: { $ref: '#/components/schemas/RoleGrantSpec' }
+
+    InvitationResponse:
+      type: object
+      required: [id, email, scopeType, scopeId, expiresAt]
+      properties:
+        id: { type: integer, format: int64 }
+        email: { type: string, format: email }
+        name: { type: string, nullable: true }
+        scopeType: { $ref: '#/components/schemas/Scope' }
+        scopeId: { type: integer, format: int64 }
+        role:
+          allOf:
+            - $ref: '#/components/schemas/Role'
+          nullable: true
+          description: 사전 부여 옵션 (없으면 가입 후 수동 부여)
+        invitedByUser: { $ref: '#/components/schemas/UserSummary' }
+        expiresAt: { type: string, format: date-time }
+        acceptedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+
+    CreateInvitationRequest:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, format: email }
+        name: { type: string, minLength: 1, maxLength: 50, nullable: true }
+        preassignedRoles:
+          type: array
+          description: 가입 시 자동 매트릭스 부여
+          items: { $ref: '#/components/schemas/RoleGrantSpec' }
+
+    UpdateMyProfileRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 50 }
+
+    # ----------------------------------------------------------------
+    # F-PROJ
+    # ----------------------------------------------------------------
+    ProjectResponse:
+      type: object
+      required: [id, name, code, isActive]
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        code:
+          type: string
+          description: '`^[A-Z][A-Z0-9]{1,9}$`, Company 내 unique, 불변'
+          pattern: '^[A-Z][A-Z0-9]{1,9}$'
+        description: { type: string, nullable: true }
+        isActive: { type: boolean }
+        owner:
+          allOf:
+            - $ref: '#/components/schemas/UserSummary'
+          nullable: true
+          description: Member 생성 직후엔 null 가능
+        workspace: { $ref: '#/components/schemas/WorkspaceSummary' }
+        memberCount: { type: integer }
+        testCaseCount: { type: integer }
+        defectCount: { type: integer }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    CreateProjectRequest:
+      type: object
+      required: [name, code]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        code:
+          type: string
+          description: 'Company 내 unique, 불변'
+          pattern: '^[A-Z][A-Z0-9]{1,9}$'
+          minLength: 2
+          maxLength: 10
+        description: { type: string, maxLength: 1000, nullable: true }
+
+    UpdateProjectRequest:
+      type: object
+      description: '**code는 포함 금지** (불변). 포함 시 400 `PROJ_CODE_IMMUTABLE`'
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        description: { type: string, maxLength: 1000, nullable: true }
+
+    ProjectMemberResponse:
+      type: object
+      properties:
+        userId: { type: integer, format: int64 }
+        email: { type: string, format: email }
+        name: { type: string }
+        role: { $ref: '#/components/schemas/Role' }
+
+    InviteProjectMembersRequest:
+      type: object
+      required: [userIds]
+      properties:
+        userIds:
+          type: array
+          minItems: 1
+          items: { type: integer, format: int64 }
+
+    # ----------------------------------------------------------------
+    # F-TS
+    # ----------------------------------------------------------------
+    TestSuiteResponse:
+      type: object
+      required: [id, name, sortOrder]
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        parentSuiteId: { type: integer, format: int64, nullable: true }
+        sortOrder: { type: integer }
+        testCaseCount: { type: integer }
+        createdAt: { type: string, format: date-time }
+        createdBy: { $ref: '#/components/schemas/UserSummary' }
+
+    TestSuiteTreeNode:
+      type: object
+      required: [id, name, sortOrder]
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        parentSuiteId: { type: integer, format: int64, nullable: true }
+        sortOrder: { type: integer }
+        testCaseCount: { type: integer }
+        children:
+          type: array
+          items: { $ref: '#/components/schemas/TestSuiteTreeNode' }
+
+    CreateTestSuiteRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        parentSuiteId:
+          type: integer
+          format: int64
+          nullable: true
+          description: null=root
+
+    UpdateTestSuiteRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+
+    MoveTestSuiteRequest:
+      type: object
+      properties:
+        newParentSuiteId:
+          type: integer
+          format: int64
+          nullable: true
+          description: null=root
+        newSortOrder: { type: integer, minimum: 0, nullable: true }
+
+    # ----------------------------------------------------------------
+    # F-TC (TestCase + TestStep)
+    # ----------------------------------------------------------------
+    TestStepRequestItem:
+      type: object
+      required: [order, action]
+      properties:
+        order: { type: integer, minimum: 1 }
+        action: { type: string }
+        expectedResult: { type: string, nullable: true }
+
+    TestStepResponseItem:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        order: { type: integer }
+        action: { type: string }
+        expectedResult: { type: string, nullable: true }
+
+    TestCaseListItemResponse:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string, description: 'TC-<projCode>-<seq> / TC-WS<wsId>-<seq> / TC-GBL-<seq>' }
+        scopeType: { $ref: '#/components/schemas/TestCaseScope' }
+        scopeId: { type: integer, format: int64 }
+        title: { type: string }
+        suiteId: { type: integer, format: int64, nullable: true }
+        priority: { $ref: '#/components/schemas/Priority' }
+        tags:
+          type: array
+          items: { type: string }
+        updatedAt: { type: string, format: date-time }
+
+    TestCaseResponse:
+      type: object
+      required: [id, code, scopeType, title, priority]
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string }
+        scopeType: { $ref: '#/components/schemas/TestCaseScope' }
+        scopeId: { type: integer, format: int64, description: 'Scope에 따라 companyId/workspaceId/projectId' }
+        title: { type: string }
+        suite:
+          type: object
+          nullable: true
+          description: PROJECT Scope만 존재
+          properties:
+            id: { type: integer, format: int64 }
+            path: { type: string, description: '루트→리프 폴더 경로 문자열' }
+        priority: { $ref: '#/components/schemas/Priority' }
+        precondition: { type: string, nullable: true }
+        expectedResult: { type: string, nullable: true }
+        tags:
+          type: array
+          items: { type: string }
+        steps:
+          type: array
+          items: { $ref: '#/components/schemas/TestStepResponseItem' }
+        createdBy: { $ref: '#/components/schemas/UserSummary' }
+        updatedBy: { $ref: '#/components/schemas/UserSummary' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    CreateTestCaseBase:
+      type: object
+      required: [title]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 200 }
+        priority:
+          allOf:
+            - $ref: '#/components/schemas/Priority'
+          default: Medium
+        precondition: { type: string, maxLength: 2000, nullable: true }
+        expectedResult: { type: string, maxLength: 2000, nullable: true }
+        tags:
+          type: array
+          maxItems: 10
+          items: { type: string, minLength: 1, maxLength: 30 }
+        steps:
+          type: array
+          items: { $ref: '#/components/schemas/TestStepRequestItem' }
+
+    CreateGlobalTestCaseRequest:
+      allOf:
+        - $ref: '#/components/schemas/CreateTestCaseBase'
+        - type: object
+          description: 'scopeType=GLOBAL (서버 강제). suiteId 미전송.'
+
+    CreateWorkspaceTestCaseRequest:
+      allOf:
+        - $ref: '#/components/schemas/CreateTestCaseBase'
+        - type: object
+          description: 'scopeType=WORKSPACE (서버 강제, path workspaceId 사용). suiteId 미전송.'
+
+    CreateProjectTestCaseRequest:
+      allOf:
+        - $ref: '#/components/schemas/CreateTestCaseBase'
+        - type: object
+          required: [suiteId]
+          description: 'scopeType=PROJECT (서버 강제, path projectId 사용). suiteId 필수.'
+          properties:
+            suiteId: { type: integer, format: int64 }
+
+    UpdateTestCaseRequest:
+      type: object
+      description: |
+        부분 변경. scopeType은 변경 불가(`TC_SCOPE_IMMUTABLE`).
+        title/precondition/expectedResult/steps[] 중 1개 이상 변경 시 영향 TestRun이 비동기로
+        step UNTESTED 재설정 + test_run_step_history 기록(Rule 4·5, F-RUN §5.7).
+      properties:
+        title: { type: string, minLength: 1, maxLength: 200 }
+        priority: { $ref: '#/components/schemas/Priority' }
+        precondition: { type: string, maxLength: 2000, nullable: true }
+        expectedResult: { type: string, maxLength: 2000, nullable: true }
+        tags:
+          type: array
+          maxItems: 10
+          items: { type: string, minLength: 1, maxLength: 30 }
+        steps:
+          type: array
+          description: 전체 교체 모델 (부분 패치 Phase 2)
+          items: { $ref: '#/components/schemas/TestStepRequestItem' }
+
+    MoveTestCaseRequest:
+      type: object
+      required: [newSuiteId]
+      properties:
+        newSuiteId: { type: integer, format: int64 }
+
+    # ----------------------------------------------------------------
+    # F-PLAN
+    # ----------------------------------------------------------------
+    TestPlanResponse:
+      type: object
+      required: [id, name, status]
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        status: { $ref: '#/components/schemas/TestPlanStatus' }
+        milestone: { type: string, nullable: true }
+        plannedStartAt: { type: string, format: date-time, nullable: true }
+        plannedEndAt: { type: string, format: date-time, nullable: true }
+        itemCount: { type: integer }
+        executedCount: { type: integer }
+        passRate:
+          type: number
+          format: double
+          nullable: true
+          description: passCount/executedCount, executedCount=0 시 null
+        createdBy: { $ref: '#/components/schemas/UserSummary' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    TestPlanDetailResponse:
+      allOf:
+        - $ref: '#/components/schemas/TestPlanResponse'
+        - type: object
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/PlanItemResponse' }
+
+    CreateTestPlanRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        milestone: { type: string, maxLength: 100, nullable: true }
+        plannedStartAt: { type: string, format: date-time, nullable: true }
+        plannedEndAt: { type: string, format: date-time, nullable: true }
+
+    UpdateTestPlanRequest:
+      type: object
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        milestone: { type: string, maxLength: 100, nullable: true }
+        plannedStartAt: { type: string, format: date-time, nullable: true }
+        plannedEndAt: { type: string, format: date-time, nullable: true }
+
+    TransitionTestPlanStatusRequest:
+      type: object
+      required: [targetStatus]
+      properties:
+        targetStatus: { $ref: '#/components/schemas/TestPlanStatus' }
+
+    PlanItemResponse:
+      type: object
+      required: [id]
+      properties:
+        id: { type: integer, format: int64 }
+        testCase: { $ref: '#/components/schemas/TestCaseSummary' }
+        assignee:
+          allOf:
+            - $ref: '#/components/schemas/UserSummary'
+          nullable: true
+        latestRun:
+          allOf:
+            - $ref: '#/components/schemas/TestRunSummary'
+          nullable: true
+
+    TestRunSummary:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        status: { $ref: '#/components/schemas/TestRunStatus' }
+        result:
+          allOf:
+            - $ref: '#/components/schemas/ExecutionResult'
+          nullable: true
+        startedAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time, nullable: true }
+        durationMs: { type: integer, format: int64 }
+
+    AddPlanItemsRequest:
+      type: object
+      required: [testCaseIds]
+      properties:
+        testCaseIds:
+          type: array
+          minItems: 1
+          items: { type: integer, format: int64 }
+        assigneeUserId:
+          type: integer
+          format: int64
+          nullable: true
+          description: PO만 지정. Member가 전송 시 400 `PLAN_ASSIGNEE_FORBIDDEN`.
+
+    AssignPlanItemRequest:
+      type: object
+      properties:
+        assigneeUserId:
+          type: integer
+          format: int64
+          nullable: true
+          description: null=미할당으로 되돌리기
+
+    # ----------------------------------------------------------------
+    # F-RUN
+    # ----------------------------------------------------------------
+    TestRunResponse:
+      type: object
+      required: [id, status, startedAt, durationMs]
+      properties:
+        id: { type: integer, format: int64 }
+        planItem:
+          type: object
+          properties:
+            id: { type: integer, format: int64 }
+            testCase: { $ref: '#/components/schemas/TestCaseSummary' }
+        status: { $ref: '#/components/schemas/TestRunStatus' }
+        result:
+          allOf:
+            - $ref: '#/components/schemas/ExecutionResult'
+          nullable: true
+          description: IN_PROGRESS면 null
+        startedAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time, nullable: true }
+        durationMs:
+          type: integer
+          format: int64
+          description: 누적 ms (TC 변경 UNTESTED 시에도 보존, Rule 2)
+        environment: { type: string, nullable: true }
+        createdBy: { $ref: '#/components/schemas/UserSummary' }
+        attachmentCount: { type: integer }
+        defectCount: { type: integer }
+
+    TestRunDetailResponse:
+      allOf:
+        - $ref: '#/components/schemas/TestRunResponse'
+        - type: object
+          properties:
+            steps:
+              type: array
+              items: { $ref: '#/components/schemas/TestRunStepResponse' }
+
+    TestRunStepResponse:
+      type: object
+      required: [id, order, action, result]
+      properties:
+        id: { type: integer, format: int64 }
+        testStepId: { type: integer, format: int64, nullable: true }
+        order: { type: integer }
+        action: { type: string, description: 스냅샷 시점 또는 변경 직전 }
+        expectedResult: { type: string, nullable: true }
+        result: { $ref: '#/components/schemas/ExecutionResult' }
+        actualResult: { type: string, nullable: true }
+        updatedAt: { type: string, format: date-time }
+        updatedBy:
+          allOf:
+            - $ref: '#/components/schemas/UserSummary'
+          nullable: true
+
+    StartTestRunRequest:
+      type: object
+      required: [planItemId]
+      properties:
+        planItemId: { type: integer, format: int64 }
+        environment: { type: string, maxLength: 200, nullable: true }
+
+    UpdateTestRunRequest:
+      type: object
+      properties:
+        environment: { type: string, maxLength: 200, nullable: true }
+
+    ExecuteTestRunStepRequest:
+      type: object
+      required: [result]
+      properties:
+        result: { $ref: '#/components/schemas/ExecutionResult' }
+        actualResult: { type: string, maxLength: 5000, nullable: true }
+
+    TestRunStepHistoryResponse:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        stepId: { type: integer, format: int64, nullable: true }
+        stepOrder: { type: integer }
+        snapshotAction: { type: string, nullable: true }
+        snapshotExpectedResult: { type: string, nullable: true }
+        previousResult:
+          allOf:
+            - $ref: '#/components/schemas/ExecutionResult'
+          nullable: true
+        changedAt: { type: string, format: date-time }
+        changedBy:
+          allOf:
+            - $ref: '#/components/schemas/UserSummary'
+          nullable: true
+        reason: { $ref: '#/components/schemas/TestRunStepHistoryReason' }
+
+    # ----------------------------------------------------------------
+    # F-DEF
+    # ----------------------------------------------------------------
+    DefectListItemResponse:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string, description: 'DEF-<projCode>-<seq>' }
+        title: { type: string }
+        status: { $ref: '#/components/schemas/DefectStatus' }
+        severity: { $ref: '#/components/schemas/Severity' }
+        priority: { $ref: '#/components/schemas/Priority' }
+        assigneeName: { type: string, nullable: true }
+        updatedAt: { type: string, format: date-time }
+
+    DefectResponse:
+      type: object
+      required: [id, code, title, status, severity, priority]
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string }
+        title: { type: string }
+        description: { type: string, nullable: true }
+        reproductionSteps: { type: string, nullable: true }
+        status: { $ref: '#/components/schemas/DefectStatus' }
+        severity: { $ref: '#/components/schemas/Severity' }
+        priority: { $ref: '#/components/schemas/Priority' }
+        reporter: { $ref: '#/components/schemas/UserSummary' }
+        assignee:
+          allOf:
+            - $ref: '#/components/schemas/UserSummary'
+          nullable: true
+        testRun:
+          allOf:
+            - $ref: '#/components/schemas/TestRunSummary'
+          nullable: true
+        attachmentCount: { type: integer }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    CreateDefectRequest:
+      type: object
+      required: [title]
+      properties:
+        testRunId:
+          type: integer
+          format: int64
+          nullable: true
+          description: 같은 Project Run만
+        title: { type: string, minLength: 1, maxLength: 200 }
+        description: { type: string, maxLength: 5000, nullable: true }
+        severity:
+          allOf:
+            - $ref: '#/components/schemas/Severity'
+          default: Major
+        priority:
+          allOf:
+            - $ref: '#/components/schemas/Priority'
+          default: Medium
+        reproductionSteps: { type: string, maxLength: 5000, nullable: true }
+        assigneeUserId:
+          type: integer
+          format: int64
+          nullable: true
+          description: PO만 지정 가능. Member 전송 시 400.
+
+    UpdateDefectRequest:
+      type: object
+      description: 부분 변경. 담당자 변경은 별도 /assign.
+      properties:
+        title: { type: string, minLength: 1, maxLength: 200 }
+        description: { type: string, maxLength: 5000, nullable: true }
+        severity: { $ref: '#/components/schemas/Severity' }
+        priority: { $ref: '#/components/schemas/Priority' }
+        reproductionSteps: { type: string, maxLength: 5000, nullable: true }
+
+    TransitionDefectStatusRequest:
+      type: object
+      required: [targetStatus]
+      properties:
+        targetStatus: { $ref: '#/components/schemas/DefectStatus' }
+
+    AssignDefectRequest:
+      type: object
+      properties:
+        assigneeUserId:
+          type: integer
+          format: int64
+          nullable: true
+          description: null=미할당. 같은 Project 멤버여야 함.
+
+    # ----------------------------------------------------------------
+    # F-ATTACH
+    # ----------------------------------------------------------------
+    AttachmentResponse:
+      type: object
+      required: [id, fileName, mimeType, sizeBytes, ownerType, ownerId]
+      properties:
+        id: { type: integer, format: int64 }
+        fileName: { type: string }
+        mimeType: { type: string }
+        sizeBytes: { type: integer, format: int64 }
+        ownerType: { $ref: '#/components/schemas/AttachmentOwnerType' }
+        ownerId: { type: integer, format: int64 }
+        uploadedBy: { $ref: '#/components/schemas/UserSummary' }
+        createdAt: { type: string, format: date-time }
+
+    UploadAttachmentRequest:
+      type: object
+      required: [file, ownerType, ownerId]
+      properties:
+        file:
+          type: string
+          format: binary
+          description: '단일 파일, 10MB 이하, 화이트리스트(png/jpg/jpeg/gif/webp/pdf/txt/log)'
+        ownerType: { $ref: '#/components/schemas/AttachmentOwnerType' }
+        ownerId: { type: integer, format: int64 }
+
+    # ----------------------------------------------------------------
+    # F-REPORT
+    # ----------------------------------------------------------------
+    ProjectReportResponse:
+      type: object
+      properties:
+        plans:
+          type: array
+          items: { $ref: '#/components/schemas/ProjectReportPlanItem' }
+        defectStatusCount:
+          type: object
+          description: 활성(is_deleted=false) 결함만 집계
+          properties:
+            OPEN: { type: integer }
+            IN_PROGRESS: { type: integer }
+            RESOLVED: { type: integer }
+            CLOSED: { type: integer }
+        totals:
+          type: object
+          properties:
+            planCount: { type: integer }
+            totalItems: { type: integer }
+            totalExecuted: { type: integer }
+            overallPassRate:
+              type: number
+              format: double
+              nullable: true
+
+    ProjectReportPlanItem:
+      type: object
+      properties:
+        planId: { type: integer, format: int64 }
+        name: { type: string }
+        status: { $ref: '#/components/schemas/TestPlanStatus' }
+        itemCount: { type: integer }
+        executedCount:
+          type: integer
+          description: 최신 Run이 COMPLETED + result != null인 PlanItem 수 (IN_PROGRESS는 미실행)
+        passCount: { type: integer }
+        failCount: { type: integer }
+        blockedCount: { type: integer }
+        skippedCount: { type: integer }
+        passRate:
+          type: number
+          format: double
+          nullable: true
+          description: passCount/executedCount, 0 분모 시 null
+
+# ============================================================================
+# 전역 보안 적용 (대부분 엔드포인트는 인증 필수. 공개 엔드포인트는 path에서 `security: []`로 오버라이드)
+# ============================================================================
+security:
+  - bearerAuth: []
+
+# ============================================================================
+# 검증 체크리스트 (P1, .claude/pm/CLAUDE.md §P1·산출물 §8)
+# ============================================================================
+# [1] feature 12개 모두 엔드포인트 커버 — feature ID × operation 매핑
+#   F-COMPANY (8):  listCompaniesForMaster, createCompanyByMaster, getCompanyForMaster,
+#                   activateCompany, deactivateCompany, getMyCompany, updateCompany,
+#                   transferCompanyOwnership, grantCompanyOwnerRole
+#   F-WS (10):      listWorkspaces, createWorkspace, getWorkspace, updateWorkspace,
+#                   activateWorkspace, deactivateWorkspace, transferWorkspaceOwnership,
+#                   listWorkspaceMembers, inviteWorkspaceMembers, removeWorkspaceMember
+#   F-AUTH (9):     login, refreshToken, logout, signupCompanyOwner, verifyEmail,
+#                   acceptInvite, forgotPassword, resetPassword, changePassword
+#   F-USER (15):    listCompanyUsers, getCompanyUser, syncUserRoles, grantUserRoles,
+#                   revokeUserRoles, resetUserPasswordByCompanyOwner, activateUser,
+#                   deactivateUser, withdrawUser, listInvitations, createInvitation,
+#                   cancelInvitation, resendInvitation, getMyProfile, updateMyProfile
+#   F-PROJ (9):     listProjects, createProject, getProject, updateProject,
+#                   activateProject, deactivateProject, listProjectMembers,
+#                   inviteProjectMembers, removeProjectMember
+#   F-TS (5):       getTestSuiteTree, createTestSuite, updateTestSuite,
+#                   moveTestSuite, deleteTestSuite
+#   F-TC (12):      listGlobalTestCases, createGlobalTestCase, updateGlobalTestCase,
+#                   deleteGlobalTestCase, listWorkspaceTestCases, createWorkspaceTestCase,
+#                   updateWorkspaceTestCase, deleteWorkspaceTestCase, listTestCases,
+#                   createProjectTestCase, getTestCase, updateProjectTestCase,
+#                   deleteProjectTestCase, moveTestCase
+#   F-PLAN (9):     listTestPlans, createTestPlan, getTestPlan, updateTestPlan,
+#                   deleteTestPlan, transitionTestPlanStatus, addPlanItems,
+#                   assignPlanItem, removePlanItem
+#   F-RUN (8):      startTestRun, getTestRun, updateTestRunMeta, deleteTestRun,
+#                   getTestRunStepHistory, executeTestRunStep, listTestRunsByPlanItem
+#   F-DEF (7):      listDefects, createDefect, getDefect, updateDefect,
+#                   deleteDefect, transitionDefectStatus, assignDefect
+#   F-ATTACH (4):   listAttachments, uploadAttachment, downloadAttachment,
+#                   deleteAttachment
+#   F-REPORT (1):   getProjectReport
+#   12/12 도메인 커버 ✅
+#
+# [2] 모든 operation에 tags · operationId · security 부여 ✅
+#     - 공개 엔드포인트(login·refreshToken·signupCompanyOwner·verifyEmail·
+#       acceptInvite·forgotPassword·resetPassword)는 `security: []`로 명시적 오픈
+#     - 그 외 모든 operation은 전역 `security: [bearerAuth: []]` 상속
+#
+# [3] 4xx/5xx 응답 명시 ✅
+#     - 모든 인증 필요 경로: 401/403/500 기본
+#     - 입력 검증 가능 경로: 400/422 (ValidationError)
+#     - 리소스 식별 경로: 404
+#     - 중복/충돌 경로: 409 (Conflict)
+#     - Rate Limit 경로(auth/login·forgot-password·resend): 429
+#
+# [4] permissions.md 매트릭스와 권한 정합 ✅
+#     - 각 operation `description`에 (Required Role) 명시 — 매트릭스 §4 정본 직접 인용
+#     - ★15 (WO Project 컨테이너 한정), ★16 (삭제 작성자 한정),
+#       ★17 (TC 같은 Scope 멤버 수정), ★18 (Viewer의 Global/WS TC 생성) 반영
+#
+# [도메인 락 정합 — README v2.3]
+# - 3-tier 격리 path: companies(Master 전용)/workspaces/projects 중첩 ✅
+# - Role 6단 + (User × Scope) 매트릭스: F-USER syncUserRoles 정본 + RolesByScope 직렬화 ✅
+# - 회원가입 2경로: signupCompanyOwner(셀프 B) + acceptInvite(C). Master 등록(A)은 createCompanyByMaster + login ✅
+# - 이메일 인증/리셋: verifyEmail / forgotPassword / resetPassword ✅
+# - Project code 불변: UpdateProjectRequest에 code 필드 제외 + description에 명시 ✅
+# - TestRun 단계별 실행: executeTestRunStep (result + actualResult, duration 자동 갱신, 자동 종료) ✅
+# - TestCase Scope 3종: TestCaseScope enum + createGlobalTestCase/createWorkspaceTestCase/createProjectTestCase 분기 ✅
+# - TC 변경 영향 Run UNTESTED: updateTestCase description에 비동기 트리거 명시 + getTestRunStepHistory ✅
+# - ExecutionResult 5종 (UNTESTED 활성): ExecutionResult enum + 기본값 UNTESTED ✅
+# - TestRun status 2종: TestRunStatus enum (IN_PROGRESS/COMPLETED) ✅
+# - 삭제 작성자 한정(★16): delete* operation description 명시 (TS/TC/PLAN/RUN/DEF/ATTACH) ✅
+#
+# [GET/POST 룰 정합 — backend §4.2]
+# - 모든 조회: GET ✅
+# - 생성/수정/삭제(액션)/도메인 액션: POST ✅
+# - PUT/PATCH/DELETE 사용 0건 ✅ (downloadAttachment는 파일 스트림 GET, 조회 의미)

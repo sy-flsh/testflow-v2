@@ -1,0 +1,41 @@
+<!-- Topbar partial — shell.js가 .app-header 안에 inject -->
+<div class="topbar-left">
+  <div class="logo">
+    <div class="logo-mark" aria-hidden="true">
+      <img src="_shell/logo.png" alt="" />
+    </div>
+    <span class="logo-text" data-slot="logo-text">테스트관리도구(<span style="font-weight:600;">Qrit</span>)</span>
+    <button class="ws-switch-btn" type="button" aria-label="워크스페이스 전환">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="4,6 8,10 12,6" />
+      </svg>
+    </button>
+  </div>
+  <nav class="topbar-nav" aria-label="주 메뉴">
+    <a href="#" class="topbar-nav-link" data-nav="workspace">워크스페이스</a>
+    <a href="#" class="topbar-nav-link" data-nav="project">프로젝트</a>
+    <a href="#" class="topbar-nav-link" data-nav="admin">통합관리</a>
+  </nav>
+</div>
+<div class="topbar-right">
+  <div class="tms-notif-wrap" data-slot="notif-wrap">
+    <button class="icon-btn" type="button" aria-label="알림" data-slot="notif-trigger" aria-haspopup="true" aria-expanded="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+        <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+      </svg>
+      <span class="tms-notif-badge" data-slot="notif-badge" aria-hidden="true">0</span>
+    </button>
+    <div class="tms-notif-dropdown" role="menu" aria-label="알림 목록" data-slot="notif-dropdown">
+      <div class="tms-notif-head">
+        <h3 class="tms-notif-head-title">알림</h3>
+        <button class="tms-notif-head-action" type="button" data-slot="notif-mark-all">모두 읽음 처리</button>
+      </div>
+      <div class="tms-notif-list" data-slot="notif-list">
+        <div class="tms-notif-empty" data-slot="notif-empty">새 알림이 없습니다.</div>
+      </div>
+      <div class="tms-notif-foot"><a href="#" data-slot="notif-more">전체 알림 보기</a></div>
+    </div>
+  </div>
+  <div class="avatar" data-slot="avatar" aria-label="사용자">이</div>
+</div>
