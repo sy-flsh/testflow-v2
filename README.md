@@ -48,6 +48,15 @@ RBAC policy:
 
 The UI reflects the same permissions by hiding or disabling restricted actions, but API guards remain the source of enforcement.
 
+## Tenant Tier (Company / MasterAdmin)
+
+기능명세서 v2의 `Company → Workspace → Project` 3-tier 구조로 가는 첫 단계(c1, expand)로 최상위 테넌트 모델을 도입했습니다.
+
+- `Company`: 최상위 테넌트. `slug` unique, `isActive`, `ownerUserId`(현재는 relation 미연결 nullable 스칼라).
+- `MasterAdmin`: 시스템 전역 관리자. `email` unique, `passwordHash`, `isActive`.
+- 이 단계에서는 모델만 추가하며, 기존 `Workspace`/`User` 구조는 변경하지 않습니다. `Workspace.companyId` 연결과 `User`-`Company` relation은 다음 단계(c2/c4)에서 진행합니다.
+- seed: 기본 Company `testflow-demo` 1건과 MasterAdmin `master@testflow.local` 1명을 생성합니다(기존 seed 계정/워크스페이스/프로젝트는 그대로 유지).
+
 ## Local DB Reset
 
 `npm run db:seed`는 기본 seed 데이터를 upsert로 복원합니다. 테스트 중 생성한 비-seed 데이터는 삭제하지 않습니다.

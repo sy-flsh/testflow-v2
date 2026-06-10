@@ -31,6 +31,9 @@ async function main() {
     prisma.workspaceMember.deleteMany(),
     prisma.user.deleteMany(),
     prisma.workspace.deleteMany(),
+    // c1: 상위 테넌트 모델. 현재 다른 테이블이 참조하지 않으므로 순서 영향 없음.
+    prisma.masterAdmin.deleteMany(),
+    prisma.company.deleteMany(),
   ]);
 
   await prisma.$disconnect();

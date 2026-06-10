@@ -71,6 +71,32 @@ enum AiDraftStatus {
   FALLBACK
 }
 
+model Company {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  isActive    Boolean  @default(true)
+  // c1: 상위 테넌트 모델만 도입. ownerUserId는 nullable 스칼라로 두고,
+  // User-Company relation 연결은 c4(User.companyId 도입)에서 함께 처리한다.
+  ownerUserId String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("companies")
+}
+
+model MasterAdmin {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("master_admins")
+}
+
 model User {
   id              String            @id @default(cuid())
   email           String            @unique

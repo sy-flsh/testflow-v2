@@ -12,6 +12,16 @@ if (!databaseUrl) {
 const adapter = new PrismaPg(databaseUrl);
 const prisma = new PrismaClient({ adapter });
 
+const companySeed = {
+  name: "TestFlow Demo Company",
+  slug: "testflow-demo",
+};
+
+const masterAdminSeed = {
+  email: "master@testflow.local",
+  name: "TestFlow Master",
+};
+
 const workspaceSeed = {
   name: "TestFlow QA",
   slug: "testflow-qa",
@@ -228,6 +238,25 @@ const defects = [
 
 async function main() {
   const devPasswordHash = await bcrypt.hash(devPassword, 12);
+
+  // c1: 최상위 테넌트 기본 Company 1건 + Master 관리자 1명.
+  // 기존 Workspace/User와는 아직 연결하지 않는다(c2/c4에서 연결).
+  await prisma.company.upsert({
+    where: { slug: companySeed.slug },
+    update: { name: companySeed.name },
+    create: { name: companySeed.name, slug: companySeed.slug },
+  });
+
+  await prisma.masterAdmin.upsert({
+    where: { email: masterAdminSeed.email },
+    update: { name: masterAdminSeed.name, passwordHash: devPasswordHash },
+    create: {
+      email: masterAdminSeed.email,
+      name: masterAdminSeed.name,
+      passwordHash: devPasswordHash,
+    },
+  });
+
   const workspace = await prisma.workspace.upsert({
     where: { slug: workspaceSeed.slug },
     update: workspaceSeed,
