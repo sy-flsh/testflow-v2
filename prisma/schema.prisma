@@ -129,6 +129,7 @@ model User {
   updatedAt       DateTime          @updatedAt
   members         WorkspaceMember[]
   sessions        Session[]
+  roles           UserRole[]
 
   @@map("users")
 }
@@ -204,6 +205,27 @@ model WorkspaceMember {
   @@index([userId])
   @@index([workspaceId, status])
   @@map("workspace_members")
+}
+
+// c4: 기능명세서 v2 (User × Scope) 다중 Role 모델(라디오: scope 1건당 단일 Role).
+// scopeId 는 scopeType 에 따라 company/workspace/project id 를 가리키는 polymorphic 값이라
+// FK relation 을 두지 않는다. scope-role 정합성(예: CO=COMPANY 만)은 DB CHECK 없이
+// 애플리케이션 레벨에서 검증할 예정(c5). 현재는 어떤 guard/auth 도 이 모델을 참조하지 않으며,
+// 기존 WorkspaceMember.role 과 병존한다.
+model UserRole {
+  id        String    @id @default(cuid())
+  userId    String
+  scopeType ScopeType
+  scopeId   String
+  role      Role
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, scopeType, scopeId])
+  @@index([scopeType, scopeId])
+  @@index([role])
+  @@map("user_roles")
 }
 
 model Project {

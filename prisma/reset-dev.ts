@@ -29,6 +29,8 @@ async function main() {
     prisma.testFolder.deleteMany(),
     prisma.project.deleteMany(),
     prisma.workspaceMember.deleteMany(),
+    // c4: user_roles 는 user(onDelete Cascade)를 참조한다. user 삭제 전 명시적으로 비운다.
+    prisma.userRole.deleteMany(),
     prisma.user.deleteMany(),
     // c2: workspaces.companyId FK(Restrict) 때문에 workspace를 company보다 먼저 삭제한다.
     prisma.workspace.deleteMany(),

@@ -295,6 +295,25 @@ async function main() {
         status: "ACTIVE",
       },
     });
+
+    // c4: 각 WorkspaceMember 에 대응하는 WORKSPACE scope UserRole 을 함께 부여한다.
+    // 매핑: ADMIN -> WO, MEMBER -> MEMBER, VIEWER -> VIEWER (마이그레이션 data migration 과 동일)
+    await prisma.userRole.upsert({
+      where: {
+        userId_scopeType_scopeId: {
+          userId: user.id,
+          scopeType: "WORKSPACE",
+          scopeId: workspace.id,
+        },
+      },
+      update: { role: workspaceRoleFor(userSeed.role) },
+      create: {
+        userId: user.id,
+        scopeType: "WORKSPACE",
+        scopeId: workspace.id,
+        role: workspaceRoleFor(userSeed.role),
+      },
+    });
   }
 
   // c2: Workspace 소유자(ownerUserId)를 QA 리드 계정에 연결한다.
@@ -308,6 +327,25 @@ async function main() {
     await prisma.workspace.update({
       where: { id: workspace.id },
       data: { ownerUserId: ownerUser.id },
+    });
+
+    // c4: 기본 Company CO 역할을 QA 리드에 부여(COMPANY scope).
+    // WORKSPACE WO 역할은 위 멤버 루프에서 ADMIN -> WO 매핑으로 이미 부여됨.
+    await prisma.userRole.upsert({
+      where: {
+        userId_scopeType_scopeId: {
+          userId: ownerUser.id,
+          scopeType: "COMPANY",
+          scopeId: company.id,
+        },
+      },
+      update: { role: "CO" },
+      create: {
+        userId: ownerUser.id,
+        scopeType: "COMPANY",
+        scopeId: company.id,
+        role: "CO",
+      },
     });
   }
 
@@ -735,4 +773,17 @@ function createDefectSeed(
 
 function toUtcDate(value: string) {
   return new Date(`${value}T00:00:00.000Z`);
+}
+
+// c4: WorkspaceMember.role(MemberRole) -> WORKSPACE scope UserRole(Role) 매핑.
+// ADMIN -> WO, MEMBER -> MEMBER, VIEWER -> VIEWER. 마이그레이션 data migration 과 동일하게 유지.
+function workspaceRoleFor(memberRole: "ADMIN" | "MEMBER" | "VIEWER") {
+  switch (memberRole) {
+    case "ADMIN":
+      return "WO" as const;
+    case "MEMBER":
+      return "MEMBER" as const;
+    case "VIEWER":
+      return "VIEWER" as const;
+  }
 }
