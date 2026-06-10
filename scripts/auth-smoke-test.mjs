@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 
+import "dotenv/config";
 import { spawn } from "node:child_process";
+import { PrismaPg } from "@prisma/adapter-pg";
+import { PrismaClient } from "@prisma/client";
 
 const PORT = process.env.TESTFLOW_TEST_PORT || "3210";
 const BASE_URL = process.env.TESTFLOW_BASE_URL || `http://127.0.0.1:${PORT}`;
@@ -154,6 +157,45 @@ function assert(condition, message) {
 async function check(label, fn) {
   await fn();
   console.log(`PASS ${label}`);
+}
+
+// c5-3: UserRole-first 권한 전환을 입증하기 위한 테스트 전용 DB 접근.
+// 런타임 코드/seed 는 건드리지 않고, 테스트 내부에서 임시 데이터 변경 → 검증 → 복원(try/finally)에만 사용한다.
+let prismaClient = null;
+
+function getPrisma() {
+  if (!prismaClient) {
+    const databaseUrl = process.env.DATABASE_URL;
+
+    if (!databaseUrl) {
+      throw new Error("DATABASE_URL 환경 변수가 필요합니다 (UserRole-first smoke 검증).");
+    }
+
+    prismaClient = new PrismaClient({ adapter: new PrismaPg(databaseUrl) });
+  }
+
+  return prismaClient;
+}
+
+async function disconnectPrisma() {
+  if (prismaClient) {
+    await prismaClient.$disconnect();
+    prismaClient = null;
+  }
+}
+
+// 역할 assertion 없이 로그인만 수행(전환 기간 동안 login 응답은 MemberRole 기반이라
+// /api/auth/me 와 값이 다를 수 있으므로 role 검증은 호출부에서 /api/auth/me 로 한다).
+async function loginRaw(email) {
+  const jar = new CookieJar();
+  await request("/api/auth/login", {
+    method: "POST",
+    body: { email, password: PASSWORD },
+    jar,
+    expectedStatus: 200,
+  });
+  assert(jar.cookies.has("tf_session"), `${email} did not receive tf_session`);
+  return jar;
 }
 
 async function login(email, expectedRole, options = {}) {
@@ -835,6 +877,151 @@ async function main() {
       },
     );
 
+    // c5-3: UserRole-first 입증 — WorkspaceMember.role 을 VIEWER 로 강등해도
+    // UserRole WORKSPACE/WO 때문에 /api/auth/me 와 guard 권한은 Admin 으로 유지된다.
+    await check(
+      "UserRole-first: WorkspaceMember.role=VIEWER but UserRole WO keeps Admin (me + guard)",
+      async () => {
+        const prisma = getPrisma();
+        const adminUser = await prisma.user.findUnique({
+          where: { email: accounts.admin },
+          select: { id: true },
+        });
+        assert(adminUser, "admin user not found in DB");
+
+        const membership = await prisma.workspaceMember.findFirst({
+          where: { userId: adminUser.id },
+          select: { id: true, role: true, workspaceId: true },
+        });
+        assert(membership, "admin workspace membership not found");
+
+        const woRole = await prisma.userRole.findUnique({
+          where: {
+            userId_scopeType_scopeId: {
+              userId: adminUser.id,
+              scopeType: "WORKSPACE",
+              scopeId: membership.workspaceId,
+            },
+          },
+          select: { role: true },
+        });
+        assert(woRole?.role === "WO", "expected qa.lead WORKSPACE/WO UserRole");
+
+        const originalMemberRole = membership.role; // ADMIN
+
+        try {
+          // WorkspaceMember.role 만 VIEWER 로 임시 강등 (UserRole 은 WO 유지)
+          await prisma.workspaceMember.update({
+            where: { id: membership.id },
+            data: { role: "VIEWER" },
+          });
+
+          const jar = await loginRaw(accounts.admin);
+
+          // (1) /api/auth/me 는 UserRole-first 라 Admin 유지
+          const me = await request("/api/auth/me", { jar, expectedStatus: 200 });
+          assert(
+            me.json?.data?.role === "Admin",
+            `expected Admin from UserRole WO, got ${me.json?.data?.role}`,
+          );
+          assert(
+            (me.json?.data?.rolesByScope?.workspace ?? []).some((entry) => entry.role === "WO"),
+            "expected WORKSPACE WO in rolesByScope despite WorkspaceMember.role=VIEWER",
+          );
+
+          // (2) guard 권한도 UserRole-first → Admin 전용 동작(삭제) 성공
+          const proj = await request("/api/projects", {
+            method: "POST",
+            jar,
+            body: {
+              name: `UserRole-first Proof ${RUN_ID}`,
+              slug: `userrole-first-proof-${RUN_ID}`,
+            },
+            expectedStatus: 201,
+          });
+          const projId = proj.json?.data?.id;
+          assert(projId, "downgraded admin failed to create project");
+
+          await request(`/api/projects/${projId}`, {
+            method: "DELETE",
+            jar,
+            expectedStatus: 200,
+          });
+        } finally {
+          // 복원: 이후 cleanup/로그아웃 흐름 및 다음 실행 보호
+          await prisma.workspaceMember.update({
+            where: { id: membership.id },
+            data: { role: originalMemberRole },
+          });
+        }
+      },
+    );
+
+    // c5-3: fallback 입증 — UserRole(WORKSPACE) 이 없으면 WorkspaceMember.role 로 fallback 한다.
+    await check(
+      "fallback: no UserRole -> WorkspaceMember.role drives /api/auth/me role",
+      async () => {
+        const prisma = getPrisma();
+        const viewerUser = await prisma.user.findUnique({
+          where: { email: accounts.viewer },
+          select: { id: true },
+        });
+        assert(viewerUser, "viewer user not found in DB");
+
+        const membership = await prisma.workspaceMember.findFirst({
+          where: { userId: viewerUser.id },
+          select: { id: true, role: true, workspaceId: true },
+        });
+        assert(membership, "viewer workspace membership not found");
+
+        const key = {
+          userId: viewerUser.id,
+          scopeType: "WORKSPACE",
+          scopeId: membership.workspaceId,
+        };
+        const original = await prisma.userRole.findUnique({
+          where: { userId_scopeType_scopeId: key },
+          select: { role: true },
+        });
+        const originalMemberRole = membership.role; // VIEWER
+
+        try {
+          // UserRole 제거 → fallback 경로 강제 + WorkspaceMember.role 을 MEMBER 로 변경
+          if (original) {
+            await prisma.userRole.delete({ where: { userId_scopeType_scopeId: key } });
+          }
+          await prisma.workspaceMember.update({
+            where: { id: membership.id },
+            data: { role: "MEMBER" },
+          });
+
+          const jar = await loginRaw(accounts.viewer);
+          const me = await request("/api/auth/me", { jar, expectedStatus: 200 });
+          assert(
+            me.json?.data?.role === "Member",
+            `expected fallback Member from WorkspaceMember.role, got ${me.json?.data?.role}`,
+          );
+          assert(
+            (me.json?.data?.rolesByScope?.workspace ?? []).length === 0,
+            "expected empty workspace rolesByScope when UserRole absent",
+          );
+        } finally {
+          // 복원: WorkspaceMember.role + UserRole(WORKSPACE) 원복
+          await prisma.workspaceMember.update({
+            where: { id: membership.id },
+            data: { role: originalMemberRole },
+          });
+          if (original) {
+            await prisma.userRole.upsert({
+              where: { userId_scopeType_scopeId: key },
+              update: { role: original.role },
+              create: { ...key, role: original.role },
+            });
+          }
+        }
+      },
+    );
+
     await cleanupCreatedData(adminJar, cleanup);
 
     await check("logout invalidates current session", async () => {
@@ -869,6 +1056,7 @@ async function main() {
     }
     throw error;
   } finally {
+    await disconnectPrisma();
     await stopServer();
   }
 }

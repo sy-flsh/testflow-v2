@@ -65,6 +65,10 @@ The UI reflects the same permissions by hiding or disabling restricted actions, 
   - **WorkspaceMember.role fallback**: UserRole(WORKSPACE)이 없으면 기존 `WorkspaceMember.role`로 fallback합니다(전환 기간 한정, 전수 백필 후 c5-3/c6에서 제거 예정).
   - **PROJECT scope**: `resolveProjectAuthRole`로 구조만 준비했습니다. PROJECT scope UserRole 데이터는 아직 없어 상위 Workspace 권한으로 fallback하므로 현재 동작은 기존과 동일합니다.
   - **계약 불변**: `/api/auth/me`/login/signup의 `role`(Admin/Member/Viewer)·`permissions` 값과 RBAC 표면은 그대로입니다. `buildPermissions(role: AuthRole)`도 그대로 재사용합니다.
+- c5-3: smoke test에 UserRole-first 회귀 입증 케이스를 추가했습니다(`scripts/auth-smoke-test.mjs`). 테스트가 자체 Prisma 연결로 데이터를 임시 변경 → 검증 → `try/finally` 복원합니다(런타임 코드·seed 무변경).
+  - **UserRole-first 입증**: qa.lead의 `WorkspaceMember.role`을 VIEWER로 임시 강등해도 UserRole(WORKSPACE/WO) 때문에 `/api/auth/me`가 Admin을 유지하고 Admin 전용 동작(프로젝트 삭제)이 성공함을 확인.
+  - **fallback 입증**: 어떤 사용자의 UserRole(WORKSPACE)을 임시 제거하면 `WorkspaceMember.role` fallback이 `/api/auth/me` role을 결정함을 확인(검증 후 원복).
+  - 참고: 전환 기간 동안 `login` 응답은 아직 `MemberRole` 기반이라 `/api/auth/me`(UserRole-first)와 값이 일시적으로 다를 수 있으므로, 입증 테스트는 role 검증을 `/api/auth/me` 기준으로 수행합니다.
 - seed: 기본 Company `testflow-demo` 1건과 MasterAdmin `master@testflow.local` 1명을 생성하고, 기본 Workspace `testflow-qa`를 해당 Company에 연결(owner=`qa.lead@testflow.local`)합니다. 기존 seed 계정/프로젝트/테스트데이터는 그대로 유지됩니다.
 
 ## Local DB Reset
