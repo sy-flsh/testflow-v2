@@ -1176,6 +1176,102 @@ async function main() {
         });
         assert(stillCo?.role === "CO", "qa.lead CO role must remain after blocked revoke");
       });
+
+      // c6-2: 마지막 WO 보호 — qa.lead 는 유일한 WO. COMPANY/CO 는 유지(자가 CO 회수 회피)하고
+      // WORKSPACE/WO 만 빼면 USER_LAST_WO_FORBIDDEN 으로 차단되어야 한다.
+      await check("sync blocks removing the last WO (USER_LAST_WO_FORBIDDEN)", async () => {
+        const result = await request(`/api/company/users/${leadUser.id}/roles/sync`, {
+          method: "POST",
+          jar: adminJar,
+          body: { roles: [{ scopeType: "COMPANY", scopeId: companyId, role: "CO" }] },
+          expectedStatus: 400,
+        });
+        assert(
+          result.json?.error?.code === "USER_LAST_WO_FORBIDDEN",
+          `expected USER_LAST_WO_FORBIDDEN, got ${result.json?.error?.code}`,
+        );
+
+        const stillWo = await prisma.userRole.findUnique({
+          where: {
+            userId_scopeType_scopeId: {
+              userId: leadUser.id,
+              scopeType: "WORKSPACE",
+              scopeId: workspaceId,
+            },
+          },
+          select: { role: true },
+        });
+        assert(stillWo?.role === "WO", "qa.lead WO must remain after blocked revoke");
+      });
+
+      const demoProject = await prisma.project.findFirst({
+        where: { slug: "demo-project" },
+        select: { id: true },
+      });
+      const demoProjectId = demoProject.id;
+      const backendProjectKey = {
+        userId: backendUser.id,
+        scopeType: "PROJECT",
+        scopeId: demoProjectId,
+      };
+
+      // c6-2: 마지막 PO 보호 — backend 를 demo-project 의 유일한 PO 로 만든 뒤,
+      // sync 에서 그 PO 를 빼면 USER_LAST_PO_FORBIDDEN 으로 차단되어야 한다.
+      await check("sync blocks removing the last PO (USER_LAST_PO_FORBIDDEN)", async () => {
+        await prisma.userRole.create({ data: { ...backendProjectKey, role: "PO" } });
+
+        try {
+          const result = await request(syncPath, {
+            method: "POST",
+            jar: adminJar,
+            body: { roles: [{ scopeType: "WORKSPACE", scopeId: workspaceId, role: "MEMBER" }] },
+            expectedStatus: 400,
+          });
+          assert(
+            result.json?.error?.code === "USER_LAST_PO_FORBIDDEN",
+            `expected USER_LAST_PO_FORBIDDEN, got ${result.json?.error?.code}`,
+          );
+        } finally {
+          await prisma.userRole.deleteMany({ where: backendProjectKey });
+        }
+      });
+
+      // c6-2: PROJECT scope 우선권 — backend(워크스페이스 MEMBER) 에게 demo-project PO 를 부여하면
+      // resolveProjectAuthRole 이 workspace fallback(Member) 보다 PROJECT PO(Admin) 를 우선하여
+      // 프로젝트 자산 삭제(Admin 전용) 가 가능해진다.
+      await check("PROJECT scope PO overrides workspace fallback (Admin-level on project)", async () => {
+        // 삭제 대상 TC 를 admin 으로 생성
+        const created = await request("/api/projects/demo-project/test-cases", {
+          method: "POST",
+          jar: adminJar,
+          body: {
+            title: `c6-2 PO precedence TC ${RUN_ID}`,
+            folderId: "payment-checkout",
+            priority: "medium",
+            status: "ready",
+            steps: ["Open", "Submit"],
+            expectedResult: "ok",
+          },
+          expectedStatus: 201,
+        });
+        const tcId = created.json?.data?.id;
+        assert(tcId, "failed to create test case for PO precedence test");
+        cleanup.testCases.push(tcId);
+
+        await prisma.userRole.create({ data: { ...backendProjectKey, role: "PO" } });
+
+        try {
+          // backend(memberJar) 는 워크스페이스 MEMBER 라 평소 TC 삭제가 403 이지만,
+          // demo-project PROJECT/PO 부여로 해당 프로젝트에서 Admin 급 → 삭제 200.
+          await request(`/api/projects/demo-project/test-cases/${tcId}`, {
+            method: "DELETE",
+            jar: memberJar,
+            expectedStatus: 200,
+          });
+        } finally {
+          await prisma.userRole.deleteMany({ where: backendProjectKey });
+        }
+      });
     }
 
     await cleanupCreatedData(adminJar, cleanup);

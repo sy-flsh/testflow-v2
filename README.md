@@ -73,8 +73,13 @@ The UI reflects the same permissions by hiding or disabling restricted actions, 
   - **호출 권한**: `requireCompanyOwner()`로 현재 사용자의 `UserRole(COMPANY/CO)`를 확인합니다(아니면 403). 단일 Company 가정이며 다중 Company CO disambiguation은 c6-2.
   - **검증**: scope-role 정합성(`USER_INVALID_ROLE_SCOPE`, MASTER 부여 불가), 중복 scope(`USER_DUPLICATE_SCOPE`), Company 소속(`USER_SCOPE_NOT_IN_COMPANY` — WORKSPACE/PROJECT scopeId가 해당 Company 소속이어야 함).
   - **동기화**: 단일 트랜잭션으로 대상 사용자의 **회사 범위 내** UserRole을 body 기준으로 교체(없는 것 제거, 있는 것 생성).
-  - **보호 규칙**: 마지막 CO 회수 금지(`USER_LAST_CO_FORBIDDEN`), 본인 CO 자가 회수 금지(`USER_SELF_CO_REVOKE_FORBIDDEN`). 마지막 WO/PO 보호는 c6-2로 보류.
+  - **보호 규칙**: 마지막 CO 회수 금지(`USER_LAST_CO_FORBIDDEN`), 본인 CO 자가 회수 금지(`USER_SELF_CO_REVOKE_FORBIDDEN`).
   - UI는 없습니다(API 기반만). MasterAdmin 경로는 아직 미연결.
+- c6-2: sync API 보호 규칙을 강화했습니다.
+  - **마지막 WO 보호**(`USER_LAST_WO_FORBIDDEN`): 대상이 해당 Workspace의 유일한 WO인데 body에서 그 WO가 유지되지 않으면 차단.
+  - **마지막 PO 보호**(`USER_LAST_PO_FORBIDDEN`): 대상이 해당 Project의 유일한 PO인데 body에서 그 PO가 유지되지 않으면 차단.
+  - **PROJECT scope 우선권 검증**: `resolveProjectAuthRole`이 PROJECT/PO를 workspace fallback보다 우선함을 smoke로 입증(워크스페이스 MEMBER 사용자가 특정 프로젝트 PROJECT/PO 부여 시 그 프로젝트에서 Admin급 — 자산 삭제 가능).
+  - 보호 검사는 트랜잭션 직전에 회사-범위 scope를 cross-user 카운팅하여 수행합니다.
 - seed: 기본 Company `testflow-demo` 1건과 MasterAdmin `master@testflow.local` 1명을 생성하고, 기본 Workspace `testflow-qa`를 해당 Company에 연결(owner=`qa.lead@testflow.local`)합니다. 기존 seed 계정/프로젝트/테스트데이터는 그대로 유지됩니다.
 
 ## Local DB Reset

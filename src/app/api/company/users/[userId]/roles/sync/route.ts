@@ -169,6 +169,69 @@ export async function POST(request: Request, context: RouteContext) {
       }
     }
 
+    // 3b) 보호 규칙: 마지막 WO / 마지막 PO 회수 금지
+    // sync 는 단일 사용자 대상이므로 "대상이 해당 scope 의 유일한 소유자(WO/PO)이고
+    // body 에서 그 소유자 Role 이 유지되지 않는 경우" 를 차단한다.
+    const desiredRoleByScope = new Map(
+      desired.map((item) => [`${item.scopeType}:${item.scopeId}`, item.role]),
+    );
+
+    const currentWorkspaceOwnerships = await prisma.userRole.findMany({
+      where: {
+        userId: targetUserId,
+        scopeType: "WORKSPACE",
+        role: "WO",
+        scopeId: { in: workspaceIds },
+      },
+      select: { scopeId: true },
+    });
+
+    for (const { scopeId } of currentWorkspaceOwnerships) {
+      const keepsWo = desiredRoleByScope.get(`WORKSPACE:${scopeId}`) === "WO";
+
+      if (!keepsWo) {
+        const woCount = await prisma.userRole.count({
+          where: { scopeType: "WORKSPACE", scopeId, role: "WO" },
+        });
+
+        if (woCount <= 1) {
+          return apiError(
+            "Workspace 의 마지막 WO 는 회수할 수 없습니다.",
+            400,
+            "USER_LAST_WO_FORBIDDEN",
+          );
+        }
+      }
+    }
+
+    const currentProjectOwnerships = await prisma.userRole.findMany({
+      where: {
+        userId: targetUserId,
+        scopeType: "PROJECT",
+        role: "PO",
+        scopeId: { in: projectIds },
+      },
+      select: { scopeId: true },
+    });
+
+    for (const { scopeId } of currentProjectOwnerships) {
+      const keepsPo = desiredRoleByScope.get(`PROJECT:${scopeId}`) === "PO";
+
+      if (!keepsPo) {
+        const poCount = await prisma.userRole.count({
+          where: { scopeType: "PROJECT", scopeId, role: "PO" },
+        });
+
+        if (poCount <= 1) {
+          return apiError(
+            "Project 의 마지막 PO 는 회수할 수 없습니다.",
+            400,
+            "USER_LAST_PO_FORBIDDEN",
+          );
+        }
+      }
+    }
+
     // 4) 트랜잭션: 회사 범위 내 기존 Role 제거 후 desired 로 재구성
     await prisma.$transaction(async (tx) => {
       await tx.userRole.deleteMany({
