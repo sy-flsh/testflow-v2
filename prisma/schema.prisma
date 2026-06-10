@@ -72,15 +72,16 @@ enum AiDraftStatus {
 }
 
 model Company {
-  id          String   @id @default(cuid())
+  id          String      @id @default(cuid())
   name        String
-  slug        String   @unique
-  isActive    Boolean  @default(true)
+  slug        String      @unique
+  isActive    Boolean     @default(true)
   // c1: 상위 테넌트 모델만 도입. ownerUserId는 nullable 스칼라로 두고,
   // User-Company relation 연결은 c4(User.companyId 도입)에서 함께 처리한다.
   ownerUserId String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  workspaces  Workspace[]
 
   @@map("companies")
 }
@@ -115,17 +116,26 @@ model User {
 
 model Workspace {
   id               String            @id @default(cuid())
+  // c2: Company 연결(expand). 기존 signup 경로가 company 없이 Workspace를 생성하므로
+  // 이 단계에서는 nullable 로 둔다. seed/기존 데이터는 backfill 로 기본 Company에 연결.
+  // NOT NULL 강제 + Company-aware signup 전환은 인증 단계(c5)에서 처리.
+  companyId        String?
   name             String
   slug             String            @unique
   description      String            @default("")
   logoUrl          String?
   timezone         String            @default("Asia/Seoul")
+  // c2: 워크스페이스 소유자. relation 미연결 nullable 스칼라(User 무변경).
+  // Role 기반 소유자 검증은 c4/c5에서 처리.
+  ownerUserId      String?
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
+  company          Company?          @relation(fields: [companyId], references: [id])
   members          WorkspaceMember[]
   projects         Project[]
   selectedSessions Session[]         @relation("SelectedWorkspaceSession")
 
+  @@index([companyId])
   @@map("workspaces")
 }
 

@@ -54,8 +54,10 @@ The UI reflects the same permissions by hiding or disabling restricted actions, 
 
 - `Company`: 최상위 테넌트. `slug` unique, `isActive`, `ownerUserId`(현재는 relation 미연결 nullable 스칼라).
 - `MasterAdmin`: 시스템 전역 관리자. `email` unique, `passwordHash`, `isActive`.
-- 이 단계에서는 모델만 추가하며, 기존 `Workspace`/`User` 구조는 변경하지 않습니다. `Workspace.companyId` 연결과 `User`-`Company` relation은 다음 단계(c2/c4)에서 진행합니다.
-- seed: 기본 Company `testflow-demo` 1건과 MasterAdmin `master@testflow.local` 1명을 생성합니다(기존 seed 계정/워크스페이스/프로젝트는 그대로 유지).
+- `Workspace.companyId`(c2): Company FK + 인덱스. **nullable**로 도입했습니다 — 기존 signup 경로가 company 없이 Workspace를 생성하므로, NOT NULL 강제 + Company-aware signup 전환은 인증 단계(c5)에서 처리합니다. 기존/seed 워크스페이스는 migration backfill로 기본 Company에 연결됩니다.
+- `Workspace.ownerUserId`(c2): relation 미연결 nullable 스칼라(User 모델 무변경). Role 기반 소유자 검증은 c4/c5에서 처리합니다.
+- `User`-`Company` relation 연결은 다음 단계(c4)에서 진행합니다.
+- seed: 기본 Company `testflow-demo` 1건과 MasterAdmin `master@testflow.local` 1명을 생성하고, 기본 Workspace `testflow-qa`를 해당 Company에 연결(owner=`qa.lead@testflow.local`)합니다. 기존 seed 계정/프로젝트/테스트데이터는 그대로 유지됩니다.
 
 ## Local DB Reset
 

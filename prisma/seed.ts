@@ -240,8 +240,8 @@ async function main() {
   const devPasswordHash = await bcrypt.hash(devPassword, 12);
 
   // c1: 최상위 테넌트 기본 Company 1건 + Master 관리자 1명.
-  // 기존 Workspace/User와는 아직 연결하지 않는다(c2/c4에서 연결).
-  await prisma.company.upsert({
+  // c2: 기본 Company를 먼저 생성한 뒤 Workspace를 그 하위로 연결한다.
+  const company = await prisma.company.upsert({
     where: { slug: companySeed.slug },
     update: { name: companySeed.name },
     create: { name: companySeed.name, slug: companySeed.slug },
@@ -259,8 +259,8 @@ async function main() {
 
   const workspace = await prisma.workspace.upsert({
     where: { slug: workspaceSeed.slug },
-    update: workspaceSeed,
-    create: workspaceSeed,
+    update: { ...workspaceSeed, companyId: company.id },
+    create: { ...workspaceSeed, companyId: company.id },
   });
 
   for (const userSeed of users) {
@@ -294,6 +294,20 @@ async function main() {
         role: userSeed.role,
         status: "ACTIVE",
       },
+    });
+  }
+
+  // c2: Workspace 소유자(ownerUserId)를 QA 리드 계정에 연결한다.
+  // (Role 기반 소유자 검증은 c4/c5에서 처리. 이 단계는 데이터 연결만)
+  const ownerUser = await prisma.user.findUnique({
+    where: { email: "qa.lead@testflow.local" },
+    select: { id: true },
+  });
+
+  if (ownerUser) {
+    await prisma.workspace.update({
+      where: { id: workspace.id },
+      data: { ownerUserId: ownerUser.id },
     });
   }
 
