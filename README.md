@@ -59,7 +59,9 @@ The UI reflects the same permissions by hiding or disabling restricted actions, 
 - `User`-`Company` relation 연결은 다음 단계(c4)에서 진행합니다.
 - Role 6단 enum(`Role`: MASTER/CO/WO/PO/MEMBER/VIEWER)과 `ScopeType` enum(COMPANY/WORKSPACE/PROJECT)은 c3에서 추가했습니다.
 - `UserRole`(c4): `(userId, scopeType, scopeId, role)` (User × Scope) 다중 Role 모델, `@@unique([userId, scopeType, scopeId])`(라디오: scope 1건당 단일 Role). `scopeId`는 scopeType에 따라 company/workspace/project id를 가리키는 polymorphic 값으로 FK를 두지 않습니다. scope-role 정합성(CO=COMPANY 등)은 DB CHECK 없이 c5에서 애플리케이션 레벨로 검증합니다.
-- c4에서 기존 `WorkspaceMember.role`을 `UserRole`(WORKSPACE scope)로 **이관**했습니다(매핑 ADMIN→WO, MEMBER→MEMBER, VIEWER→VIEWER). **단, `WorkspaceMember`/`WorkspaceMember.role`은 그대로 보존하며 두 모델이 병존합니다.** **런타임 권한 검증(`guards.ts`/`buildPermissions`/`requireCurrentWorkspace`/`requireProjectAccess`)은 여전히 `MemberRole` 기반으로 동작하며, `UserRole`은 아직 참조하지 않습니다.** guards 전환은 c5에서 진행합니다.
+- c4에서 기존 `WorkspaceMember.role`을 `UserRole`(WORKSPACE scope)로 **이관**했습니다(매핑 ADMIN→WO, MEMBER→MEMBER, VIEWER→VIEWER). **단, `WorkspaceMember`/`WorkspaceMember.role`은 그대로 보존하며 두 모델이 병존합니다.**
+- c5-1: `src/lib/auth/roles.ts`에 UserRole 기반 helper를 추가했습니다 — `getRolesByScope(userId)`(scope별 그룹화), `isRoleAllowedForScope`/`allowedScopesForRole`(scope-role 정합성: CO=COMPANY, WO=WORKSPACE, PO=PROJECT, MEMBER/VIEWER=WORKSPACE|PROJECT, MASTER는 UserRole 미사용). `/api/auth/me` 응답에 **additive**하게 `rolesByScope` 필드를 추가했습니다(기존 `user`/`workspace`/`role`/`permissions`/`workspaces`는 그대로).
+- **런타임 권한 검증(`guards.ts`/`buildPermissions`/`requireCurrentWorkspace`/`requireProjectAccess`)은 여전히 `MemberRole` 기반으로 동작하며, helper는 아직 어떤 guard에도 연결되지 않았습니다.** guard 전환은 c5-2 이후에서 진행합니다.
 - seed: 기본 Company `testflow-demo` 1건과 MasterAdmin `master@testflow.local` 1명을 생성하고, 기본 Workspace `testflow-qa`를 해당 Company에 연결(owner=`qa.lead@testflow.local`)합니다. 기존 seed 계정/프로젝트/테스트데이터는 그대로 유지됩니다.
 
 ## Local DB Reset

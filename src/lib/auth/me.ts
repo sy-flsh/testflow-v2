@@ -1,5 +1,6 @@
 import type { MemberRole, Workspace } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
+import type { RolesByScope } from "@/lib/auth/roles";
 
 export type AuthRole = "Admin" | "Member" | "Viewer";
 
@@ -77,6 +78,8 @@ export function mapAuthPayload(input: {
   workspace: Workspace;
   role: MemberRole;
   workspaces?: Array<{ id: string; name: string; slug: string; role: AuthRole }>;
+  // c5-1: UserRole 기반 scope별 Role. additive 필드 — 전달된 경우에만 응답에 포함한다.
+  rolesByScope?: RolesByScope;
 }) {
   const role = toAuthRole(input.role);
 
@@ -95,5 +98,6 @@ export function mapAuthPayload(input: {
     role,
     permissions: buildPermissions(role),
     ...(input.workspaces ? { workspaces: input.workspaces } : {}),
+    ...(input.rolesByScope ? { rolesByScope: input.rolesByScope } : {}),
   };
 }

@@ -438,6 +438,31 @@ async function main() {
       jar: adminJar,
     });
 
+    await check("admin /api/auth/me includes rolesByScope (COMPANY CO, WORKSPACE WO)", async () => {
+      const result = await request("/api/auth/me", {
+        jar: adminJar,
+        expectedStatus: 200,
+      });
+      const data = result.json?.data;
+
+      // 기존 필드는 그대로 유지(additive change 검증)
+      assert(data?.role === "Admin", "legacy role field changed");
+      assert(data?.permissions, "legacy permissions field missing");
+
+      const rolesByScope = data?.rolesByScope;
+      assert(rolesByScope, "rolesByScope missing in /api/auth/me");
+      assert(
+        Array.isArray(rolesByScope.company) &&
+          rolesByScope.company.some((entry) => entry.role === "CO"),
+        "expected COMPANY CO role for qa.lead",
+      );
+      assert(
+        Array.isArray(rolesByScope.workspace) &&
+          rolesByScope.workspace.some((entry) => entry.role === "WO"),
+        "expected WORKSPACE WO role for qa.lead",
+      );
+    });
+
     await check("cross-origin project write is rejected by CSRF guard", async () => {
       const result = await request("/api/projects", {
         method: "POST",

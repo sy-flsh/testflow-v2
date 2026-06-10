@@ -1,5 +1,6 @@
 import { apiError, apiSuccess } from "@/lib/api/response";
 import { getUserWorkspaces, mapAuthPayload, resolveActiveMembership } from "@/lib/auth/me";
+import { getRolesByScope } from "@/lib/auth/roles";
 import { getCurrentSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db/prisma";
 
@@ -27,6 +28,7 @@ export async function GET() {
     }
 
     const workspaces = await getUserWorkspaces(session.userId);
+    const rolesByScope = await getRolesByScope(session.userId);
 
     return apiSuccess(
       mapAuthPayload({
@@ -34,6 +36,7 @@ export async function GET() {
         workspace: membership.workspace,
         role: membership.role,
         workspaces,
+        rolesByScope,
       }),
     );
   } catch (error) {

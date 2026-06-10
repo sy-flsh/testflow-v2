@@ -24,7 +24,15 @@ export type AuthMeResponse = {
     slug: string;
     role: "Admin" | "Member" | "Viewer";
   }>;
+  // c5-1: UserRole 기반 scope별 Role (additive, optional). 아직 UI에서 사용하지 않는다.
+  rolesByScope?: {
+    company: Array<{ scopeId: string; role: SpecRole }>;
+    workspace: Array<{ scopeId: string; role: SpecRole }>;
+    project: Array<{ scopeId: string; role: SpecRole }>;
+  };
 };
+
+export type SpecRole = "MASTER" | "CO" | "WO" | "PO" | "MEMBER" | "VIEWER";
 
 export async function requestAuthData<T>(url: string, init?: RequestInit) {
   const headers = new Headers(init?.headers);
