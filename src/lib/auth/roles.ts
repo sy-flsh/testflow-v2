@@ -45,6 +45,27 @@ export function allowedScopesForRole(role: Role): ScopeType[] {
   return ROLE_ALLOWED_SCOPES[role];
 }
 
+/**
+ * c6-1: UserRole sync API 에서 부여 가능한 Role 인지 검증한다.
+ * MASTER 는 MasterAdmin 전용이므로 UserRole 부여 대상에서 제외한다.
+ */
+export function isAssignableRole(role: Role): boolean {
+  return role !== "MASTER";
+}
+
+/**
+ * c6-1: 특정 사용자가 CO(Company Owner)로 있는 Company id 목록을 반환한다.
+ * (UserRole COMPANY/CO 기준 — WorkspaceMember.role 과 무관)
+ */
+export async function getCompaniesWhereUserIsCO(userId: string): Promise<string[]> {
+  const rows = await prisma.userRole.findMany({
+    where: { userId, scopeType: "COMPANY", role: "CO" },
+    select: { scopeId: true },
+  });
+
+  return rows.map((row) => row.scopeId);
+}
+
 /** (role, scopeType) 조합이 정합한지 검증한다. DB CHECK 없이 애플리케이션 레벨 검증용. */
 export function isRoleAllowedForScope(role: Role, scopeType: ScopeType): boolean {
   return ROLE_ALLOWED_SCOPES[role].includes(scopeType);

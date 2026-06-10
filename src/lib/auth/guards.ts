@@ -13,6 +13,7 @@ import {
   type AuthRole,
 } from "@/lib/auth/me";
 import {
+  getCompaniesWhereUserIsCO,
   resolveProjectAuthRole,
   resolveWorkspaceAuthRole,
 } from "@/lib/auth/roles";
@@ -60,6 +61,32 @@ export async function requireCurrentUser() {
   }
 
   return session.user;
+}
+
+export type CompanyOwnerAuth = {
+  user: User;
+  companyId: string;
+};
+
+/**
+ * c6-1: 현재 로그인 사용자가 CO(Company Owner)인지 확인하고, 그 Company id 를 반환한다.
+ * UserRole COMPANY/CO 기준(WorkspaceMember.role 과 무관). CO 가 아니면 403.
+ * 다중 Company CO disambiguation 은 c6-2 — 현재는 단일 demo Company 가정으로 첫 Company 사용.
+ */
+export async function requireCompanyOwner(): Promise<CompanyOwnerAuth> {
+  const session = await getCurrentSession();
+
+  if (!session) {
+    throw new AuthGuardError("로그인이 필요합니다.", 401, "AUTH_UNAUTHORIZED");
+  }
+
+  const companyIds = await getCompaniesWhereUserIsCO(session.userId);
+
+  if (companyIds.length === 0) {
+    throw new AuthGuardError("Company 소유자(CO) 권한이 필요합니다.", 403, "AUTH_FORBIDDEN");
+  }
+
+  return { user: session.user, companyId: companyIds[0] };
 }
 
 export async function requireCurrentWorkspace(): Promise<CurrentWorkspaceAuth> {

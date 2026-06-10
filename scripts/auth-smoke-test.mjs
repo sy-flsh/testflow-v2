@@ -1022,6 +1022,162 @@ async function main() {
       },
     );
 
+    // c6-1: CO Role 매트릭스 sync API 검증.
+    {
+      const prisma = getPrisma();
+      const leadUser = await prisma.user.findUnique({
+        where: { email: accounts.admin },
+        select: { id: true },
+      });
+      const co = await prisma.userRole.findFirst({
+        where: { userId: leadUser.id, scopeType: "COMPANY", role: "CO" },
+        select: { scopeId: true },
+      });
+      const companyId = co.scopeId;
+
+      const backendUser = await prisma.user.findUnique({
+        where: { email: accounts.member },
+        select: { id: true },
+      });
+      const backendMembership = await prisma.workspaceMember.findFirst({
+        where: { userId: backendUser.id },
+        select: { workspaceId: true },
+      });
+      const workspaceId = backendMembership.workspaceId;
+      const syncPath = `/api/company/users/${backendUser.id}/roles/sync`;
+
+      await check("CO can sync WORKSPACE role to another user", async () => {
+        const original = await prisma.userRole.findUnique({
+          where: {
+            userId_scopeType_scopeId: {
+              userId: backendUser.id,
+              scopeType: "WORKSPACE",
+              scopeId: workspaceId,
+            },
+          },
+          select: { role: true },
+        });
+
+        try {
+          const result = await request(syncPath, {
+            method: "POST",
+            jar: adminJar,
+            body: {
+              roles: [{ scopeType: "WORKSPACE", scopeId: workspaceId, role: "VIEWER" }],
+            },
+            expectedStatus: 200,
+          });
+          const roles = result.json?.data?.roles ?? [];
+          assert(
+            roles.some(
+              (r) =>
+                r.scopeType === "WORKSPACE" && r.scopeId === workspaceId && r.role === "VIEWER",
+            ),
+            "sync did not set WORKSPACE VIEWER",
+          );
+
+          const persisted = await prisma.userRole.findUnique({
+            where: {
+              userId_scopeType_scopeId: {
+                userId: backendUser.id,
+                scopeType: "WORKSPACE",
+                scopeId: workspaceId,
+              },
+            },
+            select: { role: true },
+          });
+          assert(persisted?.role === "VIEWER", "WORKSPACE role not persisted as VIEWER");
+        } finally {
+          // 복원: backend 의 WORKSPACE Role 을 원래 값(MEMBER)으로 되돌림
+          await prisma.userRole.upsert({
+            where: {
+              userId_scopeType_scopeId: {
+                userId: backendUser.id,
+                scopeType: "WORKSPACE",
+                scopeId: workspaceId,
+              },
+            },
+            update: { role: original?.role ?? "MEMBER" },
+            create: {
+              userId: backendUser.id,
+              scopeType: "WORKSPACE",
+              scopeId: workspaceId,
+              role: original?.role ?? "MEMBER",
+            },
+          });
+        }
+      });
+
+      await check("sync rejects scope-role violation with 400 USER_INVALID_ROLE_SCOPE", async () => {
+        const result = await request(syncPath, {
+          method: "POST",
+          jar: adminJar,
+          body: { roles: [{ scopeType: "WORKSPACE", scopeId: workspaceId, role: "CO" }] },
+          expectedStatus: 400,
+        });
+        assert(
+          result.json?.error?.code === "USER_INVALID_ROLE_SCOPE",
+          "expected USER_INVALID_ROLE_SCOPE",
+        );
+      });
+
+      await check("sync rejects scope outside company with 400 USER_SCOPE_NOT_IN_COMPANY", async () => {
+        const result = await request(syncPath, {
+          method: "POST",
+          jar: adminJar,
+          body: {
+            roles: [{ scopeType: "WORKSPACE", scopeId: "ws_not_in_company", role: "MEMBER" }],
+          },
+          expectedStatus: 400,
+        });
+        assert(
+          result.json?.error?.code === "USER_SCOPE_NOT_IN_COMPANY",
+          "expected USER_SCOPE_NOT_IN_COMPANY",
+        );
+      });
+
+      await check("non-CO cannot call sync (403)", async () => {
+        const result = await request(syncPath, {
+          method: "POST",
+          jar: memberJar,
+          body: { roles: [] },
+          expectedStatus: 403,
+        });
+        assert(result.json?.error?.code === "AUTH_FORBIDDEN", "expected AUTH_FORBIDDEN");
+      });
+
+      await check("CO cannot revoke own last CO role (protected)", async () => {
+        const result = await request(`/api/company/users/${leadUser.id}/roles/sync`, {
+          method: "POST",
+          jar: adminJar,
+          // COMPANY/CO 를 제외 → 본인(=마지막) CO 회수 시도
+          body: {
+            roles: [{ scopeType: "WORKSPACE", scopeId: workspaceId, role: "WO" }],
+          },
+          expectedStatus: 400,
+        });
+        assert(
+          ["USER_SELF_CO_REVOKE_FORBIDDEN", "USER_LAST_CO_FORBIDDEN"].includes(
+            result.json?.error?.code,
+          ),
+          `expected CO revoke protection, got ${result.json?.error?.code}`,
+        );
+
+        // 보호가 동작했으므로 qa.lead 의 COMPANY/CO 가 그대로 유지되는지 확인
+        const stillCo = await prisma.userRole.findUnique({
+          where: {
+            userId_scopeType_scopeId: {
+              userId: leadUser.id,
+              scopeType: "COMPANY",
+              scopeId: companyId,
+            },
+          },
+          select: { role: true },
+        });
+        assert(stillCo?.role === "CO", "qa.lead CO role must remain after blocked revoke");
+      });
+    }
+
     await cleanupCreatedData(adminJar, cleanup);
 
     await check("logout invalidates current session", async () => {
