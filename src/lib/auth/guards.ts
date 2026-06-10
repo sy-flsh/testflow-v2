@@ -12,6 +12,10 @@ import {
   toAuthRole,
   type AuthRole,
 } from "@/lib/auth/me";
+import {
+  resolveProjectAuthRole,
+  resolveWorkspaceAuthRole,
+} from "@/lib/auth/roles";
 import { getCurrentSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db/prisma";
 
@@ -85,7 +89,13 @@ export async function requireCurrentWorkspace(): Promise<CurrentWorkspaceAuth> {
     });
   }
 
-  const role = toAuthRole(membership.role);
+  // c5-2: Workspace 권한을 UserRole(WORKSPACE) 우선으로 산출. UserRole 이 없으면
+  // 전환 기간 한정 fallback 으로 membership.role(WorkspaceMember.role)을 사용한다.
+  const role = await resolveWorkspaceAuthRole(
+    session.userId,
+    membership.workspaceId,
+    membership.role,
+  );
 
   return {
     user: session.user,
@@ -116,10 +126,21 @@ export async function requireProjectAccess(
     );
   }
 
-  requirePermission(auth, action);
+  // c5-2: PROJECT scope UserRole 이 있으면 우선 사용하고, 없으면 상위 Workspace 권한으로
+  // fallback 한다. 현재 PROJECT UserRole 데이터가 없으므로 기존 동작과 동일하다(workspace-level).
+  const projectRole = await resolveProjectAuthRole(
+    auth.user.id,
+    project.id,
+    auth.role,
+  );
+  const projectPermissions = buildPermissions(projectRole);
+
+  requirePermission({ role: projectRole, permissions: projectPermissions }, action);
 
   return {
     ...auth,
+    role: projectRole,
+    permissions: projectPermissions,
     project,
   };
 }

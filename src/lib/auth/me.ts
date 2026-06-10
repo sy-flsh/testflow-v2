@@ -77,11 +77,15 @@ export function mapAuthPayload(input: {
   };
   workspace: Workspace;
   role: MemberRole;
+  // c5-2: UserRole 우선으로 산출된 AuthRole override. 전달되면 이 값을 사용하고,
+  // 없으면 기존처럼 MemberRole 기반(toAuthRole)으로 산출한다.
+  // (login/signup 은 미전달 → 기존 계약 그대로, /api/auth/me 만 UserRole 우선)
+  authRole?: AuthRole;
   workspaces?: Array<{ id: string; name: string; slug: string; role: AuthRole }>;
   // c5-1: UserRole 기반 scope별 Role. additive 필드 — 전달된 경우에만 응답에 포함한다.
   rolesByScope?: RolesByScope;
 }) {
-  const role = toAuthRole(input.role);
+  const role = input.authRole ?? toAuthRole(input.role);
 
   return {
     user: {

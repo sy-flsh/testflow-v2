@@ -1,6 +1,6 @@
 import { apiError, apiSuccess } from "@/lib/api/response";
 import { getUserWorkspaces, mapAuthPayload, resolveActiveMembership } from "@/lib/auth/me";
-import { getRolesByScope } from "@/lib/auth/roles";
+import { getRolesByScope, resolveWorkspaceAuthRole } from "@/lib/auth/roles";
 import { getCurrentSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db/prisma";
 
@@ -29,12 +29,20 @@ export async function GET() {
 
     const workspaces = await getUserWorkspaces(session.userId);
     const rolesByScope = await getRolesByScope(session.userId);
+    // c5-2: 기존 role/permissions 계산도 UserRole(WORKSPACE) 우선으로 전환.
+    // 값 자체는 Admin/Member/Viewer 그대로 유지(계약 불변), 산출 근거만 UserRole 우선.
+    const workspaceAuthRole = await resolveWorkspaceAuthRole(
+      session.userId,
+      membership.workspaceId,
+      membership.role,
+    );
 
     return apiSuccess(
       mapAuthPayload({
         user: session.user,
         workspace: membership.workspace,
         role: membership.role,
+        authRole: workspaceAuthRole,
         workspaces,
         rolesByScope,
       }),

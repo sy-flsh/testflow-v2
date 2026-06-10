@@ -1,5 +1,6 @@
-import type { Role, ScopeType } from "@prisma/client";
+import type { MemberRole, Role, ScopeType } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
+import { toAuthRole, type AuthRole } from "@/lib/auth/me";
 
 /**
  * c5-1: UserRole 기반 권한 helper.
@@ -47,6 +48,95 @@ export function allowedScopesForRole(role: Role): ScopeType[] {
 /** (role, scopeType) 조합이 정합한지 검증한다. DB CHECK 없이 애플리케이션 레벨 검증용. */
 export function isRoleAllowedForScope(role: Role, scopeType: ScopeType): boolean {
   return ROLE_ALLOWED_SCOPES[role].includes(scopeType);
+}
+
+/**
+ * c5-2: UserRole(Role) → 기존 AuthRole 호환 매핑.
+ * - CO / WO / PO → "Admin"
+ * - MEMBER       → "Member"
+ * - VIEWER       → "Viewer"
+ * - MASTER       → MasterAdmin 전용. 일반 UserRole 권한 산출에서는 제외(null).
+ * 기존 buildPermissions(role: AuthRole)를 그대로 재사용하기 위한 변환이다.
+ */
+export function specRoleToAuthRole(role: Role): AuthRole | null {
+  switch (role) {
+    case "CO":
+    case "WO":
+    case "PO":
+      return "Admin";
+    case "MEMBER":
+      return "Member";
+    case "VIEWER":
+      return "Viewer";
+    case "MASTER":
+      return null;
+  }
+}
+
+/**
+ * c5-2: Workspace 권한 Role 을 UserRole 우선으로 산출한다.
+ * UserRole(WORKSPACE, workspaceId) 가 있으면 그 role 을 AuthRole 로 변환해 사용하고,
+ * 없으면 **전환 기간 한정 fallback** 으로 WorkspaceMember.role 매핑을 사용한다.
+ * (모든 사용자에 대한 UserRole 백필이 끝나면 fallback 제거 예정 — c5-3/c6)
+ */
+export async function resolveWorkspaceAuthRole(
+  userId: string,
+  workspaceId: string,
+  fallbackMemberRole: MemberRole,
+): Promise<AuthRole> {
+  const userRole = await prisma.userRole.findUnique({
+    where: {
+      userId_scopeType_scopeId: {
+        userId,
+        scopeType: "WORKSPACE",
+        scopeId: workspaceId,
+      },
+    },
+    select: { role: true },
+  });
+
+  if (userRole) {
+    const mapped = specRoleToAuthRole(userRole.role);
+
+    if (mapped) {
+      return mapped;
+    }
+  }
+
+  // fallback (전환 기간 한정): 기존 WorkspaceMember.role 기반
+  return toAuthRole(fallbackMemberRole);
+}
+
+/**
+ * c5-2: Project 권한 Role 산출. 현재 PROJECT scope UserRole 데이터는 아직 없지만(c6에서 도입),
+ * 존재하면 우선 사용하도록 구조만 준비한다. 없으면 상위 Workspace 권한으로 fallback 한다.
+ * 따라서 PROJECT UserRole 이 없는 현재는 기존 workspace-level 권한과 동일하게 동작한다.
+ */
+export async function resolveProjectAuthRole(
+  userId: string,
+  projectId: string,
+  workspaceFallbackRole: AuthRole,
+): Promise<AuthRole> {
+  const userRole = await prisma.userRole.findUnique({
+    where: {
+      userId_scopeType_scopeId: {
+        userId,
+        scopeType: "PROJECT",
+        scopeId: projectId,
+      },
+    },
+    select: { role: true },
+  });
+
+  if (userRole) {
+    const mapped = specRoleToAuthRole(userRole.role);
+
+    if (mapped) {
+      return mapped;
+    }
+  }
+
+  return workspaceFallbackRole;
 }
 
 /**

@@ -463,6 +463,32 @@ async function main() {
       );
     });
 
+    await check("UserRole-first /api/auth/me keeps legacy role contract (member/viewer)", async () => {
+      // c5-2: 런타임 권한 산출 근거가 UserRole(WORKSPACE) 우선으로 바뀌어도
+      // legacy role 값(Admin/Member/Viewer)은 그대로 유지되어야 한다.
+      // backend: WorkspaceMember.role=MEMBER & UserRole WORKSPACE=MEMBER -> "Member"
+      const memberMe = await request("/api/auth/me", {
+        jar: memberJar,
+        expectedStatus: 200,
+      });
+      assert(memberMe.json?.data?.role === "Member", "member role should be Member");
+      assert(
+        memberMe.json?.data?.rolesByScope?.workspace?.some((entry) => entry.role === "MEMBER"),
+        "member should have WORKSPACE MEMBER in rolesByScope",
+      );
+
+      // pm: WorkspaceMember.role=VIEWER & UserRole WORKSPACE=VIEWER -> "Viewer"
+      const viewerMe = await request("/api/auth/me", {
+        jar: viewerJar,
+        expectedStatus: 200,
+      });
+      assert(viewerMe.json?.data?.role === "Viewer", "viewer role should be Viewer");
+      assert(
+        viewerMe.json?.data?.rolesByScope?.workspace?.some((entry) => entry.role === "VIEWER"),
+        "viewer should have WORKSPACE VIEWER in rolesByScope",
+      );
+    });
+
     await check("cross-origin project write is rejected by CSRF guard", async () => {
       const result = await request("/api/projects", {
         method: "POST",
