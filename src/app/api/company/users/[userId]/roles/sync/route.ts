@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import type { Role, ScopeType } from "@prisma/client";
 import { apiError, apiSuccess } from "@/lib/api/response";
 import {
@@ -23,6 +24,20 @@ type DesiredRole = {
   scopeId: string;
   role: Role;
 };
+
+/**
+ * c6-3: 트랜잭션 내부 보호 검사 실패를 표현하는 에러.
+ * 트랜잭션 콜백에서 throw 하면 트랜잭션이 롤백되고, 외부 catch 에서 code 로 매핑한다.
+ */
+class RoleSyncProtectionError extends Error {
+  constructor(
+    message: string,
+    public readonly code: string,
+  ) {
+    super(message);
+    this.name = "RoleSyncProtectionError";
+  }
+}
 
 /**
  * c6-1: CO Role 매트릭스 sync API 기반.
@@ -129,133 +144,133 @@ export async function POST(request: Request, context: RouteContext) {
       }
     }
 
-    // 3) 보호 규칙: 마지막 CO / 본인 CO 회수 금지
+    // 3) body 기준 desired 맵(순수 계산 — DB 접근 없음)
     const desiredKeepsCompanyCo = desired.some(
       (item) =>
         item.scopeType === "COMPANY" && item.scopeId === companyId && item.role === "CO",
     );
-
-    const targetCurrentCompanyRole = await prisma.userRole.findUnique({
-      where: {
-        userId_scopeType_scopeId: {
-          userId: targetUserId,
-          scopeType: "COMPANY",
-          scopeId: companyId,
-        },
-      },
-      select: { role: true },
-    });
-    const targetIsCoNow = targetCurrentCompanyRole?.role === "CO";
-
-    if (targetIsCoNow && !desiredKeepsCompanyCo) {
-      if (actor.id === targetUserId) {
-        return apiError(
-          "본인 CO 권한은 회수할 수 없습니다. (다른 CO가 회수해야 합니다)",
-          400,
-          "USER_SELF_CO_REVOKE_FORBIDDEN",
-        );
-      }
-
-      const coCount = await prisma.userRole.count({
-        where: { scopeType: "COMPANY", scopeId: companyId, role: "CO" },
-      });
-
-      if (coCount <= 1) {
-        return apiError(
-          "Company 의 마지막 CO 는 회수할 수 없습니다.",
-          400,
-          "USER_LAST_CO_FORBIDDEN",
-        );
-      }
-    }
-
-    // 3b) 보호 규칙: 마지막 WO / 마지막 PO 회수 금지
-    // sync 는 단일 사용자 대상이므로 "대상이 해당 scope 의 유일한 소유자(WO/PO)이고
-    // body 에서 그 소유자 Role 이 유지되지 않는 경우" 를 차단한다.
     const desiredRoleByScope = new Map(
       desired.map((item) => [`${item.scopeType}:${item.scopeId}`, item.role]),
     );
 
-    const currentWorkspaceOwnerships = await prisma.userRole.findMany({
-      where: {
-        userId: targetUserId,
-        scopeType: "WORKSPACE",
-        role: "WO",
-        scopeId: { in: workspaceIds },
-      },
-      select: { scopeId: true },
-    });
-
-    for (const { scopeId } of currentWorkspaceOwnerships) {
-      const keepsWo = desiredRoleByScope.get(`WORKSPACE:${scopeId}`) === "WO";
-
-      if (!keepsWo) {
-        const woCount = await prisma.userRole.count({
-          where: { scopeType: "WORKSPACE", scopeId, role: "WO" },
+    // 4) 단일 트랜잭션(Serializable): 보호 검사(현재 상태 조회 + cross-user count)와
+    //    deleteMany/createMany 를 한 트랜잭션 안에서 수행해 동시성 안전성을 보장한다.
+    //    보호 위반은 RoleSyncProtectionError 로 throw → 트랜잭션 롤백 → 외부 catch 에서 매핑.
+    await prisma.$transaction(
+      async (tx) => {
+        // 4a) 마지막 CO / 본인 CO 회수 금지
+        const targetCurrentCompanyRole = await tx.userRole.findUnique({
+          where: {
+            userId_scopeType_scopeId: {
+              userId: targetUserId,
+              scopeType: "COMPANY",
+              scopeId: companyId,
+            },
+          },
+          select: { role: true },
         });
 
-        if (woCount <= 1) {
-          return apiError(
-            "Workspace 의 마지막 WO 는 회수할 수 없습니다.",
-            400,
-            "USER_LAST_WO_FORBIDDEN",
-          );
+        if (targetCurrentCompanyRole?.role === "CO" && !desiredKeepsCompanyCo) {
+          if (actor.id === targetUserId) {
+            throw new RoleSyncProtectionError(
+              "본인 CO 권한은 회수할 수 없습니다. (다른 CO가 회수해야 합니다)",
+              "USER_SELF_CO_REVOKE_FORBIDDEN",
+            );
+          }
+
+          const coCount = await tx.userRole.count({
+            where: { scopeType: "COMPANY", scopeId: companyId, role: "CO" },
+          });
+
+          if (coCount <= 1) {
+            throw new RoleSyncProtectionError(
+              "Company 의 마지막 CO 는 회수할 수 없습니다.",
+              "USER_LAST_CO_FORBIDDEN",
+            );
+          }
         }
-      }
-    }
 
-    const currentProjectOwnerships = await prisma.userRole.findMany({
-      where: {
-        userId: targetUserId,
-        scopeType: "PROJECT",
-        role: "PO",
-        scopeId: { in: projectIds },
-      },
-      select: { scopeId: true },
-    });
-
-    for (const { scopeId } of currentProjectOwnerships) {
-      const keepsPo = desiredRoleByScope.get(`PROJECT:${scopeId}`) === "PO";
-
-      if (!keepsPo) {
-        const poCount = await prisma.userRole.count({
-          where: { scopeType: "PROJECT", scopeId, role: "PO" },
-        });
-
-        if (poCount <= 1) {
-          return apiError(
-            "Project 의 마지막 PO 는 회수할 수 없습니다.",
-            400,
-            "USER_LAST_PO_FORBIDDEN",
-          );
-        }
-      }
-    }
-
-    // 4) 트랜잭션: 회사 범위 내 기존 Role 제거 후 desired 로 재구성
-    await prisma.$transaction(async (tx) => {
-      await tx.userRole.deleteMany({
-        where: {
-          userId: targetUserId,
-          OR: [
-            { scopeType: "COMPANY", scopeId: companyId },
-            { scopeType: "WORKSPACE", scopeId: { in: workspaceIds } },
-            { scopeType: "PROJECT", scopeId: { in: projectIds } },
-          ],
-        },
-      });
-
-      if (desired.length > 0) {
-        await tx.userRole.createMany({
-          data: desired.map((item) => ({
+        // 4b) 마지막 WO 회수 금지
+        const currentWorkspaceOwnerships = await tx.userRole.findMany({
+          where: {
             userId: targetUserId,
-            scopeType: item.scopeType,
-            scopeId: item.scopeId,
-            role: item.role,
-          })),
+            scopeType: "WORKSPACE",
+            role: "WO",
+            scopeId: { in: workspaceIds },
+          },
+          select: { scopeId: true },
         });
-      }
-    });
+
+        for (const { scopeId } of currentWorkspaceOwnerships) {
+          const keepsWo = desiredRoleByScope.get(`WORKSPACE:${scopeId}`) === "WO";
+
+          if (!keepsWo) {
+            const woCount = await tx.userRole.count({
+              where: { scopeType: "WORKSPACE", scopeId, role: "WO" },
+            });
+
+            if (woCount <= 1) {
+              throw new RoleSyncProtectionError(
+                "Workspace 의 마지막 WO 는 회수할 수 없습니다.",
+                "USER_LAST_WO_FORBIDDEN",
+              );
+            }
+          }
+        }
+
+        // 4c) 마지막 PO 회수 금지
+        const currentProjectOwnerships = await tx.userRole.findMany({
+          where: {
+            userId: targetUserId,
+            scopeType: "PROJECT",
+            role: "PO",
+            scopeId: { in: projectIds },
+          },
+          select: { scopeId: true },
+        });
+
+        for (const { scopeId } of currentProjectOwnerships) {
+          const keepsPo = desiredRoleByScope.get(`PROJECT:${scopeId}`) === "PO";
+
+          if (!keepsPo) {
+            const poCount = await tx.userRole.count({
+              where: { scopeType: "PROJECT", scopeId, role: "PO" },
+            });
+
+            if (poCount <= 1) {
+              throw new RoleSyncProtectionError(
+                "Project 의 마지막 PO 는 회수할 수 없습니다.",
+                "USER_LAST_PO_FORBIDDEN",
+              );
+            }
+          }
+        }
+
+        // 4d) 검사 통과 → 회사 범위 내 기존 Role 제거 후 desired 로 재구성
+        await tx.userRole.deleteMany({
+          where: {
+            userId: targetUserId,
+            OR: [
+              { scopeType: "COMPANY", scopeId: companyId },
+              { scopeType: "WORKSPACE", scopeId: { in: workspaceIds } },
+              { scopeType: "PROJECT", scopeId: { in: projectIds } },
+            ],
+          },
+        });
+
+        if (desired.length > 0) {
+          await tx.userRole.createMany({
+            data: desired.map((item) => ({
+              userId: targetUserId,
+              scopeType: item.scopeType,
+              scopeId: item.scopeId,
+              role: item.role,
+            })),
+          });
+        }
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
 
     const roles = await prisma.userRole.findMany({
       where: { userId: targetUserId },
@@ -267,6 +282,11 @@ export async function POST(request: Request, context: RouteContext) {
   } catch (error) {
     if (isAuthGuardError(error)) {
       return authGuardErrorResponse(error);
+    }
+
+    // c6-3: 트랜잭션 내부 보호 검사 실패 → 400 + 기존 code 매핑(롤백됨)
+    if (error instanceof RoleSyncProtectionError) {
+      return apiError(error.message, 400, error.code);
     }
 
     console.error(error);

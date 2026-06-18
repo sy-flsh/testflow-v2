@@ -80,6 +80,10 @@ The UI reflects the same permissions by hiding or disabling restricted actions, 
   - **마지막 PO 보호**(`USER_LAST_PO_FORBIDDEN`): 대상이 해당 Project의 유일한 PO인데 body에서 그 PO가 유지되지 않으면 차단.
   - **PROJECT scope 우선권 검증**: `resolveProjectAuthRole`이 PROJECT/PO를 workspace fallback보다 우선함을 smoke로 입증(워크스페이스 MEMBER 사용자가 특정 프로젝트 PROJECT/PO 부여 시 그 프로젝트에서 Admin급 — 자산 삭제 가능).
   - 보호 검사는 트랜잭션 직전에 회사-범위 scope를 cross-user 카운팅하여 수행합니다.
+- c6-3: sync API의 보호 검사(마지막 CO/본인 CO/마지막 WO/마지막 PO)를 **트랜잭션 내부로 이동**해 동시성 안전성을 강화했습니다.
+  - 현재 상태 조회 + cross-user 카운팅 + `deleteMany`/`createMany`를 **단일 `Serializable` 트랜잭션**에서 수행 → 두 CO가 동시에 마지막 owner를 회수하는 race를 방지합니다.
+  - 보호 위반은 `RoleSyncProtectionError`로 throw → 트랜잭션 롤백 → 외부 catch에서 기존 code(`USER_LAST_CO_FORBIDDEN`/`USER_SELF_CO_REVOKE_FORBIDDEN`/`USER_LAST_WO_FORBIDDEN`/`USER_LAST_PO_FORBIDDEN`)로 매핑합니다.
+  - API path/body/response·에러 code·정상 동작은 불변(검증: test:auth 62 PASS 유지).
 - seed: 기본 Company `testflow-demo` 1건과 MasterAdmin `master@testflow.local` 1명을 생성하고, 기본 Workspace `testflow-qa`를 해당 Company에 연결(owner=`qa.lead@testflow.local`)합니다. 기존 seed 계정/프로젝트/테스트데이터는 그대로 유지됩니다.
 
 ## Local DB Reset
