@@ -6,6 +6,7 @@ import type { InvitationStatus } from "@prisma/client";
 import { EmptyState } from "@/components/common/empty-state";
 import type { CompanyInvitationDto } from "@/lib/company/types";
 import { cn } from "@/lib/utils";
+import { InviteSuccessDrawer, type InviteSuccessData } from "./invite-success";
 import { inviteErrorMessage, rolesToSummaryTokens } from "./role-matrix-utils";
 
 type LoadState =
@@ -32,6 +33,9 @@ export function CompanyInvitationList({ refreshKey }: { refreshKey: number }) {
   const [state, setState] = useState<LoadState>({ kind: "loading" });
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [revokingId, setRevokingId] = useState<string | null>(null);
+  const [resendConfirmId, setResendConfirmId] = useState<string | null>(null);
+  const [resendingId, setResendingId] = useState<string | null>(null);
+  const [resendSuccess, setResendSuccess] = useState<InviteSuccessData | null>(null);
   const [rowError, setRowError] = useState<{ id: string; message: string } | null>(null);
 
   const load = useCallback(async () => {
@@ -103,6 +107,41 @@ export function CompanyInvitationList({ refreshKey }: { refreshKey: number }) {
     }
   }
 
+  async function resend(id: string) {
+    setResendingId(id);
+    setRowError(null);
+
+    try {
+      const response = await fetch(`/api/company/invitations/${id}/resend`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const payload = (await response.json().catch(() => null)) as
+        | { data?: InviteSuccessData; error?: { message?: string; code?: string } }
+        | null;
+
+      if (!response.ok || !payload?.data) {
+        // 실패: 목록 상태를 잘못 갱신하지 않고 해당 행에 오류만 표시(다시 시도 가능).
+        setRowError({ id, message: inviteErrorMessage(payload?.error?.code, payload?.error?.message) });
+        return;
+      }
+
+      // 성공: 새 inviteUrl 1회 표시(성공 Drawer). 확인 상태 해제.
+      setResendConfirmId(null);
+      setResendSuccess(payload.data);
+    } catch {
+      setRowError({ id, message: "초대 재발송에 실패했습니다. 네트워크 상태를 확인해 주세요." });
+    } finally {
+      setResendingId(null);
+    }
+  }
+
+  function closeResendSuccess() {
+    // raw inviteUrl 을 state 에서 제거하고 목록을 최신화(기존 REVOKED + 새 PENDING 반영).
+    setResendSuccess(null);
+    void load();
+  }
+
   if (state.kind === "loading") {
     return (
       <div className="rounded-lg border border-[var(--border-default)] bg-white px-6 py-12 text-center text-sm text-[var(--text-secondary)]">
@@ -136,7 +175,8 @@ export function CompanyInvitationList({ refreshKey }: { refreshKey: number }) {
   }
 
   return (
-    <div className="overflow-hidden rounded-lg border border-[var(--border-default)] bg-white">
+    <>
+      <div className="overflow-hidden rounded-lg border border-[var(--border-default)] bg-white">
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-[var(--border-default)] bg-[var(--bg-subtle)] text-left text-xs font-medium text-[var(--text-tertiary)]">
@@ -193,7 +233,28 @@ export function CompanyInvitationList({ refreshKey }: { refreshKey: number }) {
                 <td className="px-4 py-3 text-[var(--text-tertiary)]">{formatDate(invitation.expiresAt)}</td>
                 <td className="px-4 py-3 text-right">
                   {invitation.status === "PENDING" ? (
-                    confirmingId === invitation.id ? (
+                    resendConfirmId === invitation.id ? (
+                      <div className="inline-flex items-center gap-2">
+                        <span className="text-xs text-[var(--text-tertiary)]">
+                          기존 링크는 즉시 무효화되고 새 링크가 생성됩니다.
+                        </span>
+                        <button
+                          type="button"
+                          disabled={resendingId === invitation.id}
+                          onClick={() => resend(invitation.id)}
+                          className="inline-flex h-8 items-center rounded-md bg-[var(--brand-primary)] px-3 text-xs font-medium text-white hover:bg-[var(--brand-primary-hover)] disabled:opacity-60"
+                        >
+                          {resendingId === invitation.id ? "재발송 중…" : "재발송"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setResendConfirmId(null)}
+                          className="inline-flex h-8 items-center rounded-md border border-[var(--border-default)] px-3 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
+                        >
+                          취소
+                        </button>
+                      </div>
+                    ) : confirmingId === invitation.id ? (
                       <div className="inline-flex items-center gap-2">
                         <span className="text-xs text-[var(--text-tertiary)]">취소할까요?</span>
                         <button
@@ -213,16 +274,30 @@ export function CompanyInvitationList({ refreshKey }: { refreshKey: number }) {
                         </button>
                       </div>
                     ) : (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setRowError(null);
-                          setConfirmingId(invitation.id);
-                        }}
-                        className="inline-flex h-8 items-center rounded-md border border-[var(--border-default)] px-3 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
-                      >
-                        초대 취소
-                      </button>
+                      <div className="inline-flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRowError(null);
+                            setConfirmingId(null);
+                            setResendConfirmId(invitation.id);
+                          }}
+                          className="inline-flex h-8 items-center rounded-md border border-[var(--border-default)] px-3 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
+                        >
+                          재발송
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRowError(null);
+                            setResendConfirmId(null);
+                            setConfirmingId(invitation.id);
+                          }}
+                          className="inline-flex h-8 items-center rounded-md border border-[var(--border-default)] px-3 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
+                        >
+                          초대 취소
+                        </button>
+                      </div>
                     )
                   ) : (
                     <span className="text-xs text-[var(--text-tertiary)]">—</span>
@@ -236,7 +311,16 @@ export function CompanyInvitationList({ refreshKey }: { refreshKey: number }) {
           })}
         </tbody>
       </table>
-    </div>
+      </div>
+
+      {resendSuccess && (
+        <InviteSuccessDrawer
+          title="초대 재발송 완료"
+          data={resendSuccess}
+          onClose={closeResendSuccess}
+        />
+      )}
+    </>
   );
 }
 

@@ -1,20 +1,19 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Role } from "@prisma/client";
-import { CheckCircle2, Copy } from "lucide-react";
 import { DrawerShell } from "@/components/common/drawer-shell";
 import type {
   CompanyInvitationDto,
   CompanyScopeTreeDto,
 } from "@/lib/company/types";
 import { cn } from "@/lib/utils";
+import { InviteSuccess } from "./invite-success";
 import {
   PROJECT_ROLE_OPTIONS,
   WORKSPACE_ROLE_OPTIONS,
   inviteErrorMessage,
   mapToRoles,
-  rolesToSummaryTokens,
   scopeKey,
 } from "./role-matrix-utils";
 
@@ -368,81 +367,6 @@ function RoleSegment({
           </button>
         );
       })}
-    </div>
-  );
-}
-
-function InviteSuccess({ data }: { data: SuccessData }) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [copied, setCopied] = useState(false);
-  const absoluteUrl = useMemo(() => {
-    if (typeof window === "undefined") {
-      return data.inviteUrl;
-    }
-    return `${window.location.origin}${data.inviteUrl}`;
-  }, [data.inviteUrl]);
-
-  const tokens = rolesToSummaryTokens(data.invitation.roles);
-
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(absoluteUrl);
-      setCopied(true);
-    } catch {
-      // Clipboard API 실패 시 사용자가 직접 복사할 수 있도록 input 선택.
-      inputRef.current?.select();
-    }
-  }
-
-  return (
-    <div className="space-y-5 px-6 py-5">
-      <div className="flex items-center gap-2 text-sm text-emerald-600">
-        <CheckCircle2 className="h-5 w-5" /> 초대가 생성되었습니다.
-      </div>
-
-      <dl className="grid grid-cols-[88px_1fr] gap-y-2 text-sm">
-        <dt className="text-[var(--text-tertiary)]">이메일</dt>
-        <dd className="text-[var(--text-secondary)]">{data.invitation.email}</dd>
-        <dt className="text-[var(--text-tertiary)]">권한</dt>
-        <dd className="flex flex-wrap gap-1">
-          {tokens.map((t, i) => (
-            <span
-              key={`${t}-${i}`}
-              className="inline-flex h-6 items-center rounded-full bg-[var(--bg-muted)] px-2.5 text-xs font-medium text-[var(--text-secondary)] ring-1 ring-inset ring-[var(--border-default)]"
-            >
-              {t}
-            </span>
-          ))}
-        </dd>
-        <dt className="text-[var(--text-tertiary)]">만료</dt>
-        <dd className="text-[var(--text-secondary)]">
-          {new Date(data.invitation.expiresAt).toLocaleString("ko-KR")}
-        </dd>
-      </dl>
-
-      <div className="space-y-2">
-        <p className="text-sm font-medium text-[var(--text-primary)]">초대 링크</p>
-        <div className="flex gap-2">
-          <input
-            ref={inputRef}
-            readOnly
-            value={absoluteUrl}
-            onFocus={(e) => e.currentTarget.select()}
-            className="h-9 flex-1 rounded-md border border-[var(--border-default)] bg-[var(--bg-subtle)] px-3 text-xs text-[var(--text-secondary)] outline-none"
-          />
-          <button
-            type="button"
-            onClick={copy}
-            className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border border-[var(--border-default)] bg-white px-3 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
-          >
-            <Copy className="h-3.5 w-3.5" />
-            {copied ? "복사됨" : "링크 복사"}
-          </button>
-        </div>
-        <p className="text-xs text-[var(--danger-text)]">
-          이 링크는 지금만 다시 확인할 수 있습니다. 닫기 전에 복사해 두세요.
-        </p>
-      </div>
     </div>
   );
 }

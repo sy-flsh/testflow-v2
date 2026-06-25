@@ -1352,6 +1352,159 @@ async function main() {
         }
       }
 
+      // c8-4: PENDING 초대 재발송
+      {
+        const baseEmail = `resend.c84.${RUN_ID}@testflow.local`.toLowerCase();
+        const npEmail = `resend.np.${RUN_ID}@testflow.local`.toLowerCase();
+        const revokedEmail = `resend.revoked.${RUN_ID}@testflow.local`.toLowerCase();
+        const acceptedEmail = `resend.accepted.${RUN_ID}@testflow.local`.toLowerCase();
+        const expiredEmail = `resend.expired.${RUN_ID}@testflow.local`.toLowerCase();
+        const cleanupEmails = [baseEmail, npEmail, revokedEmail, acceptedEmail, expiredEmail];
+
+        async function createInvite(email, roles) {
+          const r = await request("/api/company/invitations", {
+            method: "POST",
+            jar: adminJar,
+            body: { email, roles },
+            expectedStatus: 201,
+          });
+          const token = new URL(`http://x${r.json.data.inviteUrl}`).searchParams.get("token");
+          return { id: r.json.data.invitation.id, token };
+        }
+
+        try {
+          await check("CO can resend a PENDING invitation (old REVOKED, new PENDING, same snapshot, new token)", async () => {
+            const old = await createInvite(baseEmail, [
+              { scopeType: "WORKSPACE", scopeId: workspaceId, role: "MEMBER" },
+            ]);
+            const oldRow = await prisma.invitation.findUnique({ where: { id: old.id } });
+
+            const result = await request(`/api/company/invitations/${old.id}/resend`, {
+              method: "POST",
+              jar: adminJar,
+              expectedStatus: 201,
+            });
+            const data = result.json?.data;
+            assert(
+              typeof data?.inviteUrl === "string" &&
+                data.inviteUrl.startsWith("/invite/accept?token="),
+              "resend inviteUrl missing/format",
+            );
+            assert(data?.invitation?.id && data.invitation.id !== old.id, "new invitation id should differ");
+            assert(data.invitation.status === "PENDING", "new invitation should be PENDING");
+            assert(data.invitation.email === baseEmail, "email should be identical");
+            assert(
+              (data.invitation.roles ?? []).some(
+                (r) => r.scopeType === "WORKSPACE" && r.scopeId === workspaceId && r.role === "MEMBER",
+              ),
+              "role snapshot should be copied",
+            );
+            assert(!("tokenHash" in data.invitation), "tokenHash must not be serialized");
+
+            const newToken = new URL(`http://x${data.inviteUrl}`).searchParams.get("token");
+            const newId = data.invitation.id;
+
+            const oldAfter = await prisma.invitation.findUnique({ where: { id: old.id } });
+            assert(oldAfter.status === "REVOKED" && oldAfter.revokedAt, "old invitation should be REVOKED");
+
+            const newRow = await prisma.invitation.findUnique({ where: { id: newId } });
+            assert(newRow.status === "PENDING", "new invitation should be PENDING in DB");
+            assert(newRow.tokenHash !== oldRow.tokenHash, "new tokenHash must differ from old");
+            assert(
+              newRow.tokenHash === createHash("sha256").update(newToken).digest("hex"),
+              "new tokenHash must equal sha256(newToken)",
+            );
+            const byRaw = await prisma.invitation.findFirst({ where: { tokenHash: newToken } });
+            assert(!byRaw, "raw token must not be stored");
+
+            const oldValidate = await request("/api/invitations/validate", {
+              method: "POST",
+              body: { token: old.token },
+              expectedStatus: 400,
+            });
+            assert(oldValidate.json?.error?.code === "INVITE_REVOKED", "old token should be INVITE_REVOKED");
+
+            const newValidate = await request("/api/invitations/validate", {
+              method: "POST",
+              body: { token: newToken },
+              expectedStatus: 200,
+            });
+            assert(
+              newValidate.json?.data?.email === baseEmail && newValidate.json?.data?.existingUser === false,
+              "new token should validate as PENDING",
+            );
+          });
+
+          await check("non-CO cannot resend invitation (403)", async () => {
+            const inv = await createInvite(npEmail, [
+              { scopeType: "WORKSPACE", scopeId: workspaceId, role: "MEMBER" },
+            ]);
+            const result = await request(`/api/company/invitations/${inv.id}/resend`, {
+              method: "POST",
+              jar: memberJar,
+              expectedStatus: 403,
+            });
+            assert(result.json?.error?.code === "AUTH_FORBIDDEN", "expected AUTH_FORBIDDEN");
+          });
+
+          await check("resend rejects non-PENDING invitations → INVITE_NOT_PENDING", async () => {
+            const revoked = await createInvite(revokedEmail, [
+              { scopeType: "WORKSPACE", scopeId: workspaceId, role: "MEMBER" },
+            ]);
+            await request(`/api/company/invitations/${revoked.id}/revoke`, {
+              method: "POST",
+              jar: adminJar,
+              expectedStatus: 200,
+            });
+            const r1 = await request(`/api/company/invitations/${revoked.id}/resend`, {
+              method: "POST",
+              jar: adminJar,
+              expectedStatus: 400,
+            });
+            assert(r1.json?.error?.code === "INVITE_NOT_PENDING", "REVOKED resend → INVITE_NOT_PENDING");
+
+            const accepted = await createInvite(acceptedEmail, [
+              { scopeType: "WORKSPACE", scopeId: workspaceId, role: "MEMBER" },
+            ]);
+            await prisma.invitation.update({
+              where: { id: accepted.id },
+              data: { status: "ACCEPTED", acceptedAt: new Date() },
+            });
+            const r2 = await request(`/api/company/invitations/${accepted.id}/resend`, {
+              method: "POST",
+              jar: adminJar,
+              expectedStatus: 400,
+            });
+            assert(r2.json?.error?.code === "INVITE_NOT_PENDING", "ACCEPTED resend → INVITE_NOT_PENDING");
+
+            const expired = await createInvite(expiredEmail, [
+              { scopeType: "WORKSPACE", scopeId: workspaceId, role: "MEMBER" },
+            ]);
+            await prisma.invitation.update({
+              where: { id: expired.id },
+              data: { expiresAt: new Date(Date.now() - 1000) },
+            });
+            const r3 = await request(`/api/company/invitations/${expired.id}/resend`, {
+              method: "POST",
+              jar: adminJar,
+              expectedStatus: 400,
+            });
+            assert(r3.json?.error?.code === "INVITE_NOT_PENDING", "EXPIRED resend → INVITE_NOT_PENDING");
+          });
+
+          await check("resend unknown invitation → 404 INVITE_NOT_FOUND", async () => {
+            const result = await request("/api/company/invitations/cmthisinvitedoesnotexist01/resend", {
+              method: "POST",
+              jar: adminJar,
+              expectedStatus: 404,
+            });
+            assert(result.json?.error?.code === "INVITE_NOT_FOUND", "expected INVITE_NOT_FOUND");
+          });
+        } finally {
+          await prisma.invitation.deleteMany({ where: { email: { in: cleanupEmails } } });
+        }
+      }
+
       // c8-2: 초대 수락(validate / 신규 가입 / 기존 사용자 / 충돌·만료·취소)
       {
         const project = await prisma.project.findFirst({
