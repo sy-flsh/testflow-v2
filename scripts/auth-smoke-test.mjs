@@ -2,6 +2,7 @@
 
 import "dotenv/config";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
 
@@ -1160,6 +1161,159 @@ async function main() {
         });
         assert(result.json?.error?.code === "USER_NOT_FOUND", "expected USER_NOT_FOUND");
       });
+
+      // c8-1: Company 초대 생성/목록/취소
+      {
+        const inviteEmail = `invite.c81.${RUN_ID}@testflow.local`.toLowerCase();
+        try {
+          let firstInviteId = null;
+
+          await check("CO can create WORKSPACE/MEMBER invitation with inviteUrl", async () => {
+            const result = await request("/api/company/invitations", {
+              method: "POST",
+              jar: adminJar,
+              body: {
+                email: inviteEmail,
+                roles: [{ scopeType: "WORKSPACE", scopeId: workspaceId, role: "MEMBER" }],
+              },
+              expectedStatus: 201,
+            });
+            const data = result.json?.data;
+            assert(
+              typeof data?.inviteUrl === "string" &&
+                data.inviteUrl.startsWith("/invite/accept?token="),
+              `inviteUrl missing/format; got ${JSON.stringify(data?.inviteUrl)}`,
+            );
+            assert(data?.invitation?.status === "PENDING", "new invitation should be PENDING");
+            assert(
+              (data.invitation.roles ?? []).some(
+                (r) => r.scopeType === "WORKSPACE" && r.scopeId === workspaceId && r.role === "MEMBER",
+              ),
+              "invitation role snapshot missing WORKSPACE/MEMBER",
+            );
+            assert(
+              !("tokenHash" in (data.invitation ?? {})),
+              "tokenHash must not be serialized in response",
+            );
+            firstInviteId = data.invitation.id;
+
+            // DB: tokenHash 만 저장되고 raw token 은 저장되지 않아야 한다.
+            const token = new URL(`http://x${data.inviteUrl}`).searchParams.get("token");
+            assert(typeof token === "string" && token.length >= 32, "raw token should be in url");
+            const row = await prisma.invitation.findUnique({ where: { id: firstInviteId } });
+            const expectedHash = createHash("sha256").update(token).digest("hex");
+            assert(row.tokenHash === expectedHash, "DB tokenHash must equal sha256(rawToken)");
+            assert(row.tokenHash !== token, "DB must not store raw token");
+          });
+
+          await check("Invitation list returns the invitation + role snapshot (no tokenHash)", async () => {
+            const result = await request("/api/company/invitations", {
+              jar: adminJar,
+              expectedStatus: 200,
+            });
+            const invitations = result.json?.data?.invitations ?? [];
+            const mine = invitations.find((i) => i.email === inviteEmail);
+            assert(mine, "created invitation should appear in list");
+            assert(mine.status === "PENDING", "listed invitation should be PENDING");
+            assert(!("tokenHash" in mine), "list must not expose tokenHash");
+            assert(
+              (mine.roles ?? []).some(
+                (r) => r.scopeType === "WORKSPACE" && r.scopeId === workspaceId && r.role === "MEMBER",
+              ),
+              "listed invitation missing role snapshot",
+            );
+            assert(mine.invitedBy, "invitedBy should be present");
+          });
+
+          await check("non-CO cannot create or list invitations (403)", async () => {
+            const create = await request("/api/company/invitations", {
+              method: "POST",
+              jar: memberJar,
+              body: {
+                email: `nope.${RUN_ID}@testflow.local`,
+                roles: [{ scopeType: "WORKSPACE", scopeId: workspaceId, role: "MEMBER" }],
+              },
+              expectedStatus: 403,
+            });
+            assert(create.json?.error?.code === "AUTH_FORBIDDEN", "create expected AUTH_FORBIDDEN");
+
+            const list = await request("/api/company/invitations", {
+              jar: memberJar,
+              expectedStatus: 403,
+            });
+            assert(list.json?.error?.code === "AUTH_FORBIDDEN", "list expected AUTH_FORBIDDEN");
+          });
+
+          await check("invitation scope-role violation → USER_INVALID_ROLE_SCOPE", async () => {
+            const result = await request("/api/company/invitations", {
+              method: "POST",
+              jar: adminJar,
+              body: {
+                email: `bad-role.${RUN_ID}@testflow.local`,
+                roles: [{ scopeType: "WORKSPACE", scopeId: workspaceId, role: "PO" }],
+              },
+              expectedStatus: 400,
+            });
+            assert(
+              result.json?.error?.code === "USER_INVALID_ROLE_SCOPE",
+              "expected USER_INVALID_ROLE_SCOPE",
+            );
+          });
+
+          await check("invitation out-of-company scope → USER_SCOPE_NOT_IN_COMPANY", async () => {
+            const result = await request("/api/company/invitations", {
+              method: "POST",
+              jar: adminJar,
+              body: {
+                email: `bad-scope.${RUN_ID}@testflow.local`,
+                roles: [
+                  { scopeType: "WORKSPACE", scopeId: "ws-not-in-this-company", role: "MEMBER" },
+                ],
+              },
+              expectedStatus: 400,
+            });
+            assert(
+              result.json?.error?.code === "USER_SCOPE_NOT_IN_COMPANY",
+              "expected USER_SCOPE_NOT_IN_COMPANY",
+            );
+          });
+
+          await check("re-inviting same email revokes prior PENDING and creates new PENDING", async () => {
+            const result = await request("/api/company/invitations", {
+              method: "POST",
+              jar: adminJar,
+              body: {
+                email: inviteEmail,
+                roles: [{ scopeType: "WORKSPACE", scopeId: workspaceId, role: "VIEWER" }],
+              },
+              expectedStatus: 201,
+            });
+            const secondInviteId = result.json?.data?.invitation?.id;
+            assert(secondInviteId && secondInviteId !== firstInviteId, "new invitation should be created");
+
+            const prior = await prisma.invitation.findUnique({ where: { id: firstInviteId } });
+            assert(prior?.status === "REVOKED", "prior PENDING invitation should be REVOKED");
+            assert(prior?.revokedAt, "revokedAt should be set on auto-revoke");
+
+            const current = await prisma.invitation.findUnique({ where: { id: secondInviteId } });
+            assert(current?.status === "PENDING", "new invitation should be PENDING");
+
+            // CO 가 새 초대를 revoke 할 수 있어야 한다.
+            const revoke = await request(`/api/company/invitations/${secondInviteId}/revoke`, {
+              method: "POST",
+              jar: adminJar,
+              expectedStatus: 200,
+            });
+            assert(revoke.json?.data?.invitation?.status === "REVOKED", "revoke should set REVOKED");
+
+            const revoked = await prisma.invitation.findUnique({ where: { id: secondInviteId } });
+            assert(revoked?.status === "REVOKED", "DB should reflect REVOKED");
+          });
+        } finally {
+          // 정리: 이 테스트가 만든 초대(및 cascade 로 InvitationRole) 삭제.
+          await prisma.invitation.deleteMany({ where: { email: inviteEmail } });
+        }
+      }
 
       await check("CO can sync WORKSPACE role to another user", async () => {
         const original = await prisma.userRole.findUnique({

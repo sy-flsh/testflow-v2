@@ -29,6 +29,10 @@ async function main() {
     prisma.testFolder.deleteMany(),
     prisma.project.deleteMany(),
     prisma.workspaceMember.deleteMany(),
+    // c8-1: invitation_roles → invitations 순으로 비운다(child 먼저).
+    // invitations 는 company/user(onDelete Cascade)를 참조하므로 user/company 삭제 전에 정리한다.
+    prisma.invitationRole.deleteMany(),
+    prisma.invitation.deleteMany(),
     // c4: user_roles 는 user(onDelete Cascade)를 참조한다. user 삭제 전 명시적으로 비운다.
     prisma.userRole.deleteMany(),
     prisma.user.deleteMany(),

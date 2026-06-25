@@ -1,4 +1,4 @@
-import type { Role, ScopeType } from "@prisma/client";
+import type { InvitationStatus, Role, ScopeType } from "@prisma/client";
 
 /** c7-1: CO 회원 목록 항목 DTO. */
 export type CompanyUserScopedRole = {
@@ -51,4 +51,24 @@ export type CompanyUserDetailDto = {
   workspaces: CompanyWorkspaceNode[];
   /** 대상 사용자의 현재 UserRole 전체 (회사 범위). Matrix 초기값. */
   roles: CompanyUserRoleEntry[];
+};
+
+/** c8-1: 초대 Role snapshot 1행 DTO. */
+export type InvitationRoleDto = {
+  scopeType: ScopeType;
+  scopeId: string;
+  role: Role;
+};
+
+/** c8-1: 초대 목록/생성 응답 DTO (tokenHash·raw token 절대 미포함). */
+export type CompanyInvitationDto = {
+  id: string;
+  email: string;
+  status: InvitationStatus;
+  invitedBy: { name: string; email: string } | null;
+  createdAt: string;
+  expiresAt: string;
+  roles: InvitationRoleDto[];
+  /** 동일 email 의 기존 User 존재 여부 (수락 처리 방식은 c8-2 결정). */
+  existingUser: boolean;
 };

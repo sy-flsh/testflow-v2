@@ -93,6 +93,11 @@ The UI reflects the same permissions by hiding or disabling restricted actions, 
   - `GET /api/company/users/{userId}`: CO인 Company 범위 사용자 1명의 프로필 + 현재 UserRole 전체 + Matrix 행 구성용 Workspace/Project 트리를 반환(비CO 403, 다른 Company/미존재 사용자 404 `USER_NOT_FOUND`). UserRole 기준 표시, 상태만 WorkspaceMember.status 파생.
   - 목록의 "상세/권한 관리" → 우측 슬라이드인 Drawer(`DrawerShell` 재사용). 탭 2개: **프로필**(이름/이메일/상태/Role 요약, read-only) · **권한 관리**(Company CO 체크박스 + Workspace/Project 세그먼트 매트릭스).
   - 저장: Drawer 로컬 dirty state → 변경 시에만 [저장] 활성 → 기존 `POST .../roles/sync`(body `{ roles: [...] }`, 전체 desired 목록)로 1회 호출. 성공 시 원본/draft 갱신·목록 행 요약 즉시 갱신, 실패 시 local state 유지 + 서버 error code를 한국어 메시지로 표시(`USER_LAST_CO_FORBIDDEN`/`USER_SELF_CO_REVOKE_FORBIDDEN`/`USER_LAST_WO_FORBIDDEN`/`USER_LAST_PO_FORBIDDEN`/`USER_INVALID_ROLE_SCOPE`/`USER_DUPLICATE_SCOPE`/`USER_SCOPE_NOT_IN_COMPANY` 등). 마지막 CO/WO/PO·본인 CO 보호는 서버가 최종 기준.
+- c8-1: Company 사용자 초대 데이터 모델 + 관리 API (수락/SMTP/회원가입 연결은 c8-2 이후).
+  - 모델: `Invitation`(`invitations`) + `InvitationRole`(`invitation_roles`) + `InvitationStatus` enum(PENDING/ACCEPTED/REVOKED/EXPIRED). migration `add_company_invitations`. 토큰은 `randomBytes(32).base64url` raw → DB엔 **SHA-256 `tokenHash`만 저장**(raw 미저장), 생성 응답에서만 `inviteUrl=/invite/accept?token=<raw>` 1회 반환.
+  - `POST /api/company/invitations`(CO+CSRF): email 정규화(trim+lowercase)·형식검증, roles≥1, MASTER 금지·scope-role 정합성·회사 소속 검증(`USER_INVALID_ROLE_SCOPE`/`USER_DUPLICATE_SCOPE`/`USER_SCOPE_NOT_IN_COMPANY`). 동일 Company+email **기존 PENDING은 단일 트랜잭션으로 REVOKED 후 새 초대 생성**, ACCEPTED 존재 시 409 `INVITE_ALREADY_ACCEPTED`. 응답에 `existingUser` 포함. (isolation=default — cross-row 불변식 없음)
+  - `GET /api/company/invitations`(CO): 현재 Company 초대 최신순. **조회 전 만료 PENDING→EXPIRED `updateMany`**(상태 정합성 유지). `tokenHash`/raw token/passwordHash 미반환.
+  - `POST /api/company/invitations/{id}/revoke`(CO+CSRF): PENDING만 REVOKED(상태만 변경, Role snapshot 보존). 비-PENDING/만료 400 `INVITE_NOT_PENDING`, 타 Company/미존재 404 `INVITE_NOT_FOUND`.
 - seed: 기본 Company `testflow-demo` 1건과 MasterAdmin `master@testflow.local` 1명을 생성하고, 기본 Workspace `testflow-qa`를 해당 Company에 연결(owner=`qa.lead@testflow.local`)합니다. 기존 seed 계정/프로젝트/테스트데이터는 그대로 유지됩니다.
 
 ## Local DB Reset
