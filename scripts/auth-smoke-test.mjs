@@ -1505,6 +1505,143 @@ async function main() {
         }
       }
 
+      // c8-5: 초대 목록 검색·상태 필터·정렬·서버 페이지네이션
+      {
+        const tag = `c85-${RUN_ID}`;
+        const base = Date.now();
+        let tokSeq = 0;
+        let otherCompanyId = null;
+
+        async function mkInv(cid, email, status, createdAt, expiresAt) {
+          tokSeq += 1;
+          return prisma.invitation.create({
+            data: {
+              companyId: cid,
+              email,
+              status,
+              tokenHash: createHash("sha256").update(`${email}-${tokSeq}-${RUN_ID}`).digest("hex"),
+              invitedByUserId: leadUser.id,
+              createdAt: new Date(createdAt),
+              expiresAt: new Date(expiresAt),
+              ...(status === "REVOKED" ? { revokedAt: new Date() } : {}),
+              ...(status === "ACCEPTED" ? { acceptedAt: new Date() } : {}),
+              roles: { create: [{ scopeType: "WORKSPACE", scopeId: workspaceId, role: "MEMBER" }] },
+            },
+          });
+        }
+
+        async function listInv(jar, query, expectedStatus = 200) {
+          return request(`/api/company/invitations${query ? `?${query}` : ""}`, { jar, expectedStatus });
+        }
+
+        try {
+          // 12 PENDING(p1..p12): createdAt 증가, expiresAt 감소(미래 유지) → 정렬 검증용.
+          for (let i = 1; i <= 12; i += 1) {
+            await mkInv(
+              companyId,
+              `${tag}-p${String(i).padStart(2, "0")}@filter.local`,
+              "PENDING",
+              base + i * 1000,
+              base + 3_600_000 - i * 1000,
+            );
+          }
+          await mkInv(companyId, `${tag}-accepted@filter.local`, "ACCEPTED", base + 50_000, base + 3_600_000);
+          await mkInv(companyId, `${tag}-revoked@filter.local`, "REVOKED", base + 60_000, base + 3_600_000);
+          await mkInv(companyId, `${tag}-expired@filter.local`, "EXPIRED", base + 70_000, base - 1000);
+
+          await check("invitation list: status filters return correct counts", async () => {
+            const all = await listInv(adminJar, `q=${tag}`);
+            assert(all.json?.data?.pagination?.total === 15, `ALL total should be 15, got ${all.json?.data?.pagination?.total}`);
+            assert(Array.isArray(all.json.data.invitations), "invitations array preserved");
+
+            const pending = await listInv(adminJar, `q=${tag}&status=PENDING`);
+            assert(pending.json.data.pagination.total === 12, "PENDING total should be 12");
+            const accepted = await listInv(adminJar, `q=${tag}&status=ACCEPTED`);
+            assert(accepted.json.data.pagination.total === 1, "ACCEPTED total should be 1");
+            const revoked = await listInv(adminJar, `q=${tag}&status=REVOKED`);
+            assert(revoked.json.data.pagination.total === 1, "REVOKED total should be 1");
+            const expired = await listInv(adminJar, `q=${tag}&status=EXPIRED`);
+            assert(expired.json.data.pagination.total === 1, "EXPIRED total should be 1");
+            assert(
+              expired.json.data.invitations[0]?.email === `${tag}-expired@filter.local`,
+              "EXPIRED filter should return the expired invitation",
+            );
+          });
+
+          await check("invitation list: q email search is case-insensitive contains", async () => {
+            const result = await listInv(adminJar, `q=${tag}-P03@FILTER`);
+            assert(result.json.data.pagination.total === 1, "q should match exactly one");
+            assert(
+              result.json.data.invitations[0]?.email === `${tag}-p03@filter.local`,
+              "q should return p03 case-insensitively",
+            );
+          });
+
+          await check("invitation list: server pagination meta (size/page/clamp)", async () => {
+            const p1 = await listInv(adminJar, `q=${tag}&status=PENDING&size=10&page=1`);
+            const meta = p1.json.data.pagination;
+            assert(meta.total === 12 && meta.size === 10 && meta.totalPages === 2, "page1 meta wrong");
+            assert(meta.page === 1 && meta.hasPrevious === false && meta.hasNext === true, "page1 flags wrong");
+            assert(p1.json.data.invitations.length === 10, "page1 should have 10 rows");
+
+            const p2 = await listInv(adminJar, `q=${tag}&status=PENDING&size=10&page=2`);
+            assert(p2.json.data.invitations.length === 2, "page2 should have 2 rows");
+            assert(p2.json.data.pagination.hasNext === false && p2.json.data.pagination.hasPrevious === true, "page2 flags wrong");
+
+            // 범위 초과 page → 마지막 유효 page 로 clamp.
+            const over = await listInv(adminJar, `q=${tag}&status=PENDING&size=10&page=99`);
+            assert(over.json.data.pagination.page === 2, "overflow page should clamp to 2");
+            assert(over.json.data.invitations.length === 2, "clamped page should return last page rows");
+          });
+
+          await check("invitation list: sort newest/oldest/expiresAtAsc/expiresAtDesc", async () => {
+            const oldest = await listInv(adminJar, `q=${tag}&status=PENDING&sort=oldest`);
+            assert(oldest.json.data.invitations[0]?.email === `${tag}-p01@filter.local`, "oldest first should be p01");
+            const newest = await listInv(adminJar, `q=${tag}&status=PENDING&sort=newest`);
+            assert(newest.json.data.invitations[0]?.email === `${tag}-p12@filter.local`, "newest first should be p12");
+            const expAsc = await listInv(adminJar, `q=${tag}&status=PENDING&sort=expiresAtAsc`);
+            assert(expAsc.json.data.invitations[0]?.email === `${tag}-p12@filter.local`, "expiresAtAsc first should be p12");
+            const expDesc = await listInv(adminJar, `q=${tag}&status=PENDING&sort=expiresAtDesc`);
+            assert(expDesc.json.data.invitations[0]?.email === `${tag}-p01@filter.local`, "expiresAtDesc first should be p01");
+          });
+
+          await check("invitation list: invalid query params fall back to safe defaults", async () => {
+            const result = await listInv(adminJar, `q=${tag}&status=BOGUS&size=999&sort=weird&page=abc`);
+            const data = result.json.data;
+            assert(data.pagination.size === 20, "invalid size → 20");
+            assert(data.pagination.page === 1, "invalid page → 1");
+            assert(data.filters.status === "ALL", "invalid status → ALL");
+            assert(data.filters.sort === "newest", "invalid sort → newest");
+            assert(data.pagination.total === 15, "ALL fallback total should be 15");
+          });
+
+          await check("invitation list: non-CO with query is 403", async () => {
+            const result = await listInv(memberJar, `q=${tag}&status=PENDING&page=2`, 403);
+            assert(result.json?.error?.code === "AUTH_FORBIDDEN", "expected AUTH_FORBIDDEN");
+          });
+
+          await check("invitation list: other-company invitations are never included", async () => {
+            const other = await prisma.company.create({
+              data: { name: `Other Co ${RUN_ID}`, slug: `other-co-${RUN_ID}` },
+            });
+            otherCompanyId = other.id;
+            await mkInv(other.id, `${tag}-othercompany@filter.local`, "PENDING", base + 80_000, base + 3_600_000);
+
+            const result = await listInv(adminJar, `q=${tag}`);
+            assert(
+              !result.json.data.invitations.some((i) => i.email === `${tag}-othercompany@filter.local`),
+              "other company's invitation must not appear",
+            );
+            assert(result.json.data.pagination.total === 15, "other company invite must not affect total");
+          });
+        } finally {
+          await prisma.invitation.deleteMany({ where: { email: { contains: tag } } });
+          if (otherCompanyId) {
+            await prisma.company.delete({ where: { id: otherCompanyId } }).catch(() => {});
+          }
+        }
+      }
+
       // c8-2: 초대 수락(validate / 신규 가입 / 기존 사용자 / 충돌·만료·취소)
       {
         const project = await prisma.project.findFirst({

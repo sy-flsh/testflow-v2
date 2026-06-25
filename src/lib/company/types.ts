@@ -66,6 +66,27 @@ export type InvitationRoleDto = {
   role: Role;
 };
 
+/** c8-5: 초대 목록 필터/정렬/페이지네이션 타입. */
+export type InvitationStatusFilter = InvitationStatus | "ALL";
+export type InvitationSort = "newest" | "oldest" | "expiresAtAsc" | "expiresAtDesc";
+
+export type InvitationPagination = {
+  page: number;
+  size: number;
+  total: number;
+  totalPages: number;
+  hasPrevious: boolean;
+  hasNext: boolean;
+};
+
+/** c8-5: GET /api/company/invitations 확장 응답 (invitations 키는 기존 호환 유지). */
+export type CompanyInvitationListDto = {
+  companyId: string;
+  invitations: CompanyInvitationDto[];
+  pagination: InvitationPagination;
+  filters: { q: string | null; status: InvitationStatusFilter; sort: InvitationSort };
+};
+
 /** c8-1: 초대 목록/생성 응답 DTO (tokenHash·raw token 절대 미포함). */
 export type CompanyInvitationDto = {
   id: string;

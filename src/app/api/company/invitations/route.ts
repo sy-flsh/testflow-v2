@@ -9,7 +9,14 @@ import { isAssignableRole, isRoleAllowedForScope } from "@/lib/auth/roles";
 import type {
   CompanyInvitationDto,
   InvitationRoleDto,
+  InvitationSort,
 } from "@/lib/company/types";
+import {
+  normalizeInvitationPage,
+  normalizeInvitationSize,
+  normalizeInvitationSort,
+  normalizeInvitationStatus,
+} from "@/lib/company/invitation-filters";
 import {
   buildInviteUrl,
   createInvitationToken,
@@ -184,16 +191,32 @@ export async function POST(request: Request) {
   }
 }
 
+const SORT_ORDER_BY: Record<InvitationSort, Prisma.InvitationOrderByWithRelationInput> = {
+  newest: { createdAt: "desc" },
+  oldest: { createdAt: "asc" },
+  expiresAtAsc: { expiresAt: "asc" },
+  expiresAtDesc: { expiresAt: "desc" },
+};
+
 /**
- * c8-1: Company 초대 목록.
- * GET /api/company/invitations
- * - CO 만 접근. 현재 Company 초대만 최신순 반환.
- * - 만료된 PENDING 은 조회 전에 EXPIRED 로 updateMany(상태 정합성 유지 — 보고서 §6 참고).
- * - tokenHash/raw token/passwordHash 는 절대 반환하지 않는다.
+ * c8-1/c8-5: Company 초대 목록 (검색·상태 필터·정렬·서버 페이지네이션).
+ * GET /api/company/invitations?q=&status=ALL&page=1&size=20&sort=newest
+ * - CO 만 접근. 현재 Company 초대만 반환(타 Company 절대 미포함).
+ * - 만료된 PENDING 은 조회 전에 EXPIRED 로 updateMany(상태 정합성 유지).
+ * - 잘못된 query 는 400 대신 **안전한 기본값으로 fallback**(북마크/뒤로가기 내성, URL 이 정본).
+ * - 응답: { companyId, invitations, pagination, filters }. invitations 키는 기존 호환 유지.
+ * - tokenHash/raw token/inviteUrl 은 절대 반환하지 않는다.
  */
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const { companyId } = await requireCompanyOwner();
+
+    const url = new URL(request.url);
+    const q = (url.searchParams.get("q") ?? "").trim();
+    const status = normalizeInvitationStatus(url.searchParams.get("status"));
+    const sort = normalizeInvitationSort(url.searchParams.get("sort"));
+    const size = normalizeInvitationSize(url.searchParams.get("size"));
+    const requestedPage = normalizeInvitationPage(url.searchParams.get("page"));
 
     // 만료 처리(update-on-read): 만료된 PENDING → EXPIRED.
     await prisma.invitation.updateMany({
@@ -201,9 +224,22 @@ export async function GET() {
       data: { status: "EXPIRED" },
     });
 
+    const where: Prisma.InvitationWhereInput = {
+      companyId,
+      ...(status !== "ALL" ? { status } : {}),
+      ...(q ? { email: { contains: q, mode: "insensitive" as const } } : {}),
+    };
+
+    const total = await prisma.invitation.count({ where });
+    const totalPages = Math.ceil(total / size);
+    // page 보정: 범위를 넘으면 마지막 유효 page 로 안전하게 clamp.
+    const page = total === 0 ? 1 : Math.min(Math.max(1, requestedPage), totalPages);
+
     const invitations = await prisma.invitation.findMany({
-      where: { companyId },
-      orderBy: { createdAt: "desc" },
+      where,
+      orderBy: SORT_ORDER_BY[sort],
+      skip: (page - 1) * size,
+      take: size,
       include: {
         roles: { select: { scopeType: true, scopeId: true, role: true } },
         invitedBy: { select: { name: true, email: true } },
@@ -222,7 +258,19 @@ export async function GET() {
       serializeInvitation(invitation, existingEmailSet.has(invitation.email)),
     );
 
-    return apiSuccess({ companyId, invitations: items });
+    return apiSuccess({
+      companyId,
+      invitations: items,
+      pagination: {
+        page,
+        size,
+        total,
+        totalPages,
+        hasPrevious: page > 1,
+        hasNext: page < totalPages,
+      },
+      filters: { q: q || null, status, sort },
+    });
   } catch (error) {
     if (isAuthGuardError(error)) {
       return authGuardErrorResponse(error);
