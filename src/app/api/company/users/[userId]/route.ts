@@ -81,10 +81,10 @@ export async function GET(_request: Request, context: RouteContext) {
       orderBy: [{ scopeType: "asc" }, { role: "asc" }],
     });
 
-    // 회사 워크스페이스 멤버십 (상태 파생 + 소속 판정)
+    // 회사 워크스페이스 멤버십 (소속 판정)
     const memberships = await prisma.workspaceMember.findMany({
       where: { userId, workspaceId: { in: workspaceIds } },
-      select: { status: true },
+      select: { id: true },
     });
 
     // 소속 판정: 회사 범위 UserRole 도 없고 멤버십도 없으면 이 Company 사용자가 아님 → 404
@@ -92,11 +92,12 @@ export async function GET(_request: Request, context: RouteContext) {
       return apiError("대상 사용자를 찾을 수 없습니다.", 404, "USER_NOT_FOUND");
     }
 
-    // c7-1 목록과 동일 규칙: 멤버십이 없으면 ACTIVE, 있으면 하나라도 ACTIVE 일 때 ACTIVE.
-    const status: "ACTIVE" | "PENDING" =
-      memberships.length === 0 || memberships.some((m) => m.status === "ACTIVE")
-        ? "ACTIVE"
-        : "PENDING";
+    // c9-1: 상태는 CompanyUserState 기준(레코드 없으면 ACTIVE).
+    const state = await prisma.companyUserState.findUnique({
+      where: { companyId_userId: { companyId, userId } },
+      select: { status: true },
+    });
+    const status = state?.status ?? "ACTIVE";
 
     const roles: CompanyUserRoleEntry[] = userRoles.map((row) => ({
       scopeType: row.scopeType,

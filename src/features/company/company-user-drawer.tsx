@@ -14,6 +14,7 @@ import {
   rolesToMap,
   rolesToSummaryTokens,
   scopeKey,
+  statusErrorMessage,
   syncErrorMessage,
 } from "./role-matrix-utils";
 
@@ -30,11 +31,14 @@ export function CompanyUserDrawer({
   userId,
   onClose,
   onSaved,
+  onStatusChanged,
 }: {
   userId: string;
   onClose: () => void;
   /** 저장 성공 시 목록 행의 Role 요약을 갱신하기 위한 콜백. */
   onSaved: (userId: string, tokens: string[]) => void;
+  /** 활성/비활성 변경 성공 시 목록 행 상태를 갱신하기 위한 콜백. */
+  onStatusChanged: (userId: string, status: "ACTIVE" | "INACTIVE") => void;
 }) {
   const [state, setState] = useState<DetailState>({ kind: "loading" });
   const [tab, setTab] = useState<DrawerTab>("profile");
@@ -47,15 +51,33 @@ export function CompanyUserDrawer({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveOk, setSaveOk] = useState(false);
 
+  // c9-1: 계정 상태(활성/비활성) 관리.
+  const [actorUserId, setActorUserId] = useState<string | null>(null);
+  const [statusBusy, setStatusBusy] = useState(false);
+  const [statusError, setStatusError] = useState<string | null>(null);
+  const [confirmingDeactivate, setConfirmingDeactivate] = useState(false);
+
   useEffect(() => {
     let active = true;
     setState({ kind: "loading" });
     setTab("profile");
     setSaveError(null);
     setSaveOk(false);
+    setStatusError(null);
+    setConfirmingDeactivate(false);
 
     async function load() {
       try {
+        // 본인 비활성 버튼을 비활성화하기 위해 현재 사용자 id 를 함께 조회한다(서버 보호는 별도 유지).
+        fetch("/api/auth/me", { cache: "no-store" })
+          .then((res) => (res.ok ? res.json() : null))
+          .then((payload) => {
+            if (active) {
+              setActorUserId(payload?.data?.user?.id ?? null);
+            }
+          })
+          .catch(() => undefined);
+
         const response = await fetch(`/api/company/users/${userId}`, {
           cache: "no-store",
         });
@@ -174,6 +196,43 @@ export function CompanyUserDrawer({
     }
   }
 
+  async function changeStatus(action: "deactivate" | "activate") {
+    if (state.kind !== "ready") {
+      return;
+    }
+
+    setStatusBusy(true);
+    setStatusError(null);
+
+    try {
+      const response = await fetch(`/api/company/users/${userId}/${action}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const payload = (await response.json().catch(() => null)) as
+        | { data?: { status: "ACTIVE" | "INACTIVE" }; error?: { message?: string; code?: string } }
+        | null;
+
+      if (!response.ok || !payload?.data) {
+        setStatusError(statusErrorMessage(payload?.error?.code, payload?.error?.message));
+        return;
+      }
+
+      const newStatus = payload.data.status;
+      setConfirmingDeactivate(false);
+      setState((prev) =>
+        prev.kind === "ready"
+          ? { kind: "ready", detail: { ...prev.detail, status: newStatus } }
+          : prev,
+      );
+      onStatusChanged(userId, newStatus);
+    } catch {
+      setStatusError("상태 변경에 실패했습니다. 네트워크 상태를 확인해 주세요.");
+    } finally {
+      setStatusBusy(false);
+    }
+  }
+
   const title = state.kind === "ready" ? state.detail.name : "회원 상세";
   const description =
     state.kind === "ready" ? state.detail.email : "사용자 정보를 불러오는 중입니다.";
@@ -254,7 +313,21 @@ export function CompanyUserDrawer({
           </div>
 
           {tab === "profile" ? (
-            <ProfileTab detail={state.detail} draft={draft} />
+            <ProfileTab
+              detail={state.detail}
+              draft={draft}
+              isSelf={actorUserId === userId}
+              statusBusy={statusBusy}
+              statusError={statusError}
+              confirmingDeactivate={confirmingDeactivate}
+              onRequestDeactivate={() => {
+                setStatusError(null);
+                setConfirmingDeactivate(true);
+              }}
+              onCancelDeactivate={() => setConfirmingDeactivate(false)}
+              onConfirmDeactivate={() => changeStatus("deactivate")}
+              onActivate={() => changeStatus("activate")}
+            />
           ) : (
             <RolesTab detail={state.detail} draft={draft} onChange={setScopeRole} />
           )}
@@ -292,9 +365,25 @@ function TabButton({
 function ProfileTab({
   detail,
   draft,
+  isSelf,
+  statusBusy,
+  statusError,
+  confirmingDeactivate,
+  onRequestDeactivate,
+  onCancelDeactivate,
+  onConfirmDeactivate,
+  onActivate,
 }: {
   detail: CompanyUserDetailDto;
   draft: Map<string, Role>;
+  isSelf: boolean;
+  statusBusy: boolean;
+  statusError: string | null;
+  confirmingDeactivate: boolean;
+  onRequestDeactivate: () => void;
+  onCancelDeactivate: () => void;
+  onConfirmDeactivate: () => void;
+  onActivate: () => void;
 }) {
   const tokens = useMemo(() => {
     const entries: CompanyUserRoleEntry[] = [];
@@ -324,15 +413,73 @@ function ProfileTab({
                 "inline-flex h-6 items-center rounded-full px-2.5 text-xs font-medium ring-1 ring-inset",
                 detail.status === "ACTIVE"
                   ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
-                  : "bg-amber-50 text-amber-700 ring-amber-200",
+                  : "bg-[var(--bg-muted)] text-[var(--text-tertiary)] ring-[var(--border-default)]",
               )}
             >
-              {detail.status === "ACTIVE" ? "활성" : "대기"}
+              {detail.status === "ACTIVE" ? "활성" : "비활성"}
             </span>
           </dd>
           <dt className="text-[var(--text-tertiary)]">회사</dt>
           <dd className="text-[var(--text-secondary)]">{detail.company.name}</dd>
         </dl>
+      </section>
+
+      <section>
+        <h3 className="mb-2 text-sm font-semibold text-[var(--text-primary)]">계정 상태</h3>
+        {detail.status === "ACTIVE" ? (
+          <div className="rounded-md border border-[var(--border-default)] px-4 py-3">
+            <p className="text-sm text-[var(--text-secondary)]">
+              비활성화하면 이 Company의 Workspace/Project 접근이 차단됩니다. (권한 데이터는 유지)
+            </p>
+            {confirmingDeactivate ? (
+              <div className="mt-3 flex items-center gap-2">
+                <span className="text-xs text-[var(--text-tertiary)]">정말 비활성화할까요?</span>
+                <button
+                  type="button"
+                  disabled={statusBusy}
+                  onClick={onConfirmDeactivate}
+                  className="inline-flex h-8 items-center rounded-md bg-[var(--status-fail)] px-3 text-xs font-medium text-white hover:bg-red-600 disabled:opacity-60"
+                >
+                  {statusBusy ? "처리 중…" : "비활성화"}
+                </button>
+                <button
+                  type="button"
+                  onClick={onCancelDeactivate}
+                  className="inline-flex h-8 items-center rounded-md border border-[var(--border-default)] px-3 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
+                >
+                  취소
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                disabled={isSelf || statusBusy}
+                title={isSelf ? "본인 계정은 비활성화할 수 없습니다." : undefined}
+                onClick={onRequestDeactivate}
+                className="mt-3 inline-flex h-8 items-center rounded-md border border-[var(--border-default)] px-3 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                비활성화
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="rounded-md border border-[var(--border-default)] px-4 py-3">
+            <p className="text-sm text-[var(--text-secondary)]">
+              비활성 상태입니다. 활성화하면 기존 권한으로 다시 접근할 수 있습니다.
+            </p>
+            <button
+              type="button"
+              disabled={statusBusy}
+              onClick={onActivate}
+              className="mt-3 inline-flex h-8 items-center rounded-md bg-[var(--brand-primary)] px-3 text-xs font-medium text-white hover:bg-[var(--brand-primary-hover)] disabled:opacity-60"
+            >
+              {statusBusy ? "처리 중…" : "활성화"}
+            </button>
+          </div>
+        )}
+        {statusError && (
+          <p className="mt-2 text-xs text-[var(--danger-text)]">{statusError}</p>
+        )}
       </section>
 
       <section>

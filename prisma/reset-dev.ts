@@ -33,6 +33,8 @@ async function main() {
     // invitations 는 company/user(onDelete Cascade)를 참조하므로 user/company 삭제 전에 정리한다.
     prisma.invitationRole.deleteMany(),
     prisma.invitation.deleteMany(),
+    // c9-1: company_user_states 는 company/user(onDelete Cascade)를 참조하므로 먼저 정리한다.
+    prisma.companyUserState.deleteMany(),
     // c4: user_roles 는 user(onDelete Cascade)를 참조한다. user 삭제 전 명시적으로 비운다.
     prisma.userRole.deleteMany(),
     prisma.user.deleteMany(),

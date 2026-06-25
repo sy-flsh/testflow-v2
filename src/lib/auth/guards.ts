@@ -18,6 +18,10 @@ import {
   resolveWorkspaceAuthRole,
 } from "@/lib/auth/roles";
 import { getCurrentSession } from "@/lib/auth/session";
+import {
+  getInactiveCompanyIdsAmong,
+  isCompanyUserActive,
+} from "@/lib/company/company-user-state";
 import { prisma } from "@/lib/db/prisma";
 
 export type PermissionAction = "read" | "create" | "update" | "delete" | "danger";
@@ -86,7 +90,19 @@ export async function requireCompanyOwner(): Promise<CompanyOwnerAuth> {
     throw new AuthGuardError("Company 소유자(CO) 권한이 필요합니다.", 403, "AUTH_FORBIDDEN");
   }
 
-  return { user: session.user, companyId: companyIds[0] };
+  // c9-1: INACTIVE 인 Company 의 CO 는 인정하지 않는다. ACTIVE 인 첫 Company 를 사용.
+  const inactiveCompanyIds = await getInactiveCompanyIdsAmong(session.userId, companyIds);
+  const activeCompanyId = companyIds.find((id) => !inactiveCompanyIds.has(id));
+
+  if (!activeCompanyId) {
+    throw new AuthGuardError(
+      "이 Company에서 비활성화된 사용자입니다.",
+      403,
+      "USER_INACTIVE",
+    );
+  }
+
+  return { user: session.user, companyId: activeCompanyId };
 }
 
 export async function requireCurrentWorkspace(): Promise<CurrentWorkspaceAuth> {
@@ -107,6 +123,14 @@ export async function requireCurrentWorkspace(): Promise<CurrentWorkspaceAuth> {
       403,
       "WORKSPACE_REQUIRED",
     );
+  }
+
+  // c9-1: 선택/활성 워크스페이스의 상위 Company 에서 비활성화된 사용자면 차단.
+  if (
+    membership.workspace.companyId &&
+    !(await isCompanyUserActive(membership.workspace.companyId, session.userId))
+  ) {
+    throw new AuthGuardError("이 Company에서 비활성화된 사용자입니다.", 403, "USER_INACTIVE");
   }
 
   if (session.selectedWorkspaceId !== membership.workspaceId) {

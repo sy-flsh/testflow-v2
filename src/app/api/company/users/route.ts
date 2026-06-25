@@ -48,16 +48,23 @@ export async function GET() {
       select: { userId: true, scopeType: true, scopeId: true, role: true },
     });
 
-    // 회사 워크스페이스 멤버십(상태 표시 + 멤버지만 UserRole 없는 사용자도 노출)
+    // 회사 워크스페이스 멤버십(멤버지만 UserRole 없는 사용자도 목록에 노출하기 위함)
     const members = await prisma.workspaceMember.findMany({
       where: { workspaceId: { in: workspaceIds } },
-      select: { userId: true, status: true },
+      select: { userId: true },
     });
 
     const userIds = new Set<string>([
       ...userRoles.map((role) => role.userId),
       ...members.map((member) => member.userId),
     ]);
+
+    // c9-1: 상태 표시는 CompanyUserState 기준(레코드 없으면 ACTIVE 로 간주).
+    const states = await prisma.companyUserState.findMany({
+      where: { companyId, userId: { in: Array.from(userIds) } },
+      select: { userId: true, status: true },
+    });
+    const statusByUser = new Map(states.map((state) => [state.userId, state.status]));
 
     const users = await prisma.user.findMany({
       where: { id: { in: Array.from(userIds) } },
@@ -87,18 +94,6 @@ export async function GET() {
       rolesByUser.set(row.userId, group);
     }
 
-    // 사용자별 상태: ACTIVE 멤버십이 하나라도 있으면 ACTIVE, 멤버십이 PENDING 뿐이면 PENDING.
-    const hasActive = new Set<string>();
-    const hasMembership = new Set<string>();
-
-    for (const member of members) {
-      hasMembership.add(member.userId);
-
-      if (member.status === "ACTIVE") {
-        hasActive.add(member.userId);
-      }
-    }
-
     const items: CompanyUserDto[] = users.map((user) => {
       const group = rolesByUser.get(user.id) ?? {
         company: [],
@@ -112,8 +107,8 @@ export async function GET() {
         ...group.project.map((entry) => roleSummaryToken("PROJECT", entry.role)),
       ];
 
-      const status: "ACTIVE" | "PENDING" =
-        hasActive.has(user.id) || !hasMembership.has(user.id) ? "ACTIVE" : "PENDING";
+      // c9-1: CompanyUserState 기준(레코드 없으면 ACTIVE).
+      const status = statusByUser.get(user.id) ?? "ACTIVE";
 
       return {
         userId: user.id,

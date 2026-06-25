@@ -6,11 +6,14 @@ export type CompanyUserScopedRole = {
   role: Role;
 };
 
+/** c9-1: Company 단위 사용자 활성 상태. */
+export type CompanyUserStatusValue = "ACTIVE" | "INACTIVE";
+
 export type CompanyUserDto = {
   userId: string;
   name: string;
   email: string;
-  status: "ACTIVE" | "PENDING";
+  status: CompanyUserStatusValue;
   /** 표시용 Role 요약 토큰 목록 (예: ["CO", "WO(W)"]). UserRole 기준. */
   roles: string[];
   companyRoles: CompanyUserScopedRole[];
@@ -45,7 +48,7 @@ export type CompanyUserDetailDto = {
   userId: string;
   name: string;
   email: string;
-  status: "ACTIVE" | "PENDING";
+  status: CompanyUserStatusValue;
   company: { id: string; name: string };
   /** Company 소속 Workspace 목록 + 각 Workspace 하위 Project 목록 (Matrix 행 구성용) */
   workspaces: CompanyWorkspaceNode[];

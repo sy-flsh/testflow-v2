@@ -2283,6 +2283,220 @@ async function main() {
           await prisma.userRole.deleteMany({ where: backendProjectKey });
         }
       });
+
+      // c9-1: Company 단위 사용자 비활성/활성 + 접근 차단
+      {
+        const backendCoKey = {
+          userId_scopeType_scopeId: {
+            userId: backendUser.id,
+            scopeType: "COMPANY",
+            scopeId: companyId,
+          },
+        };
+        let tempUserId = null;
+        let tempCompanyId = null;
+        let tempWorkspaceId = null;
+
+        async function setBackendState(status) {
+          await prisma.companyUserState.upsert({
+            where: { companyId_userId: { companyId, userId: backendUser.id } },
+            update: { status },
+            create: { companyId, userId: backendUser.id, status },
+          });
+        }
+
+        try {
+          await check("seed company users have ACTIVE CompanyUserState", async () => {
+            const states = await prisma.companyUserState.findMany({
+              where: {
+                companyId,
+                userId: { in: [leadUser.id, backendUser.id, pmUser.id] },
+              },
+              select: { userId: true, status: true },
+            });
+            assert(states.length >= 3, "expected seed states for lead/backend/pm");
+            assert(
+              states.every((s) => s.status === "ACTIVE"),
+              "seed users should be ACTIVE",
+            );
+          });
+
+          await check("CO deactivate member blocks company workspace/project APIs; reactivate restores", async () => {
+            const result = await request(`/api/company/users/${backendUser.id}/deactivate`, {
+              method: "POST",
+              jar: adminJar,
+              expectedStatus: 200,
+            });
+            assert(result.json?.data?.status === "INACTIVE", "deactivate should return INACTIVE");
+
+            const state = await prisma.companyUserState.findUnique({
+              where: { companyId_userId: { companyId, userId: backendUser.id } },
+            });
+            assert(state?.status === "INACTIVE", "DB state should be INACTIVE");
+            assert(state?.deactivatedAt, "deactivatedAt should be set");
+
+            // UserRole / WorkspaceMember 는 삭제되지 않아야 한다.
+            const role = await prisma.userRole.findUnique({
+              where: {
+                userId_scopeType_scopeId: {
+                  userId: backendUser.id,
+                  scopeType: "WORKSPACE",
+                  scopeId: workspaceId,
+                },
+              },
+            });
+            assert(role, "WORKSPACE UserRole must be preserved while INACTIVE");
+            const member = await prisma.workspaceMember.findUnique({
+              where: { workspaceId_userId: { workspaceId, userId: backendUser.id } },
+            });
+            assert(member, "WorkspaceMember must be preserved while INACTIVE");
+
+            // 비활성 사용자(backend) 는 해당 Company workspace/project API 차단.
+            const projects = await request("/api/projects", { jar: memberJar, expectedStatus: 403 });
+            assert(projects.json?.error?.code === "USER_INACTIVE", "projects should be USER_INACTIVE");
+            const dash = await request("/api/dashboard/summary", { jar: memberJar, expectedStatus: 403 });
+            assert(dash.json?.error?.code === "USER_INACTIVE", "dashboard should be USER_INACTIVE");
+
+            // 재활성화 → 접근 복구.
+            const reactivate = await request(`/api/company/users/${backendUser.id}/activate`, {
+              method: "POST",
+              jar: adminJar,
+              expectedStatus: 200,
+            });
+            assert(reactivate.json?.data?.status === "ACTIVE", "activate should return ACTIVE");
+            await request("/api/projects", { jar: memberJar, expectedStatus: 200 });
+          });
+
+          await check("deactivated CO is blocked from company API with USER_INACTIVE", async () => {
+            // backend 를 2번째 CO 로 승격 후 비활성화 → backend 는 CO 지만 INACTIVE.
+            await prisma.userRole.upsert({
+              where: backendCoKey,
+              update: { role: "CO" },
+              create: { userId: backendUser.id, scopeType: "COMPANY", scopeId: companyId, role: "CO" },
+            });
+            await request(`/api/company/users/${backendUser.id}/deactivate`, {
+              method: "POST",
+              jar: adminJar,
+              expectedStatus: 200,
+            });
+            const result = await request("/api/company/users", { jar: memberJar, expectedStatus: 403 });
+            assert(result.json?.error?.code === "USER_INACTIVE", "company API should be USER_INACTIVE");
+
+            // 재활성화(backend 는 CO 인 채 ACTIVE) → 다음 self 테스트에 사용.
+            await request(`/api/company/users/${backendUser.id}/activate`, {
+              method: "POST",
+              jar: adminJar,
+              expectedStatus: 200,
+            });
+          });
+
+          await check("non-last CO self-deactivate → USER_SELF_DEACTIVATE_FORBIDDEN", async () => {
+            // backend 는 CO(active) 이고 qa.lead 도 CO 라 마지막이 아님 → 본인 비활성은 SELF.
+            const result = await request(`/api/company/users/${backendUser.id}/deactivate`, {
+              method: "POST",
+              jar: memberJar,
+              expectedStatus: 400,
+            });
+            assert(
+              result.json?.error?.code === "USER_SELF_DEACTIVATE_FORBIDDEN",
+              `expected USER_SELF_DEACTIVATE_FORBIDDEN, got ${result.json?.error?.code}`,
+            );
+            // backend CO 승격 해제(이후 qa.lead 가 유일 CO).
+            await prisma.userRole.deleteMany({
+              where: { userId: backendUser.id, scopeType: "COMPANY", scopeId: companyId, role: "CO" },
+            });
+          });
+
+          await check("last active CO cannot be deactivated → USER_LAST_CO_DEACTIVATE_FORBIDDEN", async () => {
+            const result = await request(`/api/company/users/${leadUser.id}/deactivate`, {
+              method: "POST",
+              jar: adminJar,
+              expectedStatus: 400,
+            });
+            assert(
+              result.json?.error?.code === "USER_LAST_CO_DEACTIVATE_FORBIDDEN",
+              `expected USER_LAST_CO_DEACTIVATE_FORBIDDEN, got ${result.json?.error?.code}`,
+            );
+          });
+
+          await check("non-CO cannot deactivate/activate (AUTH_FORBIDDEN)", async () => {
+            const deact = await request(`/api/company/users/${pmUser.id}/deactivate`, {
+              method: "POST",
+              jar: memberJar,
+              expectedStatus: 403,
+            });
+            assert(deact.json?.error?.code === "AUTH_FORBIDDEN", "deactivate should be AUTH_FORBIDDEN");
+            const act = await request(`/api/company/users/${pmUser.id}/activate`, {
+              method: "POST",
+              jar: memberJar,
+              expectedStatus: 403,
+            });
+            assert(act.json?.error?.code === "AUTH_FORBIDDEN", "activate should be AUTH_FORBIDDEN");
+          });
+
+          await check("deactivation is per-company; other Company stays ACTIVE", async () => {
+            const tempCompany = await prisma.company.create({
+              data: { name: `C9 Other ${RUN_ID}`, slug: `c9-other-${RUN_ID}` },
+            });
+            tempCompanyId = tempCompany.id;
+            const tempWorkspace = await prisma.workspace.create({
+              data: { name: `C9 WS ${RUN_ID}`, slug: `c9-ws-${RUN_ID}`, companyId: tempCompany.id },
+            });
+            tempWorkspaceId = tempWorkspace.id;
+            const tempUser = await prisma.user.create({
+              data: { email: `c9.multi.${RUN_ID}@state.local`, name: "C9 Multi", passwordHash: "x" },
+            });
+            tempUserId = tempUser.id;
+
+            // demo company 소속(상태/멤버십) + temp company 소속(상태).
+            await prisma.workspaceMember.create({
+              data: { workspaceId, userId: tempUser.id, role: "MEMBER", status: "ACTIVE" },
+            });
+            await prisma.companyUserState.create({
+              data: { companyId, userId: tempUser.id, status: "ACTIVE" },
+            });
+            await prisma.companyUserState.create({
+              data: { companyId: tempCompany.id, userId: tempUser.id, status: "ACTIVE" },
+            });
+
+            // demo 에서 비활성화.
+            await request(`/api/company/users/${tempUser.id}/deactivate`, {
+              method: "POST",
+              jar: adminJar,
+              expectedStatus: 200,
+            });
+
+            const demoState = await prisma.companyUserState.findUnique({
+              where: { companyId_userId: { companyId, userId: tempUser.id } },
+            });
+            const otherState = await prisma.companyUserState.findUnique({
+              where: { companyId_userId: { companyId: tempCompany.id, userId: tempUser.id } },
+            });
+            assert(demoState?.status === "INACTIVE", "demo state should be INACTIVE");
+            assert(otherState?.status === "ACTIVE", "other company state must stay ACTIVE");
+          });
+        } finally {
+          // backend 를 ACTIVE 로 복구하고 CO 승격 해제(이후 다른 테스트 영향 방지).
+          await prisma.userRole.deleteMany({
+            where: { userId: backendUser.id, scopeType: "COMPANY", scopeId: companyId, role: "CO" },
+          });
+          await setBackendState("ACTIVE");
+
+          if (tempUserId) {
+            await prisma.companyUserState.deleteMany({ where: { userId: tempUserId } });
+            await prisma.workspaceMember.deleteMany({ where: { userId: tempUserId } });
+            await prisma.userRole.deleteMany({ where: { userId: tempUserId } });
+            await prisma.session.deleteMany({ where: { userId: tempUserId } });
+            await prisma.user.delete({ where: { id: tempUserId } }).catch(() => {});
+          }
+          if (tempWorkspaceId) {
+            await prisma.workspace.delete({ where: { id: tempWorkspaceId } }).catch(() => {});
+          }
+          if (tempCompanyId) {
+            await prisma.company.delete({ where: { id: tempCompanyId } }).catch(() => {});
+          }
+        }
+      }
     }
 
     await cleanupCreatedData(adminJar, cleanup);

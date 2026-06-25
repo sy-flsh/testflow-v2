@@ -91,6 +91,23 @@ export function syncErrorMessage(code: string | undefined, serverMessage?: strin
   return serverMessage ?? "권한 저장에 실패했습니다. 잠시 후 다시 시도해 주세요.";
 }
 
+/** c9-1: 활성/비활성(상태 변경) API 에러 code → 한국어 메시지. */
+const STATUS_ERROR_MESSAGES: Record<string, string> = {
+  USER_SELF_DEACTIVATE_FORBIDDEN: "본인 계정은 비활성화할 수 없습니다.",
+  USER_LAST_CO_DEACTIVATE_FORBIDDEN: "회사의 마지막 활성 CO는 비활성화할 수 없습니다.",
+  USER_INACTIVE: "이 Company에서 비활성화된 사용자입니다.",
+  USER_NOT_FOUND: "대상 사용자를 찾을 수 없습니다.",
+  AUTH_FORBIDDEN: "권한이 없습니다. 계정 상태 관리는 CO만 가능합니다.",
+};
+
+export function statusErrorMessage(code: string | undefined, serverMessage?: string): string {
+  if (code && STATUS_ERROR_MESSAGES[code]) {
+    return STATUS_ERROR_MESSAGES[code];
+  }
+
+  return serverMessage ?? "상태 변경에 실패했습니다. 잠시 후 다시 시도해 주세요.";
+}
+
 /**
  * 클라이언트용 Role 요약 토큰 (서버 roleSummaryToken 과 동일 규칙의 순수 복제본).
  * 서버 helper(src/lib/auth/roles.ts)는 prisma 를 import 하는 server-only 모듈이라

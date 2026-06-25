@@ -2,6 +2,7 @@ import { apiError, apiSuccess } from "@/lib/api/response";
 import { getUserWorkspaces, mapAuthPayload, resolveActiveMembership } from "@/lib/auth/me";
 import { getRolesByScope, resolveWorkspaceAuthRole } from "@/lib/auth/roles";
 import { getCurrentSession } from "@/lib/auth/session";
+import { getInactiveCompanyIdsForUser } from "@/lib/company/company-user-state";
 import { prisma } from "@/lib/db/prisma";
 
 export const runtime = "nodejs";
@@ -14,9 +15,17 @@ export async function GET() {
       return apiError("로그인이 필요합니다.", 401, "AUTH_UNAUTHORIZED");
     }
 
-    const membership = await resolveActiveMembership(session.userId, session.selectedWorkspaceId);
+    // c9-1: 비활성 Company 의 Workspace 는 활성 workspace 후보에서 제외(다른 ACTIVE Company 로 fallback).
+    const inactiveCompanyIds = await getInactiveCompanyIdsForUser(session.userId);
+
+    const membership = await resolveActiveMembership(
+      session.userId,
+      session.selectedWorkspaceId,
+      inactiveCompanyIds,
+    );
 
     if (!membership) {
+      // 접근 가능한 ACTIVE Company workspace 가 없음 → 기존 계약대로 401(미들웨어/UI 가 로그인으로 안내).
       return apiError("활성 워크스페이스 멤버십을 찾을 수 없습니다.", 401, "AUTH_UNAUTHORIZED");
     }
 
@@ -27,7 +36,7 @@ export async function GET() {
       });
     }
 
-    const workspaces = await getUserWorkspaces(session.userId);
+    const workspaces = await getUserWorkspaces(session.userId, inactiveCompanyIds);
     const rolesByScope = await getRolesByScope(session.userId);
     // c5-2: 기존 role/permissions 계산도 UserRole(WORKSPACE) 우선으로 전환.
     // 값 자체는 Admin/Member/Viewer 그대로 유지(계약 불변), 산출 근거만 UserRole 우선.

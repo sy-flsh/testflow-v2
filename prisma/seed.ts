@@ -314,6 +314,23 @@ async function main() {
         role: workspaceRoleFor(userSeed.role),
       },
     });
+
+    // c9-1: demo Company 사용자 상태를 ACTIVE 로 명시 생성한다.
+    // db:reset:dev 는 migration backfill 을 거치지 않고 seed 만 실행하므로, seed 가 상태를 보장한다.
+    await prisma.companyUserState.upsert({
+      where: {
+        companyId_userId: {
+          companyId: company.id,
+          userId: user.id,
+        },
+      },
+      update: { status: "ACTIVE" },
+      create: {
+        companyId: company.id,
+        userId: user.id,
+        status: "ACTIVE",
+      },
+    });
   }
 
   // c2: Workspace 소유자(ownerUserId)를 QA 리드 계정에 연결한다.

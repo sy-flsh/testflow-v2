@@ -32,6 +32,20 @@ export function CompanyUserList() {
     );
   }
 
+  // c9-1: 활성/비활성 변경 성공 시 해당 행 상태를 즉시 갱신한다.
+  function handleStatusChanged(userId: string, status: "ACTIVE" | "INACTIVE") {
+    setState((prev) =>
+      prev.kind === "ready"
+        ? {
+            kind: "ready",
+            users: prev.users.map((user) =>
+              user.userId === userId ? { ...user, status } : user,
+            ),
+          }
+        : prev,
+    );
+  }
+
   useEffect(() => {
     let active = true;
 
@@ -146,10 +160,10 @@ export function CompanyUserList() {
                     "inline-flex h-6 items-center rounded-full px-2.5 text-xs font-medium ring-1 ring-inset",
                     user.status === "ACTIVE"
                       ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
-                      : "bg-amber-50 text-amber-700 ring-amber-200",
+                      : "bg-[var(--bg-muted)] text-[var(--text-tertiary)] ring-[var(--border-default)]",
                   )}
                 >
-                  {user.status === "ACTIVE" ? "활성" : "대기"}
+                  {user.status === "ACTIVE" ? "활성" : "비활성"}
                 </span>
               </td>
               <td className="px-4 py-3 text-right">
@@ -173,6 +187,7 @@ export function CompanyUserList() {
           userId={selectedUserId}
           onClose={() => setSelectedUserId(null)}
           onSaved={handleSaved}
+          onStatusChanged={handleStatusChanged}
         />
       )}
     </>

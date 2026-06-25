@@ -44,6 +44,12 @@ enum InvitationStatus {
   EXPIRED
 }
 
+// c9-1: Company 단위 사용자 활성/비활성 상태(전역 User.isActive 가 아니라 Company 단위).
+enum CompanyUserStatus {
+  ACTIVE
+  INACTIVE
+}
+
 enum ProjectStatus {
   ACTIVE
   COMPLETED
@@ -99,17 +105,18 @@ enum AiDraftStatus {
 }
 
 model Company {
-  id          String       @id @default(cuid())
+  id          String             @id @default(cuid())
   name        String
-  slug        String       @unique
-  isActive    Boolean      @default(true)
+  slug        String             @unique
+  isActive    Boolean            @default(true)
   // c1: 상위 테넌트 모델만 도입. ownerUserId는 nullable 스칼라로 두고,
   // User-Company relation 연결은 c4(User.companyId 도입)에서 함께 처리한다.
   ownerUserId String?
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
   workspaces  Workspace[]
   invitations Invitation[]
+  userStates  CompanyUserState[]
 
   @@map("companies")
 }
@@ -127,19 +134,20 @@ model MasterAdmin {
 }
 
 model User {
-  id              String            @id @default(cuid())
-  email           String            @unique
+  id              String             @id @default(cuid())
+  email           String             @unique
   name            String
   passwordHash    String?
   emailVerifiedAt DateTime?
   lastLoginAt     DateTime?
   avatarUrl       String?
-  createdAt       DateTime          @default(now())
-  updatedAt       DateTime          @updatedAt
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
   members         WorkspaceMember[]
   sessions        Session[]
   roles           UserRole[]
-  sentInvitations Invitation[]      @relation("InvitationInvitedBy")
+  sentInvitations Invitation[]       @relation("InvitationInvitedBy")
+  companyStates   CompanyUserState[] @relation("CompanyUserStateSubject")
 
   @@map("users")
 }
@@ -275,6 +283,29 @@ model InvitationRole {
   @@unique([invitationId, scopeType, scopeId])
   @@index([scopeType, scopeId])
   @@map("invitation_roles")
+}
+
+// c9-1: Company 단위 사용자 활성/비활성 상태.
+// 한 User 는 여러 Company 에 속할 수 있으므로 상태는 (companyId, userId) 단위로 둔다.
+// 비활성화는 UserRole/WorkspaceMember 를 삭제하지 않고 이 레코드의 status 만 INACTIVE 로 바꾼다.
+// deactivatedBy/reactivatedBy 는 ownerUserId 와 동일하게 relation 없는 scalar 로 둔다(감사용).
+model CompanyUserState {
+  id                  String            @id @default(cuid())
+  companyId           String
+  userId              String
+  status              CompanyUserStatus @default(ACTIVE)
+  deactivatedAt       DateTime?
+  deactivatedByUserId String?
+  reactivatedAt       DateTime?
+  reactivatedByUserId String?
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  company             Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user                User              @relation("CompanyUserStateSubject", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, userId])
+  @@index([companyId, status])
+  @@map("company_user_states")
 }
 
 model Project {
