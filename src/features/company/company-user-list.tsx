@@ -5,6 +5,7 @@ import { ShieldAlert, Users } from "lucide-react";
 import { EmptyState } from "@/components/common/empty-state";
 import type { CompanyUserDto, CompanyUserListDto } from "@/lib/company/types";
 import { cn } from "@/lib/utils";
+import { CompanyUserDrawer } from "./company-user-drawer";
 
 type LoadState =
   | { kind: "loading" }
@@ -14,6 +15,22 @@ type LoadState =
 
 export function CompanyUserList() {
   const [state, setState] = useState<LoadState>({ kind: "loading" });
+  // c7-2: 선택한 사용자의 상세 Drawer.
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+
+  // 저장 성공 시 해당 행의 Role 요약을 즉시 갱신한다(목록 재조회 없이).
+  function handleSaved(userId: string, tokens: string[]) {
+    setState((prev) =>
+      prev.kind === "ready"
+        ? {
+            kind: "ready",
+            users: prev.users.map((user) =>
+              user.userId === userId ? { ...user, roles: tokens } : user,
+            ),
+          }
+        : prev,
+    );
+  }
 
   useEffect(() => {
     let active = true;
@@ -92,7 +109,8 @@ export function CompanyUserList() {
   }
 
   return (
-    <div className="overflow-hidden rounded-lg border border-[var(--border-default)] bg-white">
+    <>
+      <div className="overflow-hidden rounded-lg border border-[var(--border-default)] bg-white">
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-[var(--border-default)] bg-[var(--bg-subtle)] text-left text-xs font-medium text-[var(--text-tertiary)]">
@@ -135,21 +153,29 @@ export function CompanyUserList() {
                 </span>
               </td>
               <td className="px-4 py-3 text-right">
-                {/* c7-2 에서 상세 drawer / Role Matrix 편집으로 연결 예정 */}
+                {/* c7-2: 상세 Drawer(프로필 + Role Matrix 편집) 열기 */}
                 <button
                   type="button"
-                  disabled
-                  title="권한 관리(Role 매트릭스) 편집은 다음 단계(c7-2)에서 제공됩니다."
-                  className="inline-flex h-8 cursor-not-allowed items-center rounded-md border border-[var(--border-default)] px-3 text-xs font-medium text-[var(--text-tertiary)] opacity-60"
+                  onClick={() => setSelectedUserId(user.userId)}
+                  className="inline-flex h-8 items-center rounded-md border border-[var(--border-default)] px-3 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
                 >
-                  권한 관리
+                  상세/권한 관리
                 </button>
               </td>
             </tr>
           ))}
         </tbody>
       </table>
-    </div>
+      </div>
+
+      {selectedUserId && (
+        <CompanyUserDrawer
+          userId={selectedUserId}
+          onClose={() => setSelectedUserId(null)}
+          onSaved={handleSaved}
+        />
+      )}
+    </>
   );
 }
 

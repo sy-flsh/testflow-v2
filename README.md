@@ -89,6 +89,10 @@ The UI reflects the same permissions by hiding or disabling restricted actions, 
   - Role 요약 토큰: COMPANY/CO→`CO`, WORKSPACE→`WO(W)`/`M(W)`/`V(W)`, PROJECT→`PO(P)`/`M(P)`/`V(P)` (`roleSummaryToken` helper).
   - `/company/users` 화면: 표 형태 목록(이름/이메일/권한 요약 badge/상태/액션). "권한 관리" 액션은 **disabled**(상세 drawer·Role Matrix 편집은 c7-2 예정).
   - 네비게이션: 사이드바에 **CO에게만** "회원 관리" 링크 노출(`auth.rolesByScope.company`에 CO 존재 시). 미인증 시 `/company/*`는 미들웨어가 로그인으로 리다이렉트.
+- c7-2: CO 회원관리 2차 — 사용자 상세 Drawer + Role Matrix 편집.
+  - `GET /api/company/users/{userId}`: CO인 Company 범위 사용자 1명의 프로필 + 현재 UserRole 전체 + Matrix 행 구성용 Workspace/Project 트리를 반환(비CO 403, 다른 Company/미존재 사용자 404 `USER_NOT_FOUND`). UserRole 기준 표시, 상태만 WorkspaceMember.status 파생.
+  - 목록의 "상세/권한 관리" → 우측 슬라이드인 Drawer(`DrawerShell` 재사용). 탭 2개: **프로필**(이름/이메일/상태/Role 요약, read-only) · **권한 관리**(Company CO 체크박스 + Workspace/Project 세그먼트 매트릭스).
+  - 저장: Drawer 로컬 dirty state → 변경 시에만 [저장] 활성 → 기존 `POST .../roles/sync`(body `{ roles: [...] }`, 전체 desired 목록)로 1회 호출. 성공 시 원본/draft 갱신·목록 행 요약 즉시 갱신, 실패 시 local state 유지 + 서버 error code를 한국어 메시지로 표시(`USER_LAST_CO_FORBIDDEN`/`USER_SELF_CO_REVOKE_FORBIDDEN`/`USER_LAST_WO_FORBIDDEN`/`USER_LAST_PO_FORBIDDEN`/`USER_INVALID_ROLE_SCOPE`/`USER_DUPLICATE_SCOPE`/`USER_SCOPE_NOT_IN_COMPANY` 등). 마지막 CO/WO/PO·본인 CO 보호는 서버가 최종 기준.
 - seed: 기본 Company `testflow-demo` 1건과 MasterAdmin `master@testflow.local` 1명을 생성하고, 기본 Workspace `testflow-qa`를 해당 Company에 연결(owner=`qa.lead@testflow.local`)합니다. 기존 seed 계정/프로젝트/테스트데이터는 그대로 유지됩니다.
 
 ## Local DB Reset

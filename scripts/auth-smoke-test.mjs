@@ -1090,6 +1090,77 @@ async function main() {
         assert(result.json?.error?.code === "AUTH_FORBIDDEN", "expected AUTH_FORBIDDEN");
       });
 
+      // c7-2: CO 사용자 상세 조회 (Role Matrix 편집 데이터)
+      const pmUser = await prisma.user.findUnique({
+        where: { email: accounts.viewer },
+        select: { id: true },
+      });
+
+      await check("CO can fetch user detail with UserRole + workspace/project tree", async () => {
+        const result = await request(`/api/company/users/${leadUser.id}`, {
+          jar: adminJar,
+          expectedStatus: 200,
+        });
+        const detail = result.json?.data;
+        assert(detail?.userId === leadUser.id, "detail.userId mismatch");
+        assert(detail?.company?.id === companyId, "detail.company.id should match CO company");
+        assert(Array.isArray(detail?.workspaces) && detail.workspaces.length > 0, "expected workspaces");
+        assert(
+          detail.workspaces.some((w) => Array.isArray(w.projects) && w.projects.length > 0),
+          "expected at least one workspace with projects",
+        );
+        const roles = detail?.roles ?? [];
+        // qa.lead = CO (COMPANY) + WO (WORKSPACE) → 화면 토큰 CO, WO(W)
+        assert(
+          roles.some((r) => r.scopeType === "COMPANY" && r.scopeId === companyId && r.role === "CO"),
+          `qa.lead detail should include COMPANY/CO; got ${JSON.stringify(roles)}`,
+        );
+        assert(
+          roles.some((r) => r.scopeType === "WORKSPACE" && r.role === "WO"),
+          "qa.lead detail should include WORKSPACE/WO (WO(W))",
+        );
+      });
+
+      await check("CO user detail reflects UserRole for member/viewer (M(W)/V(W))", async () => {
+        const backend = await request(`/api/company/users/${backendUser.id}`, {
+          jar: adminJar,
+          expectedStatus: 200,
+        });
+        assert(
+          (backend.json?.data?.roles ?? []).some(
+            (r) => r.scopeType === "WORKSPACE" && r.role === "MEMBER",
+          ),
+          "backend detail should include WORKSPACE/MEMBER (M(W))",
+        );
+
+        const pm = await request(`/api/company/users/${pmUser.id}`, {
+          jar: adminJar,
+          expectedStatus: 200,
+        });
+        assert(
+          (pm.json?.data?.roles ?? []).some(
+            (r) => r.scopeType === "WORKSPACE" && r.role === "VIEWER",
+          ),
+          "pm detail should include WORKSPACE/VIEWER (V(W))",
+        );
+      });
+
+      await check("non-CO cannot fetch user detail (403)", async () => {
+        const result = await request(`/api/company/users/${leadUser.id}`, {
+          jar: memberJar,
+          expectedStatus: 403,
+        });
+        assert(result.json?.error?.code === "AUTH_FORBIDDEN", "expected AUTH_FORBIDDEN");
+      });
+
+      await check("CO user detail returns 404 for unknown user", async () => {
+        const result = await request("/api/company/users/cmthisuserdoesnotexist0001", {
+          jar: adminJar,
+          expectedStatus: 404,
+        });
+        assert(result.json?.error?.code === "USER_NOT_FOUND", "expected USER_NOT_FOUND");
+      });
+
       await check("CO can sync WORKSPACE role to another user", async () => {
         const original = await prisma.userRole.findUnique({
           where: {
