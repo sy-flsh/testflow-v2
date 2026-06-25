@@ -1315,6 +1315,421 @@ async function main() {
         }
       }
 
+      // c8-2: 초대 수락(validate / 신규 가입 / 기존 사용자 / 충돌·만료·취소)
+      {
+        const project = await prisma.project.findFirst({
+          where: { workspace: { companyId } },
+          select: { id: true },
+        });
+        const projectId = project.id;
+
+        const newEmail = `accept.new.${RUN_ID}@testflow.local`.toLowerCase();
+        const mismatchEmail = `accept.mismatch.${RUN_ID}@testflow.local`.toLowerCase();
+        const revokedEmail = `accept.revoked.${RUN_ID}@testflow.local`.toLowerCase();
+        const expiredEmail = `accept.expired.${RUN_ID}@testflow.local`.toLowerCase();
+        const rawEmail = `accept.rawcheck.${RUN_ID}@testflow.local`.toLowerCase();
+        const testEmails = [
+          newEmail,
+          mismatchEmail,
+          revokedEmail,
+          expiredEmail,
+          rawEmail,
+          accounts.viewer,
+          accounts.member,
+        ];
+
+        async function createInvite(email, roles) {
+          const result = await request("/api/company/invitations", {
+            method: "POST",
+            jar: adminJar,
+            body: { email, roles },
+            expectedStatus: 201,
+          });
+          const inviteUrl = result.json.data.inviteUrl;
+          const token = new URL(`http://x${inviteUrl}`).searchParams.get("token");
+          return { id: result.json.data.invitation.id, token };
+        }
+
+        try {
+          let newToken = null;
+
+          await check("invite validate returns invitation info for new user", async () => {
+            const created = await createInvite(newEmail, [
+              { scopeType: "WORKSPACE", scopeId: workspaceId, role: "MEMBER" },
+            ]);
+            newToken = created.token;
+            const result = await request("/api/invitations/validate", {
+              method: "POST",
+              body: { token: newToken },
+              expectedStatus: 200,
+            });
+            const data = result.json?.data;
+            assert(data?.email === newEmail, "validate email mismatch");
+            assert(data?.existingUser === false, "should be a new user");
+            assert(typeof data?.companyName === "string" && data.companyName, "companyName missing");
+            assert(
+              (data?.roles ?? []).some((r) => r.scopeType === "WORKSPACE" && r.role === "MEMBER"),
+              "role snapshot missing",
+            );
+            assert(!("token" in data) && !("tokenHash" in data), "validate must not echo token");
+          });
+
+          await check("new user accept creates user + promotes role + opens session", async () => {
+            const jar = new CookieJar();
+            const result = await request("/api/invitations/accept", {
+              method: "POST",
+              jar,
+              body: { token: newToken, name: "초대 신규", password: "password123!" },
+              expectedStatus: 201,
+            });
+            assert(result.json?.data?.isNewUser === true, "should be new-user accept");
+            assert(jar.cookies.has("tf_session"), "session cookie should be set for new user");
+
+            const user = await prisma.user.findUnique({
+              where: { email: newEmail },
+              select: { id: true, passwordHash: true },
+            });
+            assert(user, "new user should be created");
+            assert(
+              typeof user.passwordHash === "string" && user.passwordHash.startsWith("$2"),
+              "bcrypt passwordHash expected",
+            );
+
+            const inv = await prisma.invitation.findFirst({
+              where: { email: newEmail },
+              orderBy: { createdAt: "desc" },
+            });
+            assert(inv.status === "ACCEPTED" && inv.acceptedAt, "invitation should be ACCEPTED");
+
+            const role = await prisma.userRole.findUnique({
+              where: {
+                userId_scopeType_scopeId: {
+                  userId: user.id,
+                  scopeType: "WORKSPACE",
+                  scopeId: workspaceId,
+                },
+              },
+            });
+            assert(role?.role === "MEMBER", "WORKSPACE/MEMBER UserRole should be promoted");
+          });
+
+          await check("existing logged-in user accept grants role + keeps session", async () => {
+            const created = await createInvite(accounts.viewer, [
+              { scopeType: "PROJECT", scopeId: projectId, role: "VIEWER" },
+            ]);
+            const pmJar = await login(accounts.viewer, "Viewer");
+            const before = pmJar.cookies.get("tf_session");
+            const result = await request("/api/invitations/accept", {
+              method: "POST",
+              jar: pmJar,
+              body: { token: created.token },
+              expectedStatus: 200,
+            });
+            assert(result.json?.data?.isNewUser === false, "should be existing-user accept");
+            assert(pmJar.cookies.get("tf_session") === before, "existing session must be preserved");
+
+            const role = await prisma.userRole.findUnique({
+              where: {
+                userId_scopeType_scopeId: {
+                  userId: pmUser.id,
+                  scopeType: "PROJECT",
+                  scopeId: projectId,
+                },
+              },
+            });
+            assert(role?.role === "VIEWER", "PROJECT/VIEWER UserRole should be granted");
+
+            await prisma.userRole.deleteMany({
+              where: { userId: pmUser.id, scopeType: "PROJECT", scopeId: projectId },
+            });
+            await prisma.invitation.deleteMany({ where: { email: accounts.viewer } });
+          });
+
+          await check("accept with mismatched logged-in email → INVITE_EMAIL_MISMATCH", async () => {
+            const created = await createInvite(mismatchEmail, [
+              { scopeType: "WORKSPACE", scopeId: workspaceId, role: "MEMBER" },
+            ]);
+            const result = await request("/api/invitations/accept", {
+              method: "POST",
+              jar: adminJar,
+              body: { token: created.token },
+              expectedStatus: 403,
+            });
+            assert(
+              result.json?.error?.code === "INVITE_EMAIL_MISMATCH",
+              "expected INVITE_EMAIL_MISMATCH",
+            );
+          });
+
+          await check("accept revoked invitation → INVITE_REVOKED", async () => {
+            const created = await createInvite(revokedEmail, [
+              { scopeType: "WORKSPACE", scopeId: workspaceId, role: "MEMBER" },
+            ]);
+            await request(`/api/company/invitations/${created.id}/revoke`, {
+              method: "POST",
+              jar: adminJar,
+              expectedStatus: 200,
+            });
+            const result = await request("/api/invitations/accept", {
+              method: "POST",
+              body: { token: created.token },
+              expectedStatus: 400,
+            });
+            assert(result.json?.error?.code === "INVITE_REVOKED", "expected INVITE_REVOKED");
+          });
+
+          await check("expired invitation validate + accept → INVITE_EXPIRED", async () => {
+            const created = await createInvite(expiredEmail, [
+              { scopeType: "WORKSPACE", scopeId: workspaceId, role: "MEMBER" },
+            ]);
+            await prisma.invitation.update({
+              where: { id: created.id },
+              data: { expiresAt: new Date(Date.now() - 1000) },
+            });
+            const validate = await request("/api/invitations/validate", {
+              method: "POST",
+              body: { token: created.token },
+              expectedStatus: 400,
+            });
+            assert(validate.json?.error?.code === "INVITE_EXPIRED", "validate expected INVITE_EXPIRED");
+            const accept = await request("/api/invitations/accept", {
+              method: "POST",
+              body: { token: created.token },
+              expectedStatus: 400,
+            });
+            assert(accept.json?.error?.code === "INVITE_EXPIRED", "accept expected INVITE_EXPIRED");
+          });
+
+          await check("existing user conflicting scope role → INVITE_ROLE_CONFLICT", async () => {
+            // backend 는 WORKSPACE/MEMBER 보유 → 같은 scope 의 WORKSPACE/VIEWER 초대는 충돌.
+            const created = await createInvite(accounts.member, [
+              { scopeType: "WORKSPACE", scopeId: workspaceId, role: "VIEWER" },
+            ]);
+            const backendJar = await login(accounts.member, "Member");
+            const result = await request("/api/invitations/accept", {
+              method: "POST",
+              jar: backendJar,
+              body: { token: created.token },
+              expectedStatus: 409,
+            });
+            assert(
+              result.json?.error?.code === "INVITE_ROLE_CONFLICT",
+              "expected INVITE_ROLE_CONFLICT",
+            );
+            assert(
+              Array.isArray(result.json?.error?.conflicts) && result.json.error.conflicts.length > 0,
+              "conflict detail should be included",
+            );
+            const role = await prisma.userRole.findUnique({
+              where: {
+                userId_scopeType_scopeId: {
+                  userId: backendUser.id,
+                  scopeType: "WORKSPACE",
+                  scopeId: workspaceId,
+                },
+              },
+            });
+            assert(role?.role === "MEMBER", "existing role must be kept on conflict");
+            await prisma.invitation.deleteMany({ where: { email: accounts.member } });
+          });
+
+          await check("raw invite token is never stored in DB (tokenHash only)", async () => {
+            const created = await createInvite(rawEmail, [
+              { scopeType: "WORKSPACE", scopeId: workspaceId, role: "MEMBER" },
+            ]);
+            const hash = createHash("sha256").update(created.token).digest("hex");
+            const byHash = await prisma.invitation.findUnique({ where: { tokenHash: hash } });
+            assert(byHash, "invitation should be found by sha256(token)");
+            const byRaw = await prisma.invitation.findFirst({ where: { tokenHash: created.token } });
+            assert(!byRaw, "raw token must not be stored");
+          });
+        } finally {
+          const createdUser = await prisma.user.findUnique({
+            where: { email: newEmail },
+            select: { id: true },
+          });
+
+          if (createdUser) {
+            await prisma.userRole.deleteMany({ where: { userId: createdUser.id } });
+            await prisma.workspaceMember.deleteMany({ where: { userId: createdUser.id } });
+            await prisma.session.deleteMany({ where: { userId: createdUser.id } });
+          }
+
+          await prisma.invitation.deleteMany({ where: { email: { in: testEmails } } });
+
+          if (createdUser) {
+            await prisma.user.delete({ where: { id: createdUser.id } }).catch(() => {});
+          }
+
+          await prisma.userRole.deleteMany({
+            where: { userId: pmUser.id, scopeType: "PROJECT", scopeId: projectId },
+          });
+        }
+      }
+
+      // c8-2-hotfix: PROJECT-only 초대 수락 시 상위 Workspace 활성 멤버십 보장
+      {
+        const seededProjects = await prisma.project.findMany({
+          where: { workspaceId },
+          select: { id: true },
+          orderBy: { createdAt: "asc" },
+          take: 2,
+        });
+        const projA = seededProjects[0].id;
+        const projB = seededProjects[1].id;
+
+        // 기존 사용자 테스트용: pm 이 멤버가 아닌 별도 Workspace/Project 생성
+        const altWorkspace = await prisma.workspace.create({
+          data: { name: `Alt WS ${RUN_ID}`, slug: `alt-ws-${RUN_ID}`, companyId, timezone: "Asia/Seoul" },
+        });
+        const altProject = await prisma.project.create({
+          data: { workspaceId: altWorkspace.id, name: `Alt Proj ${RUN_ID}`, slug: `alt-proj-${RUN_ID}` },
+        });
+
+        const projNewEmail = `projonly.new.${RUN_ID}@testflow.local`.toLowerCase();
+        const projMultiEmail = `projonly.multi.${RUN_ID}@testflow.local`.toLowerCase();
+
+        async function createInvite(email, roles) {
+          const result = await request("/api/company/invitations", {
+            method: "POST",
+            jar: adminJar,
+            body: { email, roles },
+            expectedStatus: 201,
+          });
+          const token = new URL(`http://x${result.json.data.inviteUrl}`).searchParams.get("token");
+          return { id: result.json.data.invitation.id, token };
+        }
+
+        try {
+          await check("new user PROJECT-only accept auto-creates ACTIVE workspace membership", async () => {
+            const created = await createInvite(projNewEmail, [
+              { scopeType: "PROJECT", scopeId: projA, role: "VIEWER" },
+            ]);
+            const jar = new CookieJar();
+            const result = await request("/api/invitations/accept", {
+              method: "POST",
+              jar,
+              body: { token: created.token, name: "프로젝트 신규", password: "password123!" },
+              expectedStatus: 201,
+            });
+            assert(result.json?.data?.isNewUser === true, "should be new-user accept");
+            assert(jar.cookies.has("tf_session"), "session cookie should be set");
+
+            const user = await prisma.user.findUnique({
+              where: { email: projNewEmail },
+              select: { id: true },
+            });
+            const projectRole = await prisma.userRole.findUnique({
+              where: {
+                userId_scopeType_scopeId: { userId: user.id, scopeType: "PROJECT", scopeId: projA },
+              },
+            });
+            assert(projectRole?.role === "VIEWER", "PROJECT/VIEWER UserRole should be created");
+
+            const membership = await prisma.workspaceMember.findUnique({
+              where: { workspaceId_userId: { workspaceId, userId: user.id } },
+            });
+            assert(
+              membership && membership.status === "ACTIVE" && membership.role === "MEMBER",
+              "parent workspace membership (ACTIVE, MEMBER) should be auto-created",
+            );
+
+            // 새 세션으로 /api/auth/me 가 활성 Workspace 를 반환해야 한다.
+            const me = await request("/api/auth/me", { jar, expectedStatus: 200 });
+            assert(me.json?.data?.workspace?.id === workspaceId, "me should return the parent workspace");
+          });
+
+          await check("multiple PROJECT roles in same workspace create only one membership", async () => {
+            const created = await createInvite(projMultiEmail, [
+              { scopeType: "PROJECT", scopeId: projA, role: "VIEWER" },
+              { scopeType: "PROJECT", scopeId: projB, role: "MEMBER" },
+            ]);
+            const jar = new CookieJar();
+            await request("/api/invitations/accept", {
+              method: "POST",
+              jar,
+              body: { token: created.token, name: "멀티 프로젝트", password: "password123!" },
+              expectedStatus: 201,
+            });
+
+            const user = await prisma.user.findUnique({
+              where: { email: projMultiEmail },
+              select: { id: true },
+            });
+            const memberships = await prisma.workspaceMember.findMany({
+              where: { userId: user.id, workspaceId },
+            });
+            assert(memberships.length === 1, `expected exactly 1 membership, got ${memberships.length}`);
+
+            const projectRoles = await prisma.userRole.findMany({
+              where: { userId: user.id, scopeType: "PROJECT", scopeId: { in: [projA, projB] } },
+            });
+            assert(projectRoles.length === 2, "both PROJECT UserRoles should be created");
+          });
+
+          await check("existing user PROJECT-only accept creates missing parent membership + keeps session", async () => {
+            const created = await createInvite(accounts.viewer, [
+              { scopeType: "PROJECT", scopeId: altProject.id, role: "VIEWER" },
+            ]);
+
+            const before = await prisma.workspaceMember.findUnique({
+              where: { workspaceId_userId: { workspaceId: altWorkspace.id, userId: pmUser.id } },
+            });
+            assert(!before, "pm should not be a member of altWorkspace before accept");
+
+            const pmJar = await login(accounts.viewer, "Viewer");
+            const cookieBefore = pmJar.cookies.get("tf_session");
+            const result = await request("/api/invitations/accept", {
+              method: "POST",
+              jar: pmJar,
+              body: { token: created.token },
+              expectedStatus: 200,
+            });
+            assert(result.json?.data?.isNewUser === false, "should be existing-user accept");
+            assert(pmJar.cookies.get("tf_session") === cookieBefore, "existing session must be preserved");
+
+            const membership = await prisma.workspaceMember.findUnique({
+              where: { workspaceId_userId: { workspaceId: altWorkspace.id, userId: pmUser.id } },
+            });
+            assert(
+              membership && membership.status === "ACTIVE" && membership.role === "MEMBER",
+              "missing parent membership should be created (ACTIVE, MEMBER)",
+            );
+
+            const projectRole = await prisma.userRole.findUnique({
+              where: {
+                userId_scopeType_scopeId: {
+                  userId: pmUser.id,
+                  scopeType: "PROJECT",
+                  scopeId: altProject.id,
+                },
+              },
+            });
+            assert(projectRole?.role === "VIEWER", "PROJECT/VIEWER UserRole should be created");
+          });
+        } finally {
+          // 정리: 생성한 신규 User / pm grant / alt Workspace·Project / 초대.
+          for (const email of [projNewEmail, projMultiEmail]) {
+            const user = await prisma.user.findUnique({ where: { email }, select: { id: true } });
+            if (user) {
+              await prisma.userRole.deleteMany({ where: { userId: user.id } });
+              await prisma.workspaceMember.deleteMany({ where: { userId: user.id } });
+              await prisma.session.deleteMany({ where: { userId: user.id } });
+              await prisma.user.delete({ where: { id: user.id } }).catch(() => {});
+            }
+          }
+          await prisma.userRole.deleteMany({
+            where: { userId: pmUser.id, scopeType: "PROJECT", scopeId: altProject.id },
+          });
+          await prisma.workspaceMember.deleteMany({ where: { workspaceId: altWorkspace.id } });
+          await prisma.invitation.deleteMany({
+            where: { email: { in: [projNewEmail, projMultiEmail, accounts.viewer] } },
+          });
+          await prisma.project.delete({ where: { id: altProject.id } }).catch(() => {});
+          await prisma.workspace.delete({ where: { id: altWorkspace.id } }).catch(() => {});
+        }
+      }
+
       await check("CO can sync WORKSPACE role to another user", async () => {
         const original = await prisma.userRole.findUnique({
           where: {

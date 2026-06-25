@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import type { MemberRole, Role } from "@prisma/client";
 
 /**
  * c8-1: Company 초대 토큰/만료 helper.
@@ -44,4 +45,21 @@ export function normalizeEmail(raw: unknown): string | null {
   }
 
   return email;
+}
+
+/**
+ * c8-2: WORKSPACE scope 초대 Role(WO/MEMBER/VIEWER) → 기존 WorkspaceMember.role 매핑.
+ * seed.ts 의 workspaceRoleFor(MemberRole→Role) 의 역방향이며, 초대 수락 시
+ * UserRole 승격과 함께 WorkspaceMember(ACTIVE)를 dual-write 하기 위한 변환이다.
+ * (권한 산출은 UserRole-first guard 가 담당하고, WorkspaceMember 는 멤버십/활성 상태 표시용)
+ */
+export function memberRoleForWorkspaceRole(role: Role): MemberRole {
+  switch (role) {
+    case "WO":
+      return "ADMIN";
+    case "VIEWER":
+      return "VIEWER";
+    default:
+      return "MEMBER";
+  }
 }
