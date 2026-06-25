@@ -53,6 +53,12 @@ export type CompanyUserDetailDto = {
   roles: CompanyUserRoleEntry[];
 };
 
+/** c8-3: 초대 Role Matrix 용 Company scope 트리 DTO (읽기 전용). */
+export type CompanyScopeTreeDto = {
+  company: { id: string; name: string };
+  workspaces: CompanyWorkspaceNode[];
+};
+
 /** c8-1: 초대 Role snapshot 1행 DTO. */
 export type InvitationRoleDto = {
   scopeType: ScopeType;

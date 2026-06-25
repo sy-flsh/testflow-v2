@@ -123,6 +123,33 @@ const SCOPE_ORDER: Record<ScopeType, number> = {
   PROJECT: 2,
 };
 
+/**
+ * c8-3: 초대 생성/취소 API 에러 code → 한국어 메시지.
+ * 생성: INVITE_INVALID_EMAIL / INVITE_ROLES_REQUIRED / INVITE_ALREADY_ACCEPTED /
+ *       USER_INVALID_ROLE_SCOPE / USER_DUPLICATE_SCOPE / USER_SCOPE_NOT_IN_COMPANY
+ * 취소: INVITE_NOT_FOUND / INVITE_NOT_PENDING
+ * 공통: AUTH_FORBIDDEN / 일반 오류
+ */
+const INVITE_MANAGE_ERROR_MESSAGES: Record<string, string> = {
+  INVITE_INVALID_EMAIL: "올바른 이메일 형식이 아닙니다.",
+  INVITE_ROLES_REQUIRED: "초대할 권한을 1개 이상 선택해 주세요.",
+  INVITE_ALREADY_ACCEPTED: "이미 수락된 초대가 있는 이메일입니다.",
+  USER_INVALID_ROLE_SCOPE: "허용되지 않은 권한/대상 조합입니다.",
+  USER_DUPLICATE_SCOPE: "같은 대상에 중복된 권한이 지정되었습니다.",
+  USER_SCOPE_NOT_IN_COMPANY: "현재 회사에 속하지 않은 Workspace/Project 입니다.",
+  INVITE_NOT_FOUND: "초대를 찾을 수 없습니다.",
+  INVITE_NOT_PENDING: "대기 중(PENDING) 상태의 초대만 취소할 수 있습니다.",
+  AUTH_FORBIDDEN: "권한이 없습니다. 초대 관리는 CO만 가능합니다.",
+};
+
+export function inviteErrorMessage(code: string | undefined, serverMessage?: string): string {
+  if (code && INVITE_MANAGE_ERROR_MESSAGES[code]) {
+    return INVITE_MANAGE_ERROR_MESSAGES[code];
+  }
+
+  return serverMessage ?? "요청 처리에 실패했습니다. 잠시 후 다시 시도해 주세요.";
+}
+
 /** 저장 응답 roles → 목록 행 갱신용 요약 토큰 배열 (c7-1 목록과 동일 정렬: scope→role). */
 export function rolesToSummaryTokens(roles: CompanyUserRoleEntry[]): string[] {
   return [...roles]

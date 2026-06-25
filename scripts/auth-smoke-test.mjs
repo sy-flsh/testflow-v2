@@ -1162,6 +1162,43 @@ async function main() {
         assert(result.json?.error?.code === "USER_NOT_FOUND", "expected USER_NOT_FOUND");
       });
 
+      // c8-3: Company scope tree API
+      await check("CO can fetch company scope tree (workspaces + projects only)", async () => {
+        const result = await request("/api/company/scopes", {
+          jar: adminJar,
+          expectedStatus: 200,
+        });
+        const data = result.json?.data;
+        assert(data?.company?.id === companyId, "scope tree company.id should match CO company");
+        assert(Array.isArray(data?.workspaces) && data.workspaces.length > 0, "expected workspaces");
+        assert(
+          data.workspaces.some((w) => w.id === workspaceId),
+          "company workspace should be present in scope tree",
+        );
+        assert(
+          data.workspaces.some((w) => Array.isArray(w.projects) && w.projects.length > 0),
+          "expected at least one workspace with projects",
+        );
+
+        const companyWorkspaceIds = new Set(
+          (
+            await prisma.workspace.findMany({ where: { companyId }, select: { id: true } })
+          ).map((w) => w.id),
+        );
+        assert(
+          data.workspaces.every((w) => companyWorkspaceIds.has(w.id)),
+          "scope tree must only contain this company's workspaces",
+        );
+      });
+
+      await check("non-CO cannot fetch company scope tree (403)", async () => {
+        const result = await request("/api/company/scopes", {
+          jar: memberJar,
+          expectedStatus: 403,
+        });
+        assert(result.json?.error?.code === "AUTH_FORBIDDEN", "expected AUTH_FORBIDDEN");
+      });
+
       // c8-1: Company 초대 생성/목록/취소
       {
         const inviteEmail = `invite.c81.${RUN_ID}@testflow.local`.toLowerCase();

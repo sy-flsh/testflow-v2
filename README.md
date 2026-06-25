@@ -105,6 +105,12 @@ The UI reflects the same permissions by hiding or disabling restricted actions, 
   - **WorkspaceMember 활성 멤버십 보장(c8-2-hotfix)**: 충돌 선검증 통과 후, 초대 roles의 상위 Workspace 마다 `WorkspaceMember(ACTIVE)`를 1건 보장한다(workspaceId 기준 dedupe·upsert, 없을 때만 생성, 기존 멤버십 role/status 미변경). WORKSPACE scope는 매핑 role(WO→ADMIN/MEMBER→MEMBER/VIEWER→VIEWER), **PROJECT scope는 상위 Workspace에 멤버십이 없으면 최소 MEMBER로 생성**(같은 Workspace에 WORKSPACE role이 함께 있으면 그 매핑 role이 우선). 신규 사용자 세션의 활성 Workspace도 이 Workspace로 선택 → PROJECT-only 초대도 `/api/auth/me`·dashboard가 정상 동작. **프로젝트 권한 정본은 UserRole(PROJECT scope)** 이며, 이 멤버십은 접근/활성 Workspace 해석용 최소 멤버십이다.
   - 설계 판단: `User.companyId` 컬럼을 추가하지 않고 **UserRole(권한 정본) + 상위 Workspace의 WorkspaceMember(ACTIVE) dual-write**를 Company 참여 근거로 사용(seed가 모든 사용자에 대해 둘을 함께 만드는 것과 동일). 이로써 기존 멤버십 기반 세션/워크스페이스 해석(`resolveActiveMembership`)이 그대로 동작.
   - `/invite/accept?token=`(공개): validate 호출 → Company명·이메일·부여 Role·만료 표시. 신규=이름/비번 폼, 기존=로그인 상태/이메일 일치에 따라 [초대 수락]·로그인 유도(`/login?next=`)·불일치 안내. 성공 시 `redirectTo`(workspace role 있으면 `/dashboard`, CO만이면 `/company/users`)로 이동. raw token은 화면 상태로만 사용(로그 미출력).
+- c8-3: CO 초대 관리 UI (기존 c8-1/c8-2 API 재사용, API 무변경).
+  - `GET /api/company/scopes`(CO, 읽기 전용): 초대 Role Matrix용 `{ company, workspaces:[{id,name,projects:[{id,name}]}] }` 반환(비CO 403, 타 Company 미포함). Prisma 변경 없음.
+  - `/company/users`에 **탭 2개**(사용자 / 초대 관리) + 상단 [사용자 초대] 버튼 추가(기존 목록·상세 Drawer 유지). 사용자 탭이 기본.
+  - 초대 생성 Drawer(`DrawerShell` 재사용): 이메일 + c7-2와 동일한 Role Matrix(Company CO 체크박스, Workspace `없음/WO/Member/Viewer`, Project `없음/PO/Member/Viewer`, scope당 단일 Role, 미선택 행 제외, 최소 1개 선택 시 [초대 생성] 활성). 생성 성공 시 **Modal을 닫지 않고 성공 화면**으로 전환 — 이메일·만료·Role 요약 + **inviteUrl 1회 표시 + [링크 복사](Clipboard 실패 시 readonly input 선택)** + "지금만 확인 가능" 안내. [닫기] 시 inviteUrl을 state에서 제거하고 초대 목록 새로고침.
+  - 초대 관리 탭: `GET /api/company/invitations` 최신순 표(이메일/권한 요약/상태 badge(대기 중·수락 완료·취소됨·만료됨)/초대한 사람/생성일/만료일/액션). **PENDING만 [초대 취소]**(inline 확인 → `revoke` → 행 상태 즉시 REVOKED). tokenHash/raw token/inviteUrl 미표시.
+  - 에러: 생성/취소 server code를 한국어로 매핑(`inviteErrorMessage`); 실패 시 작성 중 email/Role draft 유지. raw inviteUrl은 목록 전역 state·storage에 저장하지 않음.
 - seed: 기본 Company `testflow-demo` 1건과 MasterAdmin `master@testflow.local` 1명을 생성하고, 기본 Workspace `testflow-qa`를 해당 Company에 연결(owner=`qa.lead@testflow.local`)합니다. 기존 seed 계정/프로젝트/테스트데이터는 그대로 유지됩니다.
 
 ## Local DB Reset
