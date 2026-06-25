@@ -84,6 +84,11 @@ The UI reflects the same permissions by hiding or disabling restricted actions, 
   - 현재 상태 조회 + cross-user 카운팅 + `deleteMany`/`createMany`를 **단일 `Serializable` 트랜잭션**에서 수행 → 두 CO가 동시에 마지막 owner를 회수하는 race를 방지합니다.
   - 보호 위반은 `RoleSyncProtectionError`로 throw → 트랜잭션 롤백 → 외부 catch에서 기존 code(`USER_LAST_CO_FORBIDDEN`/`USER_SELF_CO_REVOKE_FORBIDDEN`/`USER_LAST_WO_FORBIDDEN`/`USER_LAST_PO_FORBIDDEN`)로 매핑합니다.
   - API path/body/response·에러 code·정상 동작은 불변(검증: test:auth 62 PASS 유지).
+- c7-1: CO 회원관리 1차 — 목록 화면 + Role 요약.
+  - `GET /api/company/users`: CO인 Company 기준으로 사용자와 Scope별 UserRole 요약을 반환(비CO 403). 표시는 UserRole 기준(WorkspaceMember.role fallback 미사용), 상태(ACTIVE/PENDING)만 WorkspaceMember.status에서 파생.
+  - Role 요약 토큰: COMPANY/CO→`CO`, WORKSPACE→`WO(W)`/`M(W)`/`V(W)`, PROJECT→`PO(P)`/`M(P)`/`V(P)` (`roleSummaryToken` helper).
+  - `/company/users` 화면: 표 형태 목록(이름/이메일/권한 요약 badge/상태/액션). "권한 관리" 액션은 **disabled**(상세 drawer·Role Matrix 편집은 c7-2 예정).
+  - 네비게이션: 사이드바에 **CO에게만** "회원 관리" 링크 노출(`auth.rolesByScope.company`에 CO 존재 시). 미인증 시 `/company/*`는 미들웨어가 로그인으로 리다이렉트.
 - seed: 기본 Company `testflow-demo` 1건과 MasterAdmin `master@testflow.local` 1명을 생성하고, 기본 Workspace `testflow-qa`를 해당 Company에 연결(owner=`qa.lead@testflow.local`)합니다. 기존 seed 계정/프로젝트/테스트데이터는 그대로 유지됩니다.
 
 ## Local DB Reset

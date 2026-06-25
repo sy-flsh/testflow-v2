@@ -1046,6 +1046,50 @@ async function main() {
       const workspaceId = backendMembership.workspaceId;
       const syncPath = `/api/company/users/${backendUser.id}/roles/sync`;
 
+      // c7-1: CO 회원 목록 + Role 요약
+      await check("CO can list company users with role summary", async () => {
+        const result = await request("/api/company/users", {
+          jar: adminJar,
+          expectedStatus: 200,
+        });
+        const users = result.json?.data?.users ?? [];
+        const byEmail = new Map(users.map((u) => [u.email, u]));
+
+        assert(
+          byEmail.has(accounts.admin) &&
+            byEmail.has(accounts.member) &&
+            byEmail.has("frontend@testflow.local") &&
+            byEmail.has(accounts.viewer),
+          "expected all 4 seeded users in company list",
+        );
+
+        const lead = byEmail.get(accounts.admin);
+        assert(
+          lead.roles.includes("CO") && lead.roles.includes("WO(W)"),
+          `qa.lead summary should include CO and WO(W); got ${JSON.stringify(lead.roles)}`,
+        );
+        assert(
+          byEmail.get(accounts.member).roles.includes("M(W)"),
+          "backend summary should include M(W)",
+        );
+        assert(
+          byEmail.get("frontend@testflow.local").roles.includes("M(W)"),
+          "frontend summary should include M(W)",
+        );
+        assert(
+          byEmail.get(accounts.viewer).roles.includes("V(W)"),
+          "pm summary should include V(W)",
+        );
+      });
+
+      await check("non-CO cannot list company users (403)", async () => {
+        const result = await request("/api/company/users", {
+          jar: memberJar,
+          expectedStatus: 403,
+        });
+        assert(result.json?.error?.code === "AUTH_FORBIDDEN", "expected AUTH_FORBIDDEN");
+      });
+
       await check("CO can sync WORKSPACE role to another user", async () => {
         const original = await prisma.userRole.findUnique({
           where: {

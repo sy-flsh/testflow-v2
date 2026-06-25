@@ -9,9 +9,11 @@ import {
   LayoutDashboard,
   Play,
   Settings,
+  Users,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useCurrentAuth } from "@/features/auth/use-current-auth";
 import { getProjectIdFromPathname, getProjectName } from "@/lib/project-context";
 import { cn } from "@/lib/utils";
 
@@ -34,6 +36,10 @@ const projectNav = [
 
 export function AppSidebar() {
   const pathname = usePathname();
+  const { auth } = useCurrentAuth();
+  // c7-1: CO(COMPANY/CO UserRole)인 경우에만 회원 관리 메뉴를 노출한다.
+  const isCompanyOwner =
+    auth?.rolesByScope?.company?.some((entry) => entry.role === "CO") ?? false;
   const projectId = getProjectIdFromPathname(pathname);
   const projectName = getProjectName(projectId);
   const projectItems = projectNav.map((item) => ({
@@ -59,7 +65,15 @@ export function AppSidebar() {
         <SidebarSection items={projectItems} pathname={pathname} disabled={!projectId} />
       </div>
 
-      <div className="border-t border-[var(--border-default)] p-3">
+      <div className="space-y-1 border-t border-[var(--border-default)] p-3">
+        {isCompanyOwner && (
+          <SidebarLink
+            href="/company/users"
+            label="회원 관리"
+            icon={Users}
+            active={pathname.startsWith("/company")}
+          />
+        )}
         <SidebarLink
           href="/settings"
           label="워크스페이스 설정"

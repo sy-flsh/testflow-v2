@@ -18,5 +18,12 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/dashboard", "/projects", "/projects/:path*", "/settings"],
+  matcher: [
+    "/dashboard",
+    "/projects",
+    "/projects/:path*",
+    "/settings",
+    // c7-1: 회사 관리(회원 관리) 페이지도 미인증 시 로그인으로 리다이렉트
+    "/company/:path*",
+  ],
 };

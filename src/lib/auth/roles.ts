@@ -54,6 +54,24 @@ export function isAssignableRole(role: Role): boolean {
 }
 
 /**
+ * c7-1: Role 요약 토큰 (회원 목록 표시용).
+ * - COMPANY/CO → "CO"
+ * - WORKSPACE/WO → "WO(W)", WORKSPACE/MEMBER → "M(W)", WORKSPACE/VIEWER → "V(W)"
+ * - PROJECT/PO → "PO(P)", PROJECT/MEMBER → "M(P)", PROJECT/VIEWER → "V(P)"
+ */
+export function roleSummaryToken(scopeType: ScopeType, role: Role): string {
+  if (scopeType === "COMPANY") {
+    return role;
+  }
+
+  const suffix = scopeType === "WORKSPACE" ? "(W)" : "(P)";
+  const base =
+    role === "MEMBER" ? "M" : role === "VIEWER" ? "V" : role; // WO/PO 는 그대로
+
+  return `${base}${suffix}`;
+}
+
+/**
  * c6-1: 특정 사용자가 CO(Company Owner)로 있는 Company id 목록을 반환한다.
  * (UserRole COMPANY/CO 기준 — WorkspaceMember.role 과 무관)
  */
