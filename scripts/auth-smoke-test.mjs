@@ -2057,6 +2057,198 @@ async function main() {
         }
       }
 
+      // c9-2: 초대 수락 시 CompanyUserState(ACTIVE) 명시 생성 + INACTIVE 우회 방지
+      {
+        const project = await prisma.project.findFirst({
+          where: { workspace: { companyId } },
+          select: { id: true },
+        });
+        const projectId = project.id;
+        const newEmail = `c92.new.${RUN_ID}@accept.local`.toLowerCase();
+        let createdNewUserId = null;
+
+        async function createInvite(email, roles) {
+          const r = await request("/api/company/invitations", {
+            method: "POST",
+            jar: adminJar,
+            body: { email, roles },
+            expectedStatus: 201,
+          });
+          const token = new URL(`http://x${r.json.data.inviteUrl}`).searchParams.get("token");
+          return { id: r.json.data.invitation.id, token };
+        }
+
+        const projectRoleKey = (userId) => ({
+          userId_scopeType_scopeId: { userId, scopeType: "PROJECT", scopeId: projectId },
+        });
+
+        // 테스트 누적 accept/login 호출이 IP rate limit(127.0.0.1)에 걸리지 않도록 버킷 초기화.
+        // (앱 동작 변경이 아니라 동일 IP 에서 다수 호출하는 테스트 한정 조치)
+        await prisma.rateLimitBucket.deleteMany({
+          where: { scope: { in: ["auth:invite-accept:ip", "auth:login:ip"] } },
+        });
+
+        try {
+          await check("c9-2 new user accept creates ACTIVE CompanyUserState", async () => {
+            const inv = await createInvite(newEmail, [
+              { scopeType: "WORKSPACE", scopeId: workspaceId, role: "MEMBER" },
+            ]);
+            const jar = new CookieJar();
+            const r = await request("/api/invitations/accept", {
+              method: "POST",
+              jar,
+              body: { token: inv.token, name: "C92 New", password: "password123!" },
+              expectedStatus: 201,
+            });
+            assert(r.json?.data?.isNewUser === true, "should be new-user accept");
+            assert(jar.cookies.has("tf_session"), "session created");
+
+            const user = await prisma.user.findUnique({
+              where: { email: newEmail },
+              select: { id: true },
+            });
+            createdNewUserId = user.id;
+            const state = await prisma.companyUserState.findUnique({
+              where: { companyId_userId: { companyId, userId: user.id } },
+            });
+            assert(state?.status === "ACTIVE", "CompanyUserState ACTIVE created for new user");
+            const role = await prisma.userRole.findUnique({
+              where: {
+                userId_scopeType_scopeId: {
+                  userId: user.id,
+                  scopeType: "WORKSPACE",
+                  scopeId: workspaceId,
+                },
+              },
+            });
+            assert(role?.role === "MEMBER", "UserRole promoted");
+            const member = await prisma.workspaceMember.findUnique({
+              where: { workspaceId_userId: { workspaceId, userId: user.id } },
+            });
+            assert(member, "WorkspaceMember ensured");
+            const invRow = await prisma.invitation.findFirst({
+              where: { email: newEmail },
+              orderBy: { createdAt: "desc" },
+            });
+            assert(invRow.status === "ACCEPTED", "invitation ACCEPTED");
+          });
+
+          await check("c9-2 existing ACTIVE user accept keeps ACTIVE state", async () => {
+            const inv = await createInvite(accounts.viewer, [
+              { scopeType: "PROJECT", scopeId: projectId, role: "VIEWER" },
+            ]);
+            const pmJar = await login(accounts.viewer, "Viewer");
+            await request("/api/invitations/accept", {
+              method: "POST",
+              jar: pmJar,
+              body: { token: inv.token },
+              expectedStatus: 200,
+            });
+            const state = await prisma.companyUserState.findUnique({
+              where: { companyId_userId: { companyId, userId: pmUser.id } },
+            });
+            assert(state?.status === "ACTIVE", "pm state stays ACTIVE");
+            await prisma.userRole.deleteMany({
+              where: { userId: pmUser.id, scopeType: "PROJECT", scopeId: projectId },
+            });
+            await prisma.invitation.deleteMany({ where: { email: accounts.viewer } });
+          });
+
+          await check("c9-2 legacy user (no state) accept creates ACTIVE state", async () => {
+            // backend 의 CompanyUserState 삭제로 legacy(상태 없음) 재현.
+            await prisma.companyUserState.deleteMany({
+              where: { companyId, userId: backendUser.id },
+            });
+            const inv = await createInvite(accounts.member, [
+              { scopeType: "PROJECT", scopeId: projectId, role: "VIEWER" },
+            ]);
+            const beJar = await login(accounts.member, "Member");
+            await request("/api/invitations/accept", {
+              method: "POST",
+              jar: beJar,
+              body: { token: inv.token },
+              expectedStatus: 200,
+            });
+            const state = await prisma.companyUserState.findUnique({
+              where: { companyId_userId: { companyId, userId: backendUser.id } },
+            });
+            assert(state?.status === "ACTIVE", "legacy user state created ACTIVE");
+            await prisma.userRole.deleteMany({
+              where: { userId: backendUser.id, scopeType: "PROJECT", scopeId: projectId },
+            });
+            await prisma.invitation.deleteMany({ where: { email: accounts.member } });
+          });
+
+          await check("c9-2 INACTIVE user accept → 403 USER_INACTIVE, invitation stays PENDING, then activate succeeds", async () => {
+            // 비활성화 전에 로그인(로그인은 상태와 무관).
+            const beJar = await login(accounts.member, "Member");
+            await prisma.companyUserState.update({
+              where: { companyId_userId: { companyId, userId: backendUser.id } },
+              data: { status: "INACTIVE", deactivatedAt: new Date() },
+            });
+
+            const inv = await createInvite(accounts.member, [
+              { scopeType: "PROJECT", scopeId: projectId, role: "VIEWER" },
+            ]);
+            const blocked = await request("/api/invitations/accept", {
+              method: "POST",
+              jar: beJar,
+              body: { token: inv.token },
+              expectedStatus: 403,
+            });
+            assert(blocked.json?.error?.code === "USER_INACTIVE", "expected USER_INACTIVE");
+
+            const invRow = await prisma.invitation.findUnique({ where: { id: inv.id } });
+            assert(invRow.status === "PENDING", "invitation stays PENDING");
+            const role = await prisma.userRole.findUnique({ where: projectRoleKey(backendUser.id) });
+            assert(!role, "no UserRole added while INACTIVE");
+            const state = await prisma.companyUserState.findUnique({
+              where: { companyId_userId: { companyId, userId: backendUser.id } },
+            });
+            assert(state?.status === "INACTIVE", "state stays INACTIVE (no auto-reactivation)");
+
+            // CO 가 활성화한 뒤 같은 초대 수락 → 성공.
+            await prisma.companyUserState.update({
+              where: { companyId_userId: { companyId, userId: backendUser.id } },
+              data: { status: "ACTIVE", reactivatedAt: new Date() },
+            });
+            await request("/api/invitations/accept", {
+              method: "POST",
+              jar: beJar,
+              body: { token: inv.token },
+              expectedStatus: 200,
+            });
+            const invRow2 = await prisma.invitation.findUnique({ where: { id: inv.id } });
+            assert(invRow2.status === "ACCEPTED", "after activation invitation ACCEPTED");
+            const role2 = await prisma.userRole.findUnique({ where: projectRoleKey(backendUser.id) });
+            assert(role2?.role === "VIEWER", "role promoted after activation");
+          });
+        } finally {
+          await prisma.invitation.deleteMany({
+            where: { email: { in: [newEmail, accounts.viewer, accounts.member] } },
+          });
+          await prisma.userRole.deleteMany({
+            where: { userId: backendUser.id, scopeType: "PROJECT", scopeId: projectId },
+          });
+          await prisma.userRole.deleteMany({
+            where: { userId: pmUser.id, scopeType: "PROJECT", scopeId: projectId },
+          });
+          // backend 상태를 seed 값(ACTIVE)으로 복구.
+          await prisma.companyUserState.upsert({
+            where: { companyId_userId: { companyId, userId: backendUser.id } },
+            update: { status: "ACTIVE" },
+            create: { companyId, userId: backendUser.id, status: "ACTIVE" },
+          });
+          if (createdNewUserId) {
+            await prisma.userRole.deleteMany({ where: { userId: createdNewUserId } });
+            await prisma.workspaceMember.deleteMany({ where: { userId: createdNewUserId } });
+            await prisma.companyUserState.deleteMany({ where: { userId: createdNewUserId } });
+            await prisma.session.deleteMany({ where: { userId: createdNewUserId } });
+            await prisma.user.delete({ where: { id: createdNewUserId } }).catch(() => {});
+          }
+        }
+      }
+
       await check("CO can sync WORKSPACE role to another user", async () => {
         const original = await prisma.userRole.findUnique({
           where: {

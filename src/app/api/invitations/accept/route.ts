@@ -225,6 +225,30 @@ export async function POST(request: Request) {
             throw new InviteAcceptError("초대 수락에 실패했습니다.", 400, "INVITE_ACCEPT_FAILED");
           }
 
+          // c9-2: Invitation.companyId 기준 CompanyUserState 보장.
+          //  - INACTIVE 사용자는 초대 수락으로 자동 재활성화되지 않는다(전체 중단 → invitation PENDING 유지).
+          //  - 레코드가 없으면(신규 가입 / legacy 기존 사용자) ACTIVE 로 명시 생성.
+          //  - 이미 ACTIVE 면 상태/감사 필드를 덮어쓰지 않는다(no-op).
+          // 같은 트랜잭션 내부에서 처리하므로, 생성 실패/충돌 시 invitation 만 ACCEPTED 되는 부분 상태가 없다.
+          const existingState = await tx.companyUserState.findUnique({
+            where: { companyId_userId: { companyId: current.companyId, userId: targetUserId } },
+            select: { status: true },
+          });
+
+          if (existingState?.status === "INACTIVE") {
+            throw new InviteAcceptError(
+              "이 Company에서 비활성화된 사용자입니다. 회사 관리자에게 활성화를 요청해 주세요.",
+              403,
+              "USER_INACTIVE",
+            );
+          }
+
+          if (!existingState) {
+            await tx.companyUserState.create({
+              data: { companyId: current.companyId, userId: targetUserId, status: "ACTIVE" },
+            });
+          }
+
           // 충돌 선검증: 같은 scope 에 다른 Role 이 있으면 전체 중단.
           const existingRoles = await tx.userRole.findMany({
             where: {

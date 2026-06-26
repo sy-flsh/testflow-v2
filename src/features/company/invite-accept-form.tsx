@@ -334,6 +334,7 @@ const INVITE_ERROR_MESSAGES: Record<string, string> = {
   INVITE_EMAIL_MISMATCH: "초대받은 이메일과 로그인한 계정이 다릅니다.",
   INVITE_LOGIN_REQUIRED: "이미 가입된 이메일입니다. 초대받은 이메일로 로그인한 뒤 수락해 주세요.",
   INVITE_ROLE_CONFLICT: "기존 권한과 충돌하는 초대가 있어 수락할 수 없습니다. 관리자에게 문의해 주세요.",
+  USER_INACTIVE: "이 Company에서 비활성화된 사용자입니다. 회사 관리자에게 활성화를 요청해 주세요.",
   USER_INVALID_ROLE_SCOPE: "초대 권한 구성이 올바르지 않습니다. 관리자에게 문의해 주세요.",
   USER_SCOPE_NOT_IN_COMPANY: "초대 대상 Workspace/Project 가 더 이상 유효하지 않습니다.",
 };
