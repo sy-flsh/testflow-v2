@@ -100,10 +100,18 @@ export function securityAuditOrderBy(
     : [{ occurredAt: "desc" }, { id: "desc" }];
 }
 
+/** loadAuditUserMap 의 값 타입(c10-1: 탈퇴 마스킹 판별을 위해 deletedAt 포함). */
+export type AuditUserRow = {
+  id: string;
+  name: string;
+  email: string;
+  deletedAt: Date | null;
+};
+
 /** event 목록의 actor/target id dedupe 후 단일 bulk 조회 → userId→User map (N+1 금지). */
 export async function loadAuditUserMap(
   events: Array<{ actorUserId: string | null; targetUserId: string | null }>,
-): Promise<Map<string, { id: string; name: string; email: string }>> {
+): Promise<Map<string, AuditUserRow>> {
   const ids = Array.from(
     new Set(
       events.flatMap((event) =>
@@ -116,19 +124,32 @@ export async function loadAuditUserMap(
   }
   const users = await prisma.user.findMany({
     where: { id: { in: ids } },
-    select: { id: true, name: true, email: true },
+    select: { id: true, name: true, email: true, deletedAt: true },
   });
   return new Map(users.map((u) => [u.id, u]));
 }
 
-/** userId + userMap → 표시 ref. 삭제된 사용자는 userId 만 유지하고 name/email 은 null. */
+/**
+ * userId + userMap → 표시 ref.
+ * c10-1 개인정보 최소화:
+ *  - 물리 삭제(row 없음): name/email null, withdrawn=false → UI "삭제된 사용자".
+ *  - 전역 탈퇴(soft-deleted, row 존재): name/email 을 **API DTO 단계에서 null 마스킹**, withdrawn=true
+ *    → UI/CSV "탈퇴한 사용자"(이름/이메일 미노출).
+ *  - 활성 사용자: name/email 노출, withdrawn=false.
+ */
 export function auditUserRef(
   userId: string | null,
-  userMap: Map<string, { id: string; name: string; email: string }>,
+  userMap: Map<string, AuditUserRow>,
 ): SecurityAuditUserRef | null {
   if (!userId) {
     return null;
   }
   const user = userMap.get(userId);
-  return { userId, name: user?.name ?? null, email: user?.email ?? null };
+  if (!user) {
+    return { userId, name: null, email: null, withdrawn: false };
+  }
+  if (user.deletedAt) {
+    return { userId, name: null, email: null, withdrawn: true };
+  }
+  return { userId, name: user.name, email: user.email, withdrawn: false };
 }

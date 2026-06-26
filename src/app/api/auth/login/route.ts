@@ -1,5 +1,6 @@
 import { apiError, apiSuccess } from "@/lib/api/response";
 import { readJsonBody, readTrimmedString } from "@/lib/api/request";
+import { USER_ACCOUNT_DELETED_CODE, USER_ACCOUNT_DELETED_MESSAGE } from "@/lib/auth/account";
 import { mapAuthPayload, resolveActiveMembership } from "@/lib/auth/me";
 import { verifyPassword } from "@/lib/auth/password";
 import { createSession } from "@/lib/auth/session";
@@ -58,6 +59,12 @@ export async function POST(request: Request) {
 
     if (!isPasswordValid) {
       return invalidCredentials(email);
+    }
+
+    // c10-1: 비밀번호 검증 통과 후에만 탈퇴 상태를 알린다(계정 존재 여부를 wrong-password 에 노출하지 않음).
+    // 올바른 자격증명이라도 soft-deleted 계정이면 세션을 만들지 않고 차단한다.
+    if (user.deletedAt) {
+      return apiError(USER_ACCOUNT_DELETED_MESSAGE, 403, USER_ACCOUNT_DELETED_CODE);
     }
 
     const membership = await resolveActiveMembership(user.id);

@@ -1,4 +1,5 @@
 import { apiError, apiSuccess } from "@/lib/api/response";
+import { USER_ACCOUNT_DELETED_CODE, USER_ACCOUNT_DELETED_MESSAGE } from "@/lib/auth/account";
 import {
   authGuardErrorResponse,
   isAuthGuardError,
@@ -36,11 +37,17 @@ export async function POST(request: Request, context: RouteContext) {
 
     const target = await prisma.user.findUnique({
       where: { id: targetUserId },
-      select: { id: true },
+      select: { id: true, deletedAt: true },
     });
 
     if (!target || !(await isUserInCompany(companyId, targetUserId))) {
       return apiError("대상 사용자를 찾을 수 없습니다.", 404, "USER_NOT_FOUND");
+    }
+
+    // c10-1: 전역 탈퇴(soft-deleted) 사용자는 Company activate 로 되살릴 수 없다(전역 복구는 별도).
+    // CO 가 activate 해도 전역 탈퇴를 해제하지 않도록 409 로 차단한다.
+    if (target.deletedAt) {
+      return apiError(USER_ACCOUNT_DELETED_MESSAGE, 409, USER_ACCOUNT_DELETED_CODE);
     }
 
     // c9-5: 멱등 — 이미 ACTIVE 면 no-op(reactivatedAt/By 를 덮어쓰지 않는다).

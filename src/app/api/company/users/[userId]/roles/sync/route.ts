@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import type { Role, ScopeType } from "@prisma/client";
 import { apiError, apiSuccess } from "@/lib/api/response";
+import { USER_ACCOUNT_DELETED_CODE, USER_ACCOUNT_DELETED_MESSAGE } from "@/lib/auth/account";
 import {
   authGuardErrorResponse,
   isAuthGuardError,
@@ -60,11 +61,16 @@ export async function POST(request: Request, context: RouteContext) {
 
     const target = await prisma.user.findUnique({
       where: { id: targetUserId },
-      select: { id: true },
+      select: { id: true, deletedAt: true },
     });
 
     if (!target) {
       return apiError("대상 사용자를 찾을 수 없습니다.", 404, "USER_NOT_FOUND");
+    }
+
+    // c10-1: 전역 탈퇴(soft-deleted) 사용자의 Role 은 변경할 수 없다(defense-in-depth; UI 도 비활성).
+    if (target.deletedAt) {
+      return apiError(USER_ACCOUNT_DELETED_MESSAGE, 409, USER_ACCOUNT_DELETED_CODE);
     }
 
     const body = await readJsonBody(request);

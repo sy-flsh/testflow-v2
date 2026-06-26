@@ -1,6 +1,7 @@
 "use client";
 
 import { AccessRestricted } from "@/components/layout/access-restricted";
+import { AccountDeleted } from "@/components/layout/account-deleted";
 import { AppSidebar } from "@/components/layout/app-sidebar";
 import { TopHeader } from "@/components/layout/top-header";
 import { useCurrentAuth } from "@/features/auth/use-current-auth";
@@ -15,6 +16,11 @@ export function AppShellBody({ children }: { children: React.ReactNode }) {
   // c9-5: isInitialLoading 일 때만 로딩 표시. background revalidation(isRefreshing) 에서는
   // 현재 화면(정상 셸 또는 AccessRestricted)을 그대로 유지해 깜빡임을 막는다.
   const { errorCode, isInitialLoading } = useCurrentAuth();
+
+  // c10-1: 전역 탈퇴 계정은 USER_INACTIVE 와 구분된 전용 화면(무한 redirect 없이 안내+로그인 이동).
+  if (errorCode === "USER_ACCOUNT_DELETED") {
+    return <AccountDeleted />;
+  }
 
   if (errorCode === "USER_INACTIVE") {
     return <AccessRestricted />;

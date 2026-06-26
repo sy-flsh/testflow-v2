@@ -3,6 +3,7 @@ import type { Role, ScopeType } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { apiError, apiSuccess } from "@/lib/api/response";
 import { readJsonBody, readTrimmedString } from "@/lib/api/request";
+import { USER_ACCOUNT_DELETED_CODE, USER_ACCOUNT_DELETED_MESSAGE } from "@/lib/auth/account";
 import { hashPassword, validatePassword } from "@/lib/auth/password";
 import { isAssignableRole, isRoleAllowedForScope } from "@/lib/auth/roles";
 import { getCurrentSession, createSession } from "@/lib/auth/session";
@@ -97,6 +98,10 @@ export async function POST(request: Request) {
     let preHashedPassword: string | null = null;
 
     if (session) {
+      // c10-1: stale 세션 방어 — 로그인 계정이 탈퇴 상태면 수락 불가(invitation 은 PENDING 유지).
+      if (session.user.deletedAt) {
+        return apiError(USER_ACCOUNT_DELETED_MESSAGE, 403, USER_ACCOUNT_DELETED_CODE);
+      }
       // 기존 로그인 사용자: email 일치할 때만 수락. name/password 불요.
       if (session.user.email !== invitation.email) {
         return apiError(
@@ -108,10 +113,15 @@ export async function POST(request: Request) {
     } else {
       const existing = await prisma.user.findUnique({
         where: { email: invitation.email },
-        select: { id: true },
+        select: { id: true, deletedAt: true },
       });
 
       if (existing) {
+        // c10-1: 탈퇴(soft-deleted) 이메일의 초대 수락은 자동 계정 생성/권한 복구 없이 차단.
+        // 새 User/CompanyUserState/UserRole/WorkspaceMember/session 변경 없음, invitation 은 PENDING 유지.
+        if (existing.deletedAt) {
+          return apiError(USER_ACCOUNT_DELETED_MESSAGE, 403, USER_ACCOUNT_DELETED_CODE);
+        }
         // 기존 사용자지만 비로그인 → 초대 이메일로 로그인 후 수락해야 함.
         return apiError(
           "이미 가입된 이메일입니다. 초대받은 이메일로 로그인한 뒤 수락해 주세요.",

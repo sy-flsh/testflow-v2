@@ -51,10 +51,14 @@ enum CompanyUserStatus {
 }
 
 // c9-6: 보안 감사 이벤트 종류(서버 내부 고정 집합 → enum).
+// c10-1: 전역 계정 lifecycle 이벤트(USER_SOFT_DELETED/USER_RESTORED) 추가.
+// 이 두 이벤트는 companyId = null 인 global event 로 기록한다(특정 Company 범위 아님).
 enum SecurityAuditEventType {
   COMPANY_USER_DEACTIVATED
   COMPANY_USER_REACTIVATED
   INACTIVE_COMPANY_ACCESS_DENIED
+  USER_SOFT_DELETED
+  USER_RESTORED
 }
 
 enum ProjectStatus {
@@ -148,6 +152,14 @@ model User {
   emailVerifiedAt DateTime?
   lastLoginAt     DateTime?
   avatarUrl       String?
+  // c10-1: 전역 계정 탈퇴(soft delete). deletedAt != null 이면 탈퇴 계정이다.
+  // 물리 삭제가 아니라 row 를 보존하므로 기존 FK cascade 는 발생하지 않는다.
+  // email/name 은 유지(unique 보존, 감사/historical 표시용). 마스킹은 표시 계층에서 처리.
+  // deletedByUserId 는 relation 없는 nullable scalar(self=본인 id, 향후 MasterAdmin 강제삭제 대비).
+  // deletionReason 은 코드 상수(SELF_WITHDRAWAL 등)만 저장한다(자유 텍스트 미저장).
+  deletedAt       DateTime?
+  deletedByUserId String?
+  deletionReason  String?
   createdAt       DateTime           @default(now())
   updatedAt       DateTime           @updatedAt
   members         WorkspaceMember[]
@@ -156,6 +168,7 @@ model User {
   sentInvitations Invitation[]       @relation("InvitationInvitedBy")
   companyStates   CompanyUserState[] @relation("CompanyUserStateSubject")
 
+  @@index([deletedAt])
   @@map("users")
 }
 

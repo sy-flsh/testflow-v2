@@ -7,6 +7,11 @@ import type {
 } from "@prisma/client";
 import { apiError } from "@/lib/api/response";
 import {
+  isSoftDeleted,
+  USER_ACCOUNT_DELETED_CODE,
+  USER_ACCOUNT_DELETED_MESSAGE,
+} from "@/lib/auth/account";
+import {
   buildPermissions,
   resolveActiveMembership,
   toAuthRole,
@@ -58,6 +63,17 @@ export function authGuardErrorResponse(error: AuthGuardError) {
   return apiError(error.message, error.status, error.code);
 }
 
+/**
+ * c10-1: soft-deleted(전역 탈퇴) 계정이면 USER_ACCOUNT_DELETED(403)로 차단한다.
+ * Company 단위 USER_INACTIVE 와 구분되는 전역 계정 상태이며 모든 guard 에서 우선 적용한다.
+ */
+export function requireActiveUser<T extends { deletedAt: Date | null }>(user: T): T {
+  if (isSoftDeleted(user)) {
+    throw new AuthGuardError(USER_ACCOUNT_DELETED_MESSAGE, 403, USER_ACCOUNT_DELETED_CODE);
+  }
+  return user;
+}
+
 export async function requireCurrentUser() {
   const session = await getCurrentSession();
 
@@ -65,7 +81,7 @@ export async function requireCurrentUser() {
     throw new AuthGuardError("로그인이 필요합니다.", 401, "AUTH_UNAUTHORIZED");
   }
 
-  return session.user;
+  return requireActiveUser(session.user);
 }
 
 export type CompanyOwnerAuth = {
@@ -84,6 +100,8 @@ export async function requireCompanyOwner(): Promise<CompanyOwnerAuth> {
   if (!session) {
     throw new AuthGuardError("로그인이 필요합니다.", 401, "AUTH_UNAUTHORIZED");
   }
+
+  requireActiveUser(session.user);
 
   const companyIds = await getCompaniesWhereUserIsCO(session.userId);
 
@@ -119,6 +137,8 @@ export async function requireCurrentWorkspace(): Promise<CurrentWorkspaceAuth> {
   if (!session) {
     throw new AuthGuardError("로그인이 필요합니다.", 401, "AUTH_UNAUTHORIZED");
   }
+
+  requireActiveUser(session.user);
 
   const membership = await resolveActiveMembership(
     session.userId,

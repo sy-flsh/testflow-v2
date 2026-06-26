@@ -96,8 +96,16 @@ export async function GET(request: Request) {
       },
     };
     for (const row of grouped) {
-      summary.byEventType[row.eventType] = row._count._all;
-      summary.total += row._count._all;
+      // c10-1: 전역 lifecycle 이벤트(USER_SOFT_DELETED/USER_RESTORED)는 companyId=null 이라 이 Company
+      // 범위 query 결과에 포함되지 않는다. 방어적으로 알려진 3종만 집계(타입 안전 + 범위 정책 유지).
+      if (
+        row.eventType === "COMPANY_USER_DEACTIVATED" ||
+        row.eventType === "COMPANY_USER_REACTIVATED" ||
+        row.eventType === "INACTIVE_COMPANY_ACCESS_DENIED"
+      ) {
+        summary.byEventType[row.eventType] = row._count._all;
+        summary.total += row._count._all;
+      }
     }
 
     return apiSuccess({

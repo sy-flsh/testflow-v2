@@ -279,16 +279,23 @@ export function CompanyUserList({
                         )}
                       </td>
                       <td className="px-4 py-3">
-                        <span
-                          className={cn(
-                            "inline-flex h-6 items-center rounded-full px-2.5 text-xs font-medium ring-1 ring-inset",
-                            user.status === "ACTIVE"
-                              ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
-                              : "bg-[var(--bg-muted)] text-[var(--text-tertiary)] ring-[var(--border-default)]",
-                          )}
-                        >
-                          {user.status === "ACTIVE" ? "활성" : "비활성"}
-                        </span>
+                        {user.accountDeleted ? (
+                          // c10-1: 전역 탈퇴 사용자 — CompanyUserState 와 무관하게 "계정 탈퇴"로 표시.
+                          <span className="inline-flex h-6 items-center rounded-full bg-red-50 px-2.5 text-xs font-medium text-red-700 ring-1 ring-inset ring-red-200">
+                            계정 탈퇴
+                          </span>
+                        ) : (
+                          <span
+                            className={cn(
+                              "inline-flex h-6 items-center rounded-full px-2.5 text-xs font-medium ring-1 ring-inset",
+                              user.status === "ACTIVE"
+                                ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+                                : "bg-[var(--bg-muted)] text-[var(--text-tertiary)] ring-[var(--border-default)]",
+                            )}
+                          >
+                            {user.status === "ACTIVE" ? "활성" : "비활성"}
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-right">
                         <button

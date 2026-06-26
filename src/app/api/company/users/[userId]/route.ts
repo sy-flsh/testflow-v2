@@ -60,7 +60,7 @@ export async function GET(_request: Request, context: RouteContext) {
 
     const target = await prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, name: true, email: true },
+      select: { id: true, name: true, email: true, deletedAt: true },
     });
 
     if (!target) {
@@ -110,6 +110,7 @@ export async function GET(_request: Request, context: RouteContext) {
       name: target.name,
       email: target.email,
       status,
+      accountDeleted: Boolean(target.deletedAt),
       company,
       workspaces,
       roles,

@@ -89,7 +89,7 @@ export async function GET(request: Request) {
 
     const users = await prisma.user.findMany({
       where: { id: { in: Array.from(userIds) } },
-      select: { id: true, name: true, email: true },
+      select: { id: true, name: true, email: true, deletedAt: true },
     });
 
     // 사용자별 Role 그룹화
@@ -171,6 +171,7 @@ export async function GET(request: Request) {
         name: user.name,
         email: user.email,
         status: userStatus,
+        accountDeleted: Boolean(user.deletedAt),
         roles: summary,
         companyRoles: sortRoles(group.company),
         workspaceRoles: sortRoles(group.workspace),

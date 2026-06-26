@@ -1,4 +1,5 @@
 import { apiError, apiSuccess } from "@/lib/api/response";
+import { USER_ACCOUNT_DELETED_CODE, USER_ACCOUNT_DELETED_MESSAGE } from "@/lib/auth/account";
 import { getUserWorkspaces, mapAuthPayload, resolveActiveMembership } from "@/lib/auth/me";
 import { getRolesByScope, resolveWorkspaceAuthRole } from "@/lib/auth/roles";
 import { getCurrentSession } from "@/lib/auth/session";
@@ -17,6 +18,13 @@ export async function GET() {
 
     if (!session) {
       return apiError("로그인이 필요합니다.", 401, "AUTH_UNAUTHORIZED");
+    }
+
+    // c10-1: 정상 탈퇴 시 세션을 모두 삭제하므로 보통 여기 도달하지 않지만,
+    // 경쟁/stale 세션 방어 분기로 soft-deleted 계정은 USER_ACCOUNT_DELETED 로 응답한다(쿠키는 유지 →
+    // AppShell 이 AccountDeleted 안내+로그인 이동을 노출). USER_INACTIVE 와 구분된다.
+    if (session.user.deletedAt) {
+      return apiError(USER_ACCOUNT_DELETED_MESSAGE, 403, USER_ACCOUNT_DELETED_CODE);
     }
 
     // c9-1: 비활성 Company 의 Workspace 는 활성 workspace 후보에서 제외(다른 ACTIVE Company 로 fallback).

@@ -753,7 +753,17 @@ function UserCell({
     return <span className="text-[var(--text-tertiary)]">{emptyLabel}</span>;
   }
 
-  // 삭제된 사용자(name/email null): 클릭 불가.
+  // c10-1 전역 탈퇴 사용자: 이름/이메일 미노출, "탈퇴한 사용자"로 구분, 클릭 불가.
+  if (user.withdrawn) {
+    return (
+      <div>
+        <div className="text-[var(--text-secondary)]">탈퇴한 사용자</div>
+        <div className="font-mono text-xs text-[var(--text-tertiary)]">{user.userId.slice(0, 8)}</div>
+      </div>
+    );
+  }
+
+  // 물리 삭제된 사용자(name/email null): 클릭 불가.
   if (user.name === null && user.email === null) {
     return (
       <div>

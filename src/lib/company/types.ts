@@ -19,6 +19,8 @@ export type CompanyUserDto = {
   name: string;
   email: string;
   status: CompanyUserStatusValue;
+  /** c10-1: 전역 계정 탈퇴(soft delete) 여부. true 면 CompanyUserState 와 무관하게 실제 접근 불가. */
+  accountDeleted: boolean;
   /** 표시용 Role 요약 토큰 목록 (예: ["CO", "WO(W)"]). UserRole 기준. */
   roles: string[];
   companyRoles: CompanyUserScopedRole[];
@@ -60,6 +62,8 @@ export type CompanyUserDetailDto = {
   name: string;
   email: string;
   status: CompanyUserStatusValue;
+  /** c10-1: 전역 계정 탈퇴 여부. true 면 activate/deactivate/role 변경 불가(409 USER_ACCOUNT_DELETED). */
+  accountDeleted: boolean;
   company: { id: string; name: string };
   /** Company 소속 Workspace 목록 + 각 Workspace 하위 Project 목록 (Matrix 행 구성용) */
   workspaces: CompanyWorkspaceNode[];
@@ -105,11 +109,16 @@ export type CompanyInvitationListDto = {
 export type SecurityAuditEventTypeFilter = "ALL" | SecurityAuditEventType;
 export type SecurityAuditSort = "newest" | "oldest";
 
-/** 감사 actor/target 표시용. 삭제된 사용자는 userId 만 유지하고 name/email 은 null. */
+/**
+ * 감사 actor/target 표시용. 삭제된 사용자는 userId 만 유지하고 name/email 은 null.
+ * c10-1: withdrawn=true 면 전역 탈퇴(soft-deleted) 사용자 — name/email 은 마스킹되어 null 이며
+ * UI/CSV 에서 "탈퇴한 사용자"로 표시한다. withdrawn=false + name/email null 은 물리 삭제("삭제된 사용자").
+ */
 export type SecurityAuditUserRef = {
   userId: string;
   name: string | null;
   email: string | null;
+  withdrawn: boolean;
 };
 
 export type SecurityAuditEventDto = {

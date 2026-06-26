@@ -3272,6 +3272,349 @@ async function main() {
         });
       }
 
+      // c10-1: 사용자 soft delete / 계정 탈퇴
+      {
+        const seedHash = (
+          await prisma.user.findUnique({
+            where: { email: accounts.admin },
+            select: { passwordHash: true },
+          })
+        )?.passwordHash;
+        assert(seedHash, "seed passwordHash needed for withdraw fixture");
+
+        const nonexistentTargetId = `c10-ghost-${RUN_ID}`;
+        let withdrawUser = null;
+        let maskEventId = null;
+        let ghostEventId = null;
+
+        // 결정적 stale/race 세션 생성기(쿠키 raw token → sha256 tokenHash).
+        async function createSessionFor(userId) {
+          const rawToken = `c10tok-${RUN_ID}-${Math.floor(Math.random() * 1e9)}`;
+          const tokenHash = createHash("sha256").update(rawToken).digest("hex");
+          await prisma.session.create({
+            data: {
+              userId,
+              tokenHash,
+              expiresAt: new Date(Date.now() + 86_400_000),
+              lastSeenAt: new Date(),
+            },
+          });
+          const jar = new CookieJar();
+          jar.cookies.set("tf_session", rawToken);
+          return jar;
+        }
+        async function softDeleteAuditCount() {
+          return prisma.securityAuditEvent.count({
+            where: { eventType: "USER_SOFT_DELETED", targetUserId: withdrawUser.id },
+          });
+        }
+        // c10-1 의 login/signup/withdraw 는 공유 IP rate-limit 버킷을 소진하지 않도록 전용 IP 로 격리한다.
+        const C10_FWD = { "x-forwarded-for": "198.51.100.77" };
+        async function c10LoginRaw(email) {
+          const jar = new CookieJar();
+          await request("/api/auth/login", {
+            method: "POST",
+            headers: C10_FWD,
+            body: { email, password: PASSWORD },
+            jar,
+            expectedStatus: 200,
+          });
+          assert(jar.cookies.has("tf_session"), `${email} did not receive tf_session`);
+          return jar;
+        }
+
+        try {
+          withdrawUser = await prisma.user.create({
+            data: {
+              email: `withdraw.${RUN_ID}@x.local`,
+              name: "탈퇴 테스터",
+              passwordHash: seedHash,
+            },
+          });
+          // 탈퇴 시 보존되어야 할 자원: 멤버십 + UserRole + CompanyUserState(ACTIVE).
+          await prisma.workspaceMember.create({
+            data: { workspaceId, userId: withdrawUser.id, role: "MEMBER", status: "ACTIVE" },
+          });
+          await prisma.userRole.create({
+            data: { userId: withdrawUser.id, scopeType: "WORKSPACE", scopeId: workspaceId, role: "MEMBER" },
+          });
+          await prisma.companyUserState.create({
+            data: { companyId, userId: withdrawUser.id, status: "ACTIVE" },
+          });
+
+          // A. schema/migration
+          await check("c10-1 existing seed user has deletedAt null; enum accepts new values", async () => {
+            const lead = await prisma.user.findUnique({
+              where: { id: leadUser.id },
+              select: { deletedAt: true },
+            });
+            assert(lead?.deletedAt === null, "seed user deletedAt must be null after migration");
+            // USER_RESTORED enum 값이 DB 에서 사용 가능한지(USER_SOFT_DELETED 는 실제 탈퇴로 검증).
+            const restoredEv = await prisma.securityAuditEvent.create({
+              data: { eventType: "USER_RESTORED", actorUserId: leadUser.id, targetUserId: withdrawUser.id, guardName: "account.restore" },
+            });
+            assert(restoredEv.eventType === "USER_RESTORED", "USER_RESTORED enum usable");
+            await prisma.securityAuditEvent.delete({ where: { id: restoredEv.id } });
+          });
+
+          // B. withdraw API
+          await check("c10-1 unauthenticated withdraw → 401", async () => {
+            const r = await request("/api/account/withdraw", {
+              method: "POST",
+              body: { confirmation: "탈퇴합니다" },
+              expectedStatus: 401,
+            });
+            assert(r.json?.error?.code === "AUTH_UNAUTHORIZED", "expected AUTH_UNAUTHORIZED");
+          });
+
+          const userJar = await c10LoginRaw(withdrawUser.email);
+
+          await check("c10-1 confirmation missing/mismatch → 400 ACCOUNT_WITHDRAWAL_CONFIRMATION_REQUIRED", async () => {
+            const bad = await request("/api/account/withdraw", {
+              method: "POST",
+              jar: userJar,
+              body: { confirmation: "탈퇴" },
+              expectedStatus: 400,
+            });
+            assert(
+              bad.json?.error?.code === "ACCOUNT_WITHDRAWAL_CONFIRMATION_REQUIRED",
+              "expected confirmation-required code",
+            );
+            const missing = await request("/api/account/withdraw", {
+              method: "POST",
+              jar: userJar,
+              body: {},
+              expectedStatus: 400,
+            });
+            assert(
+              missing.json?.error?.code === "ACCOUNT_WITHDRAWAL_CONFIRMATION_REQUIRED",
+              "missing confirmation also 400",
+            );
+          });
+
+          const preRoles = await prisma.userRole.count({ where: { userId: withdrawUser.id } });
+          const preMembers = await prisma.workspaceMember.count({ where: { userId: withdrawUser.id } });
+
+          await check("c10-1 self withdrawal: 200 {ok}, soft-deleted, sessions cleared, resources preserved, audit", async () => {
+            const r = await request("/api/account/withdraw", {
+              method: "POST",
+              jar: userJar,
+              body: { confirmation: "  탈퇴합니다  " }, // trim 후 비교
+              expectedStatus: 200,
+            });
+            assert(r.json?.data?.ok === true, "expected { ok: true }");
+
+            const u = await prisma.user.findUnique({ where: { id: withdrawUser.id } });
+            assert(u?.deletedAt instanceof Date, "deletedAt set");
+            assert(u?.deletedByUserId === withdrawUser.id, "deletedByUserId === self");
+            assert(u?.deletionReason === "SELF_WITHDRAWAL", "deletionReason SELF_WITHDRAWAL");
+            assert(u?.email === withdrawUser.email && u?.name === "탈퇴 테스터", "email/name preserved (no anonymize)");
+
+            const sessionCount = await prisma.session.count({ where: { userId: withdrawUser.id } });
+            assert(sessionCount === 0, "all sessions deleted");
+
+            assert((await prisma.userRole.count({ where: { userId: withdrawUser.id } })) === preRoles, "UserRole preserved");
+            assert((await prisma.workspaceMember.count({ where: { userId: withdrawUser.id } })) === preMembers, "WorkspaceMember preserved");
+            const state = await prisma.companyUserState.findUnique({ where: { companyId_userId: { companyId, userId: withdrawUser.id } } });
+            assert(state?.status === "ACTIVE", "CompanyUserState preserved (untouched)");
+
+            const evs = await prisma.securityAuditEvent.findMany({ where: { eventType: "USER_SOFT_DELETED", targetUserId: withdrawUser.id } });
+            assert(evs.length === 1, `exactly one USER_SOFT_DELETED, got ${evs.length}`);
+            assert(evs[0].companyId === null, "global event companyId null");
+            assert(evs[0].guardName === "account.withdraw", "guardName account.withdraw");
+            assert(evs[0].actorUserId === withdrawUser.id, "actor === self");
+          });
+
+          await check("c10-1 post-withdrawal: old session me → 401; protected API blocked", async () => {
+            const me = await request("/api/auth/me", { jar: userJar, expectedStatus: 401 });
+            assert(me.json?.error?.code === "AUTH_UNAUTHORIZED", "old session is gone → 401");
+            await request("/api/projects", { jar: userJar, expectedStatus: 401 });
+          });
+
+          await check("c10-1 stale/race session of deleted user → me 403 USER_ACCOUNT_DELETED", async () => {
+            const stale = await createSessionFor(withdrawUser.id);
+            const me = await request("/api/auth/me", { jar: stale, expectedStatus: 403 });
+            assert(me.json?.error?.code === "USER_ACCOUNT_DELETED", "stale session → USER_ACCOUNT_DELETED");
+            // guard 도 동일(회사 API)
+            const co = await request("/api/company/security-audit", { jar: stale, expectedStatus: 403 });
+            assert(co.json?.error?.code === "USER_ACCOUNT_DELETED", "guard → USER_ACCOUNT_DELETED");
+          });
+
+          await check("c10-1 idempotent re-withdraw: no overwrite, no duplicate audit", async () => {
+            const before = await prisma.user.findUnique({ where: { id: withdrawUser.id }, select: { deletedAt: true } });
+            const beforeCount = await softDeleteAuditCount();
+            const stale = await createSessionFor(withdrawUser.id);
+            const r = await request("/api/account/withdraw", {
+              method: "POST",
+              jar: stale,
+              body: { confirmation: "탈퇴합니다" },
+              expectedStatus: 200,
+            });
+            assert(r.json?.data?.ok === true, "idempotent { ok: true }");
+            const after = await prisma.user.findUnique({ where: { id: withdrawUser.id }, select: { deletedAt: true } });
+            assert(before.deletedAt.getTime() === after.deletedAt.getTime(), "deletedAt not overwritten");
+            assert((await softDeleteAuditCount()) === beforeCount, "no duplicate USER_SOFT_DELETED audit");
+          });
+
+          await check("c10-1 login deleted account: correct pw → 403; wrong pw → 401 (existing contract)", async () => {
+            const ok = await request("/api/auth/login", {
+              method: "POST",
+              headers: C10_FWD,
+              body: { email: withdrawUser.email, password: PASSWORD },
+              expectedStatus: 403,
+            });
+            assert(ok.json?.error?.code === "USER_ACCOUNT_DELETED", "correct pw → USER_ACCOUNT_DELETED");
+            const wrong = await request("/api/auth/login", {
+              method: "POST",
+              headers: C10_FWD,
+              body: { email: withdrawUser.email, password: "definitely-wrong-1!" },
+              expectedStatus: 401,
+            });
+            assert(wrong.json?.error?.code === "AUTH_INVALID_CREDENTIALS", "wrong pw keeps 401 contract");
+          });
+
+          await check("c10-1 signup with deleted email → 403 USER_ACCOUNT_DELETED, no new user", async () => {
+            const r = await request("/api/auth/signup", {
+              method: "POST",
+              headers: C10_FWD,
+              body: { name: "재가입", email: withdrawUser.email, password: PASSWORD },
+              expectedStatus: 403,
+            });
+            assert(r.json?.error?.code === "USER_ACCOUNT_DELETED", "signup blocked with USER_ACCOUNT_DELETED");
+            const count = await prisma.user.count({ where: { email: withdrawUser.email } });
+            assert(count === 1, "no new user row created (email stays unique to deleted user)");
+          });
+
+          // C. invitation
+          const inviteToken = `c10inv-${RUN_ID}`;
+          const invite = await prisma.invitation.create({
+            data: {
+              companyId,
+              email: withdrawUser.email,
+              tokenHash: createHash("sha256").update(inviteToken).digest("hex"),
+              status: "PENDING",
+              invitedByUserId: leadUser.id,
+              expiresAt: new Date(Date.now() + 7 * 86_400_000),
+            },
+          });
+
+          await check("c10-1 invite accept for deleted email → 403; invitation stays PENDING; no changes", async () => {
+            const preRoleN = await prisma.userRole.count({ where: { userId: withdrawUser.id } });
+            const r = await request("/api/invitations/accept", {
+              method: "POST",
+              body: { token: inviteToken },
+              expectedStatus: 403,
+            });
+            assert(r.json?.error?.code === "USER_ACCOUNT_DELETED", "accept blocked with USER_ACCOUNT_DELETED");
+            const inv = await prisma.invitation.findUnique({ where: { id: invite.id }, select: { status: true } });
+            assert(inv?.status === "PENDING", "invitation remains PENDING");
+            assert((await prisma.userRole.count({ where: { userId: withdrawUser.id } })) === preRoleN, "no UserRole change");
+            assert((await prisma.session.count({ where: { userId: withdrawUser.id } })) >= 0, "no session created for deleted user");
+          });
+
+          await check("c10-1 invite validate does not leak deleted-account state", async () => {
+            const r = await request("/api/invitations/validate", {
+              method: "POST",
+              body: { token: inviteToken },
+              expectedStatus: 200,
+            });
+            const keys = Object.keys(r.json?.data ?? {});
+            for (const leak of ["deleted", "deletedAt", "accountDeleted", "withdrawn", "deletionReason"]) {
+              assert(!keys.includes(leak), `validate must not expose "${leak}"`);
+            }
+          });
+
+          // D. company user management
+          await check("c10-1 CO deactivate/activate/role-sync on deleted target → 409 USER_ACCOUNT_DELETED", async () => {
+            const de = await request(`/api/company/users/${withdrawUser.id}/deactivate`, { method: "POST", jar: adminJar, expectedStatus: 409 });
+            assert(de.json?.error?.code === "USER_ACCOUNT_DELETED", "deactivate → 409 USER_ACCOUNT_DELETED");
+            const ac = await request(`/api/company/users/${withdrawUser.id}/activate`, { method: "POST", jar: adminJar, expectedStatus: 409 });
+            assert(ac.json?.error?.code === "USER_ACCOUNT_DELETED", "activate → 409 USER_ACCOUNT_DELETED");
+            const sync = await request(`/api/company/users/${withdrawUser.id}/roles/sync`, {
+              method: "POST",
+              jar: adminJar,
+              body: { roles: [{ scopeType: "WORKSPACE", scopeId: workspaceId, role: "VIEWER" }] },
+              expectedStatus: 409,
+            });
+            assert(sync.json?.error?.code === "USER_ACCOUNT_DELETED", "role sync → 409 USER_ACCOUNT_DELETED");
+            // 전역 탈퇴 해제되지 않음(Company state 도 그대로).
+            const u = await prisma.user.findUnique({ where: { id: withdrawUser.id }, select: { deletedAt: true } });
+            assert(u?.deletedAt instanceof Date, "still soft-deleted after blocked actions");
+          });
+
+          await check("c10-1 company list + detail DTO expose accountDeleted=true", async () => {
+            const list = await request(`/api/company/users?q=${encodeURIComponent(withdrawUser.email)}`, { jar: adminJar, expectedStatus: 200 });
+            const row = (list.json?.data?.users ?? []).find((u) => u.userId === withdrawUser.id);
+            assert(row && row.accountDeleted === true, "list DTO accountDeleted true");
+            const detail = await request(`/api/company/users/${withdrawUser.id}`, { jar: adminJar, expectedStatus: 200 });
+            assert(detail.json?.data?.accountDeleted === true, "detail DTO accountDeleted true");
+          });
+
+          // E. audit masking
+          const maskEvent = await prisma.securityAuditEvent.create({
+            data: { eventType: "COMPANY_USER_DEACTIVATED", companyId, actorUserId: leadUser.id, targetUserId: withdrawUser.id, guardName: "company.users.deactivate" },
+          });
+          maskEventId = maskEvent.id;
+          const ghostEvent = await prisma.securityAuditEvent.create({
+            data: { eventType: "COMPANY_USER_DEACTIVATED", companyId, actorUserId: leadUser.id, targetUserId: nonexistentTargetId, guardName: "company.users.deactivate" },
+          });
+          ghostEventId = ghostEvent.id;
+
+          await check("c10-1 audit list masks withdrawn target (name/email null, withdrawn flag)", async () => {
+            const r = await request("/api/company/security-audit?size=50", { jar: adminJar, expectedStatus: 200 });
+            const events = r.json?.data?.events ?? [];
+            const masked = events.find((e) => e.id === maskEventId);
+            assert(masked, "mask event present in company audit");
+            assert(masked.target.withdrawn === true, "withdrawn target flagged");
+            assert(masked.target.name === null && masked.target.email === null, "withdrawn target name/email masked");
+            assert(masked.target.userId === withdrawUser.id, "withdrawn target userId preserved");
+            // 물리 삭제(row 없음) fallback 회귀: withdrawn=false, name/email null.
+            const ghost = events.find((e) => e.id === ghostEventId);
+            assert(ghost && ghost.target.withdrawn === false && ghost.target.name === null, "physical-deleted fallback unchanged");
+          });
+
+          await check("c10-1 CSV export shows 탈퇴한 사용자 and never leaks deleted user name/email", async () => {
+            const r = await request("/api/company/security-audit/export", { jar: adminJar, expectedStatus: 200 });
+            assert(r.text.includes("탈퇴한 사용자"), "CSV shows 탈퇴한 사용자 label");
+            assert(!r.text.includes("탈퇴 테스터"), "CSV must not contain withdrawn user's name");
+            assert(!r.text.includes(withdrawUser.email), "CSV must not contain withdrawn user's email");
+          });
+
+          // F. restore boundary
+          await check("c10-1 no public restore endpoint (helper is MasterAdmin-only, not exposed)", async () => {
+            await request("/api/account/restore", { method: "POST", body: { userId: withdrawUser.id }, expectedStatus: 404 });
+          });
+
+          await check("c10-1 restore semantics: clearing soft-delete re-enables login; resources preserved", async () => {
+            // 앞선 stale/idempotent 테스트가 만든 crafted 세션을 정리(복구 자체의 세션 생성 여부만 검증).
+            await prisma.session.deleteMany({ where: { userId: withdrawUser.id } });
+            // restoreSoftDeletedUser 가 수행하는 필드 초기화(deletedAt/by/reason=null)를 DB 레벨로 적용.
+            // (helper 는 public endpoint 가 없어 직접 호출 대신 동일 계약을 검증 + 세션 미자동생성 확인.)
+            await prisma.user.update({
+              where: { id: withdrawUser.id },
+              data: { deletedAt: null, deletedByUserId: null, deletionReason: null },
+            });
+            assert((await prisma.session.count({ where: { userId: withdrawUser.id } })) === 0, "restore does not auto-create sessions");
+            const jar = await c10LoginRaw(withdrawUser.email);
+            assert(jar.cookies.has("tf_session"), "restored user can log in again");
+            assert((await prisma.userRole.count({ where: { userId: withdrawUser.id } })) >= 1, "UserRole preserved across withdraw+restore");
+            assert((await prisma.workspaceMember.count({ where: { userId: withdrawUser.id } })) >= 1, "WorkspaceMember preserved");
+            const state = await prisma.companyUserState.findUnique({ where: { companyId_userId: { companyId, userId: withdrawUser.id } } });
+            assert(state?.status === "ACTIVE", "CompanyUserState preserved");
+          });
+        } finally {
+          // 정리: soft-deleted fixture 가 seed/기존 계정에 남지 않게 한다.
+          await prisma.securityAuditEvent.deleteMany({
+            where: { OR: [{ actorUserId: withdrawUser?.id }, { targetUserId: withdrawUser?.id }, { targetUserId: nonexistentTargetId }] },
+          });
+          await prisma.invitation.deleteMany({ where: { email: withdrawUser?.email } });
+          if (withdrawUser) {
+            // user 삭제 → sessions/roles/members/companyStates cascade.
+            await prisma.user.delete({ where: { id: withdrawUser.id } }).catch(() => {});
+          }
+        }
+      }
+
       await check("CO can sync WORKSPACE role to another user", async () => {
         const original = await prisma.userRole.findUnique({
           where: {

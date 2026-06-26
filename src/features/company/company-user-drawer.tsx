@@ -246,7 +246,9 @@ export function CompanyUserDrawer({
         state.kind === "ready" ? (
           <div className="flex items-center justify-between gap-3">
             <div className="min-h-[1.25rem] text-sm">
-              {saveError ? (
+              {state.detail.accountDeleted ? (
+                <span className="text-[var(--danger-text)]">탈퇴한 계정은 권한을 변경할 수 없습니다.</span>
+              ) : saveError ? (
                 <span className="text-[var(--danger-text)]">{saveError}</span>
               ) : saveOk ? (
                 <span className="inline-flex items-center gap-1 text-emerald-600">
@@ -267,7 +269,7 @@ export function CompanyUserDrawer({
               <button
                 type="button"
                 onClick={handleSave}
-                disabled={!dirty || saving}
+                disabled={!dirty || saving || state.detail.accountDeleted}
                 className="h-9 rounded-md bg-[var(--brand-primary)] px-4 text-sm font-medium text-white hover:bg-[var(--brand-primary-hover)] disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {saving ? "저장 중…" : "저장"}
@@ -408,16 +410,22 @@ function ProfileTab({
           <dd className="text-[var(--text-secondary)]">{detail.email}</dd>
           <dt className="text-[var(--text-tertiary)]">상태</dt>
           <dd>
-            <span
-              className={cn(
-                "inline-flex h-6 items-center rounded-full px-2.5 text-xs font-medium ring-1 ring-inset",
-                detail.status === "ACTIVE"
-                  ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
-                  : "bg-[var(--bg-muted)] text-[var(--text-tertiary)] ring-[var(--border-default)]",
-              )}
-            >
-              {detail.status === "ACTIVE" ? "활성" : "비활성"}
-            </span>
+            {detail.accountDeleted ? (
+              <span className="inline-flex h-6 items-center rounded-full bg-red-50 px-2.5 text-xs font-medium text-red-700 ring-1 ring-inset ring-red-200">
+                계정 탈퇴
+              </span>
+            ) : (
+              <span
+                className={cn(
+                  "inline-flex h-6 items-center rounded-full px-2.5 text-xs font-medium ring-1 ring-inset",
+                  detail.status === "ACTIVE"
+                    ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+                    : "bg-[var(--bg-muted)] text-[var(--text-tertiary)] ring-[var(--border-default)]",
+                )}
+              >
+                {detail.status === "ACTIVE" ? "활성" : "비활성"}
+              </span>
+            )}
           </dd>
           <dt className="text-[var(--text-tertiary)]">회사</dt>
           <dd className="text-[var(--text-secondary)]">{detail.company.name}</dd>
@@ -426,7 +434,15 @@ function ProfileTab({
 
       <section>
         <h3 className="mb-2 text-sm font-semibold text-[var(--text-primary)]">계정 상태</h3>
-        {detail.status === "ACTIVE" ? (
+        {detail.accountDeleted ? (
+          // c10-1: 전역 탈퇴 계정 — Company 단위 활성/비활성 변경 불가(읽기 전용 안내).
+          <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3">
+            <p className="text-sm text-red-700">
+              이 사용자는 서비스 계정을 탈퇴했습니다. Company 활성/비활성 및 권한 변경을 할 수 없으며,
+              복구는 관리자(MasterAdmin)를 통해서만 가능합니다.
+            </p>
+          </div>
+        ) : detail.status === "ACTIVE" ? (
           <div className="rounded-md border border-[var(--border-default)] px-4 py-3">
             <p className="text-sm text-[var(--text-secondary)]">
               비활성화하면 이 Company의 Workspace/Project 접근이 차단됩니다. (권한 데이터는 유지)
@@ -523,6 +539,13 @@ function RolesTab({
 
   return (
     <div className="space-y-6 px-6 py-5">
+      {detail.accountDeleted && (
+        // c10-1: 탈퇴 계정은 권한 변경 불가 — 매트릭스는 읽기 전용으로 비활성화한다(서버도 409 차단).
+        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          탈퇴한 계정의 권한은 변경할 수 없습니다.
+        </div>
+      )}
+      <div className={cn(detail.accountDeleted && "pointer-events-none opacity-50")} aria-disabled={detail.accountDeleted}>
       {/* Company Role */}
       <section>
         <h3 className="mb-2 text-sm font-semibold text-[var(--text-primary)]">Company 권한</h3>
@@ -621,6 +644,7 @@ function RolesTab({
           </div>
         )}
       </section>
+      </div>
     </div>
   );
 }

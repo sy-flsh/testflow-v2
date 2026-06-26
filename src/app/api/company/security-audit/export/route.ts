@@ -89,13 +89,21 @@ export async function GET(request: Request) {
       const actor = auditUserRef(event.actorUserId, userMap);
       const target = auditUserRef(event.targetUserId, userMap);
 
-      // actor 없음 → "시스템"; 삭제된(name null & userId 있음) → "삭제된 사용자".
-      const actorName = !actor ? "시스템" : actor.name ?? "삭제된 사용자";
-      const actorEmail = actor?.email ?? "";
+      // actor 없음 → "시스템"; c10-1 탈퇴 → "탈퇴한 사용자"(name/email 미노출); 물리 삭제 → "삭제된 사용자".
+      const actorName = !actor
+        ? "시스템"
+        : actor.withdrawn
+          ? "탈퇴한 사용자"
+          : actor.name ?? "삭제된 사용자";
+      const actorEmail = actor?.email ?? ""; // 탈퇴/삭제 사용자는 null → 빈 값(미노출).
       const actorId = actor?.userId ?? "";
 
-      // target 없음 → 모든 컬럼 빈 값; 삭제된 → "삭제된 사용자" + userId.
-      const targetName = !target ? "" : target.name ?? "삭제된 사용자";
+      // target 없음 → 모든 컬럼 빈 값; 탈퇴 → "탈퇴한 사용자"; 물리 삭제 → "삭제된 사용자".
+      const targetName = !target
+        ? ""
+        : target.withdrawn
+          ? "탈퇴한 사용자"
+          : target.name ?? "삭제된 사용자";
       const targetEmail = target?.email ?? "";
       const targetId = target?.userId ?? "";
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { Bell, ChevronDown, LogOut, Search } from "lucide-react";
+import { Bell, ChevronDown, LogOut, Search, UserCog } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -77,6 +77,16 @@ export function TopHeader() {
         <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--brand-secondary)] text-xs font-semibold text-white">
           {avatarLabel}
         </div>
+        {auth ? (
+          <Link
+            href="/settings/account"
+            className="flex h-9 w-9 items-center justify-center rounded-md text-[var(--text-secondary)] hover:bg-[var(--bg-muted)]"
+            aria-label="계정 설정"
+            title="계정 설정"
+          >
+            <UserCog className="tf-icon h-4 w-4" />
+          </Link>
+        ) : null}
         {auth ? (
           <button
             type="button"

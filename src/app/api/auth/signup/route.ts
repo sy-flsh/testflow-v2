@@ -1,6 +1,7 @@
 import { apiError, apiSuccess } from "@/lib/api/response";
 import { readJsonBody, readTrimmedString } from "@/lib/api/request";
 import { prisma } from "@/lib/db/prisma";
+import { USER_ACCOUNT_DELETED_CODE, USER_ACCOUNT_DELETED_MESSAGE } from "@/lib/auth/account";
 import { mapAuthPayload } from "@/lib/auth/me";
 import { createSession } from "@/lib/auth/session";
 import { hashPassword, validatePassword } from "@/lib/auth/password";
@@ -58,10 +59,15 @@ export async function POST(request: Request) {
 
     const existingUser = await prisma.user.findUnique({
       where: { email },
-      select: { id: true },
+      select: { id: true, deletedAt: true },
     });
 
     if (existingUser) {
+      // c10-1: 탈퇴(soft-deleted) 이메일은 새 계정을 만들지 않고 전용 코드로 막는다.
+      // (이메일 unique 보존 — alias/tombstone 미사용, 복구는 MasterAdmin 경로.)
+      if (existingUser.deletedAt) {
+        return apiError(USER_ACCOUNT_DELETED_MESSAGE, 403, USER_ACCOUNT_DELETED_CODE);
+      }
       return apiError("이미 가입된 이메일입니다.", 409, "AUTH_EMAIL_EXISTS");
     }
 
