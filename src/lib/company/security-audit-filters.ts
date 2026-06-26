@@ -14,6 +14,19 @@ export const COMPANY_SECURITY_AUDIT_EVENT_TYPES: SecurityAuditEventTypeFilter[] 
 ];
 export const COMPANY_SECURITY_AUDIT_SORTS: SecurityAuditSort[] = ["newest", "oldest"];
 
+/** 이벤트 유형 한글 라벨(서버 CSV/클라이언트 표시 공용). */
+export const SECURITY_AUDIT_EVENT_LABELS: Record<string, string> = {
+  COMPANY_USER_DEACTIVATED: "사용자 비활성화",
+  COMPANY_USER_REACTIVATED: "사용자 활성화",
+  INACTIVE_COMPANY_ACCESS_DENIED: "비활성 사용자 접근 차단",
+};
+
+/** c9-8: CSV export 안전 상한(기본 10000, 1 이상 정수 외 10000 fallback, 환경변수 override 가능). */
+export function getSecurityAuditExportLimit(): number {
+  const parsed = Number(process.env.SECURITY_AUDIT_EXPORT_LIMIT);
+  return Number.isInteger(parsed) && parsed >= 1 ? parsed : 10000;
+}
+
 export const DEFAULT_SECURITY_AUDIT_FILTERS = {
   eventType: "ALL" as SecurityAuditEventTypeFilter,
   from: "",

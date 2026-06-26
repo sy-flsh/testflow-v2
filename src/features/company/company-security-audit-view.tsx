@@ -1,12 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { ScrollText, ShieldAlert } from "lucide-react";
+import { Download, ScrollText, ShieldAlert } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { EmptyState } from "@/components/common/empty-state";
 import {
   COMPANY_SECURITY_AUDIT_EVENT_TYPES,
   COMPANY_SECURITY_AUDIT_SIZES,
+  SECURITY_AUDIT_EVENT_LABELS,
   normalizeSecurityAuditDate,
   normalizeSecurityAuditEventType,
   normalizeSecurityAuditPage,
@@ -19,19 +20,25 @@ import type {
   SecurityAuditEventDto,
   SecurityAuditEventTypeFilter,
   SecurityAuditSort,
+  SecurityAuditSummary,
   SecurityAuditUserRef,
 } from "@/lib/company/types";
 import { cn } from "@/lib/utils";
+import { CompanyUserDrawer } from "./company-user-drawer";
 
 type LoadState =
   | { kind: "loading" }
   | { kind: "forbidden" }
   | { kind: "error"; message: string }
-  | { kind: "ready"; events: SecurityAuditEventDto[]; pagination: InvitationPagination };
+  | {
+      kind: "ready";
+      events: SecurityAuditEventDto[];
+      pagination: InvitationPagination;
+      summary: SecurityAuditSummary;
+    };
 
 type AuditParamPatch = Record<string, string | number | null>;
 
-// URL 기본값(생략) — security-audit 전용 prefix(auditX)라 다른 화면 query 와 충돌하지 않는다.
 const PARAM_DEFAULTS: Record<string, string | number> = {
   auditType: "ALL",
   auditSort: "newest",
@@ -41,10 +48,8 @@ const PARAM_DEFAULTS: Record<string, string | number> = {
 
 const EVENT_TYPE_LABELS: Record<SecurityAuditEventTypeFilter, string> = {
   ALL: "전체",
-  COMPANY_USER_DEACTIVATED: "사용자 비활성화",
-  COMPANY_USER_REACTIVATED: "사용자 활성화",
-  INACTIVE_COMPANY_ACCESS_DENIED: "비활성 사용자 접근 차단",
-};
+  ...SECURITY_AUDIT_EVENT_LABELS,
+} as Record<SecurityAuditEventTypeFilter, string>;
 
 const EVENT_BADGE_STYLES: Record<string, string> = {
   COMPANY_USER_DEACTIVATED: "bg-[var(--bg-muted)] text-[var(--text-secondary)] ring-[var(--border-default)]",
@@ -56,6 +61,25 @@ const SORT_OPTIONS: Array<{ value: SecurityAuditSort; label: string }> = [
   { value: "newest", label: "최신순" },
   { value: "oldest", label: "오래된순" },
 ];
+
+// --- UTC 날짜 helper (audit API 가 UTC day boundary 를 사용) ---
+function todayUtc(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+function daysAgoUtc(days: number): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - days);
+  return d.toISOString().slice(0, 10);
+}
+type PresetKey = "all" | "today" | "7d" | "30d";
+function activePreset(from: string, to: string): PresetKey | null {
+  if (!from && !to) return "all";
+  const today = todayUtc();
+  if (from === today && to === today) return "today";
+  if (from === daysAgoUtc(6) && to === today) return "7d";
+  if (from === daysAgoUtc(29) && to === today) return "30d";
+  return null;
+}
 
 export function CompanySecurityAuditView() {
   const router = useRouter();
@@ -76,8 +100,12 @@ export function CompanySecurityAuditView() {
   const [state, setState] = useState<LoadState>({ kind: "loading" });
   const [userDraft, setUserDraft] = useState(params.user);
   const [guardDraft, setGuardDraft] = useState(params.guard);
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   const { eventType, from, to, user, guard, page, size, sort } = params;
+  const preset = activePreset(from, to);
 
   useEffect(() => {
     setUserDraft(user);
@@ -109,19 +137,28 @@ export function CompanySecurityAuditView() {
     [searchParams, pathname, router],
   );
 
+  // 현재 필터 → API query string (page/size 포함). export 는 page/size 제외.
+  const buildQuery = useCallback(
+    (includePaging: boolean) => {
+      const sp = new URLSearchParams();
+      if (eventType !== "ALL") sp.set("eventType", eventType);
+      if (from) sp.set("from", from);
+      if (to) sp.set("to", to);
+      if (user) sp.set("user", user);
+      if (guard) sp.set("guard", guard);
+      if (sort !== "newest") sp.set("sort", sort);
+      if (includePaging) {
+        if (size !== 20) sp.set("size", String(size));
+        if (page !== 1) sp.set("page", String(page));
+      }
+      return sp.toString();
+    },
+    [eventType, from, to, user, guard, sort, size, page],
+  );
+
   const load = useCallback(async () => {
     setState({ kind: "loading" });
-
-    const sp = new URLSearchParams();
-    if (eventType !== "ALL") sp.set("eventType", eventType);
-    if (from) sp.set("from", from);
-    if (to) sp.set("to", to);
-    if (user) sp.set("user", user);
-    if (guard) sp.set("guard", guard);
-    if (sort !== "newest") sp.set("sort", sort);
-    if (size !== 20) sp.set("size", String(size));
-    if (page !== 1) sp.set("page", String(page));
-    const query = sp.toString();
+    const query = buildQuery(true);
 
     try {
       const response = await fetch(
@@ -130,7 +167,11 @@ export function CompanySecurityAuditView() {
       );
       const payload = (await response.json().catch(() => null)) as
         | {
-            data?: { events: SecurityAuditEventDto[]; pagination: InvitationPagination };
+            data?: {
+              events: SecurityAuditEventDto[];
+              pagination: InvitationPagination;
+              summary: SecurityAuditSummary;
+            };
             error?: { message?: string };
           }
         | null;
@@ -147,7 +188,12 @@ export function CompanySecurityAuditView() {
         return;
       }
 
-      setState({ kind: "ready", events: payload.data.events, pagination: payload.data.pagination });
+      setState({
+        kind: "ready",
+        events: payload.data.events,
+        pagination: payload.data.pagination,
+        summary: payload.data.summary,
+      });
 
       if (payload.data.pagination.page !== page) {
         updateUrl({ auditPage: payload.data.pagination.page }, { replace: true });
@@ -155,11 +201,47 @@ export function CompanySecurityAuditView() {
     } catch {
       setState({ kind: "error", message: "보안 감사 로그를 불러오지 못했습니다." });
     }
-  }, [eventType, from, to, user, guard, sort, size, page, updateUrl]);
+  }, [buildQuery, page, updateUrl]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  async function handleExport() {
+    setExporting(true);
+    setExportError(null);
+    const query = buildQuery(false);
+    try {
+      const response = await fetch(
+        `/api/company/security-audit/export${query ? `?${query}` : ""}`,
+        { cache: "no-store" },
+      );
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as
+          | { error?: { message?: string } }
+          | null;
+        setExportError(payload?.error?.message ?? "보안 감사 로그를 내보내지 못했습니다.");
+        return;
+      }
+      const blob = await response.blob();
+      const disposition = response.headers.get("Content-Disposition") ?? "";
+      const match = disposition.match(/filename="([^"]+)"/);
+      const filename = match?.[1] ?? "security-audit.csv";
+
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch {
+      setExportError("내보내기에 실패했습니다. 네트워크 상태를 확인해 주세요.");
+    } finally {
+      setExporting(false);
+    }
+  }
 
   const hasFilter =
     eventType !== "ALL" || Boolean(from) || Boolean(to) || Boolean(user) || Boolean(guard);
@@ -177,6 +259,16 @@ export function CompanySecurityAuditView() {
     });
   }
 
+  function applyPreset(key: PresetKey) {
+    if (key === "all") {
+      updateUrl({ auditFrom: null, auditTo: null, auditPage: null });
+      return;
+    }
+    const today = todayUtc();
+    const fromDate = key === "today" ? today : key === "7d" ? daysAgoUtc(6) : daysAgoUtc(29);
+    updateUrl({ auditFrom: fromDate, auditTo: today, auditPage: null });
+  }
+
   if (state.kind === "forbidden") {
     return (
       <EmptyState
@@ -187,8 +279,59 @@ export function CompanySecurityAuditView() {
     );
   }
 
+  const summary = state.kind === "ready" ? state.summary : null;
+
   return (
     <div className="space-y-4">
+      {/* 통계 카드 (현재 date/user/guard 기준, eventType 무관) */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <SummaryCard label="전체 이벤트" value={summary?.total} tone="neutral" />
+        <SummaryCard label="사용자 비활성화" value={summary?.byEventType.COMPANY_USER_DEACTIVATED} tone="neutral" />
+        <SummaryCard label="사용자 활성화" value={summary?.byEventType.COMPANY_USER_REACTIVATED} tone="emerald" />
+        <SummaryCard label="비활성 사용자 접근 차단" value={summary?.byEventType.INACTIVE_COMPANY_ACCESS_DENIED} tone="amber" />
+      </div>
+      <p className="text-xs text-[var(--text-tertiary)]">
+        통계 카드는 현재 기간·사용자·Guard 조건 기준이며, 이벤트 유형 선택과 무관하게 전체 유형을 비교합니다. 기간은 UTC 기준으로 조회됩니다.
+      </p>
+
+      {/* 기간 프리셋 + 내보내기 */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap gap-1">
+          {([
+            ["all", "전체"],
+            ["today", "오늘"],
+            ["7d", "최근 7일"],
+            ["30d", "최근 30일"],
+          ] as Array<[PresetKey, string]>).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => applyPreset(key)}
+              className={cn(
+                "h-8 rounded-md px-3 text-xs font-medium ring-1 ring-inset transition-colors",
+                preset === key
+                  ? "bg-[var(--brand-primary)] text-white ring-[var(--brand-primary)]"
+                  : "bg-white text-[var(--text-secondary)] ring-[var(--border-default)] hover:bg-[var(--bg-subtle)]",
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-2">
+          {exportError && <span className="text-xs text-[var(--danger-text)]">{exportError}</span>}
+          <button
+            type="button"
+            onClick={handleExport}
+            disabled={exporting}
+            className="inline-flex h-9 items-center gap-1.5 rounded-md border border-[var(--border-default)] bg-white px-3 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <Download className="h-4 w-4" />
+            {exporting ? "내보내는 중…" : "CSV 내보내기"}
+          </button>
+        </div>
+      </div>
+
       {/* 필터 */}
       <div className="flex flex-wrap items-end gap-2">
         <div className="flex flex-wrap gap-1">
@@ -343,16 +486,14 @@ export function CompanySecurityAuditView() {
                       </span>
                     </td>
                     <td className="px-4 py-3">
-                      <ActorCell user={event.actor} />
+                      <UserCell user={event.actor} emptyLabel="시스템" onOpen={setSelectedUserId} />
                     </td>
                     <td className="px-4 py-3">
-                      <TargetCell user={event.target} />
+                      <UserCell user={event.target} emptyLabel="-" onOpen={setSelectedUserId} />
                     </td>
                     <td className="px-4 py-3">
                       {event.guardName ? (
-                        <span className="font-mono text-xs text-[var(--text-tertiary)]">
-                          {event.guardName}
-                        </span>
+                        <span className="font-mono text-xs text-[var(--text-tertiary)]">{event.guardName}</span>
                       ) : (
                         <span className="text-xs text-[var(--text-tertiary)]">-</span>
                       )}
@@ -366,6 +507,38 @@ export function CompanySecurityAuditView() {
           <Pagination pagination={state.pagination} onParamsChange={updateUrl} />
         </>
       )}
+
+      {selectedUserId && (
+        <CompanyUserDrawer
+          userId={selectedUserId}
+          onClose={() => setSelectedUserId(null)}
+          onSaved={() => undefined}
+          onStatusChanged={() => undefined}
+        />
+      )}
+    </div>
+  );
+}
+
+function SummaryCard({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number | undefined;
+  tone: "neutral" | "emerald" | "amber";
+}) {
+  const toneClass =
+    tone === "emerald"
+      ? "text-emerald-700"
+      : tone === "amber"
+        ? "text-amber-700"
+        : "text-[var(--text-primary)]";
+  return (
+    <div className="rounded-lg border border-[var(--border-default)] bg-white px-4 py-3">
+      <div className="text-xs text-[var(--text-tertiary)]">{label}</div>
+      <div className={cn("mt-1 text-2xl font-semibold", toneClass)}>{value ?? "—"}</div>
     </div>
   );
 }
@@ -405,35 +578,39 @@ function SearchInput({
   );
 }
 
-function ActorCell({ user }: { user: SecurityAuditUserRef | null }) {
+function UserCell({
+  user,
+  emptyLabel,
+  onOpen,
+}: {
+  user: SecurityAuditUserRef | null;
+  emptyLabel: string;
+  onOpen: (userId: string) => void;
+}) {
   if (!user) {
-    return <span className="text-[var(--text-tertiary)]">시스템</span>;
+    return <span className="text-[var(--text-tertiary)]">{emptyLabel}</span>;
   }
-  return <UserName user={user} />;
-}
 
-function TargetCell({ user }: { user: SecurityAuditUserRef | null }) {
-  if (!user) {
-    return <span className="text-[var(--text-tertiary)]">-</span>;
-  }
-  return <UserName user={user} />;
-}
-
-function UserName({ user }: { user: SecurityAuditUserRef }) {
-  if (user.name) {
+  // 삭제된 사용자(name/email null): 클릭 불가.
+  if (user.name === null && user.email === null) {
     return (
       <div>
-        <div className="font-medium text-[var(--text-primary)]">{user.name}</div>
-        {user.email && <div className="text-xs text-[var(--text-tertiary)]">{user.email}</div>}
+        <div className="text-[var(--text-secondary)]">삭제된 사용자</div>
+        <div className="font-mono text-xs text-[var(--text-tertiary)]">{user.userId.slice(0, 8)}</div>
       </div>
     );
   }
-  // 삭제된 사용자: name/email 없음 → userId fallback.
+
+  // 존재하는 사용자: 클릭 시 상세 Drawer.
   return (
-    <div>
-      <div className="text-[var(--text-secondary)]">삭제된 사용자</div>
-      <div className="font-mono text-xs text-[var(--text-tertiary)]">{user.userId.slice(0, 8)}</div>
-    </div>
+    <button
+      type="button"
+      onClick={() => onOpen(user.userId)}
+      className="text-left hover:underline"
+    >
+      <div className="font-medium text-[var(--brand-primary)]">{user.name}</div>
+      {user.email && <div className="text-xs text-[var(--text-tertiary)]">{user.email}</div>}
+    </button>
   );
 }
 

@@ -122,10 +122,21 @@ export type SecurityAuditEventDto = {
   // metadata/throttle/internal 은 절대 포함하지 않는다.
 };
 
+/** c9-8: 현재 필터(eventType 제외, date/user/guard 적용) 기준 유형별 통계. */
+export type SecurityAuditSummary = {
+  total: number;
+  byEventType: {
+    COMPANY_USER_DEACTIVATED: number;
+    COMPANY_USER_REACTIVATED: number;
+    INACTIVE_COMPANY_ACCESS_DENIED: number;
+  };
+};
+
 export type CompanySecurityAuditListDto = {
   companyId: string;
   events: SecurityAuditEventDto[];
   pagination: InvitationPagination;
+  summary: SecurityAuditSummary;
   filters: {
     eventType: SecurityAuditEventTypeFilter;
     from: string | null;

@@ -1,36 +1,30 @@
-import type { Prisma } from "@prisma/client";
 import { apiError, apiSuccess } from "@/lib/api/response";
 import {
   authGuardErrorResponse,
   isAuthGuardError,
   requireCompanyOwner,
 } from "@/lib/auth/guards";
+import { normalizeSecurityAuditPage, normalizeSecurityAuditSize } from "@/lib/company/security-audit-filters";
 import {
-  normalizeSecurityAuditDate,
-  normalizeSecurityAuditEventType,
-  normalizeSecurityAuditPage,
-  normalizeSecurityAuditQuery,
-  normalizeSecurityAuditSize,
-  normalizeSecurityAuditSort,
-} from "@/lib/company/security-audit-filters";
-import type {
-  SecurityAuditEventDto,
-  SecurityAuditUserRef,
-} from "@/lib/company/types";
+  auditUserRef,
+  buildSecurityAuditWhere,
+  loadAuditUserMap,
+  parseSecurityAuditFilters,
+  resolveMatchedUserIds,
+  securityAuditOrderBy,
+} from "@/lib/company/security-audit-query";
+import type { SecurityAuditEventDto, SecurityAuditSummary } from "@/lib/company/types";
 import { prisma } from "@/lib/db/prisma";
 
 export const runtime = "nodejs";
 
 /**
- * c9-7: Company 보안 감사 로그 조회 (read-only, CO 전용).
+ * c9-7/c9-8: Company 보안 감사 로그 조회 (read-only, CO 전용) + 유형별 summary.
  * GET /api/company/security-audit?eventType=ALL&from=&to=&user=&guard=&page=1&size=20&sort=newest
  *
  * - requireCompanyOwner: 비CO 403 AUTH_FORBIDDEN, INACTIVE CO 403 USER_INACTIVE(c9-1/c9-4).
  * - 범위: SecurityAuditEvent.companyId = 현재 CO Company 만(companyId null·타 Company 미포함).
- * - 날짜는 UTC day boundary(from=00:00:00.000Z inclusive, to=23:59:59.999Z inclusive),
- *   잘못된 날짜/형식은 해당 필터만 무시, from>to 면 날짜 필터 전체 해제(fallback).
- * - user 검색: 현재 이름/이메일 contains 로 매칭되는 userId 집합을 actor/target IN 으로 DB 필터(total 정확).
- *   삭제된 User 는 audit event 가 남고 actor/target name/email 은 null + userId 유지.
+ * - summary: 현재 date/user/guard 필터 적용, **eventType 필터는 제외**(유형별 비교 유지). page/size 무관.
  * - metadata/throttleKey/internal/raw 민감정보는 응답에 포함하지 않는다.
  */
 export async function GET(request: Request) {
@@ -38,62 +32,33 @@ export async function GET(request: Request) {
     const { companyId } = await requireCompanyOwner();
 
     const url = new URL(request.url);
-    const eventType = normalizeSecurityAuditEventType(url.searchParams.get("eventType"));
-    const sort = normalizeSecurityAuditSort(url.searchParams.get("sort"));
+    const filters = parseSecurityAuditFilters(url.searchParams);
     const size = normalizeSecurityAuditSize(url.searchParams.get("size"));
     const requestedPage = normalizeSecurityAuditPage(url.searchParams.get("page"));
-    const user = normalizeSecurityAuditQuery(url.searchParams.get("user"));
-    const guard = normalizeSecurityAuditQuery(url.searchParams.get("guard"));
 
-    let from = normalizeSecurityAuditDate(url.searchParams.get("from"));
-    let to = normalizeSecurityAuditDate(url.searchParams.get("to"));
+    // user 검색 매칭 ID 는 list/summary 공용으로 1회만 조회.
+    const matchedIds = await resolveMatchedUserIds(filters.user);
 
-    // from > to 면 모호함을 피하기 위해 날짜 필터 전체를 해제한다(swap 하지 않음).
-    if (from && to && from > to) {
-      from = null;
-      to = null;
-    }
+    const listWhere = buildSecurityAuditWhere({
+      companyId,
+      filters,
+      matchedIds,
+      includeEventType: true,
+    });
+    const summaryWhere = buildSecurityAuditWhere({
+      companyId,
+      filters,
+      matchedIds,
+      includeEventType: false,
+    });
 
-    const occurredAt: Prisma.DateTimeFilter = {};
-    if (from) {
-      occurredAt.gte = new Date(`${from}T00:00:00.000Z`);
-    }
-    if (to) {
-      occurredAt.lte = new Date(`${to}T23:59:59.999Z`);
-    }
-
-    const where: Prisma.SecurityAuditEventWhereInput = {
-      companyId, // 현재 Company 로 범위 확정(companyId null·타 Company 자동 제외)
-      ...(eventType !== "ALL" ? { eventType } : {}),
-      ...(from || to ? { occurredAt } : {}),
-      ...(guard ? { guardName: { contains: guard, mode: "insensitive" as const } } : {}),
-    };
-
-    // user 검색: 이름/이메일 contains 로 매칭되는 userId → actor/target IN 으로 DB 필터.
-    if (user) {
-      const matched = await prisma.user.findMany({
-        where: {
-          OR: [
-            { name: { contains: user, mode: "insensitive" } },
-            { email: { contains: user, mode: "insensitive" } },
-          ],
-        },
-        select: { id: true },
-      });
-      const matchedIds = matched.map((u) => u.id);
-      where.OR = [{ actorUserId: { in: matchedIds } }, { targetUserId: { in: matchedIds } }];
-    }
-
-    const total = await prisma.securityAuditEvent.count({ where });
+    const total = await prisma.securityAuditEvent.count({ where: listWhere });
     const totalPages = Math.ceil(total / size);
     const page = total === 0 ? 1 : Math.min(Math.max(1, requestedPage), totalPages);
 
     const events = await prisma.securityAuditEvent.findMany({
-      where,
-      orderBy:
-        sort === "oldest"
-          ? [{ occurredAt: "asc" }, { id: "asc" }]
-          : [{ occurredAt: "desc" }, { id: "desc" }],
+      where: listWhere,
+      orderBy: securityAuditOrderBy(filters.sort),
       skip: (page - 1) * size,
       take: size,
       select: {
@@ -103,42 +68,37 @@ export async function GET(request: Request) {
         guardName: true,
         actorUserId: true,
         targetUserId: true,
-        // metadata 등은 select 하지 않는다.
       },
     });
 
-    // actor/target userId dedupe 후 단일 bulk 조회(N+1 금지).
-    const userIds = Array.from(
-      new Set(
-        events.flatMap((event) =>
-          [event.actorUserId, event.targetUserId].filter((id): id is string => Boolean(id)),
-        ),
-      ),
-    );
-    const users = userIds.length
-      ? await prisma.user.findMany({
-          where: { id: { in: userIds } },
-          select: { id: true, name: true, email: true },
-        })
-      : [];
-    const userMap = new Map(users.map((u) => [u.id, u]));
-
-    const ref = (userId: string | null): SecurityAuditUserRef | null => {
-      if (!userId) {
-        return null;
-      }
-      const u = userMap.get(userId);
-      return { userId, name: u?.name ?? null, email: u?.email ?? null };
-    };
-
+    const userMap = await loadAuditUserMap(events);
     const items: SecurityAuditEventDto[] = events.map((event) => ({
       id: event.id,
       eventType: event.eventType,
       occurredAt: event.occurredAt.toISOString(),
       guardName: event.guardName,
-      actor: ref(event.actorUserId),
-      target: ref(event.targetUserId),
+      actor: auditUserRef(event.actorUserId, userMap),
+      target: auditUserRef(event.targetUserId, userMap),
     }));
+
+    // summary: eventType 제외 필터 기준 유형별 count.
+    const grouped = await prisma.securityAuditEvent.groupBy({
+      by: ["eventType"],
+      where: summaryWhere,
+      _count: { _all: true },
+    });
+    const summary: SecurityAuditSummary = {
+      total: 0,
+      byEventType: {
+        COMPANY_USER_DEACTIVATED: 0,
+        COMPANY_USER_REACTIVATED: 0,
+        INACTIVE_COMPANY_ACCESS_DENIED: 0,
+      },
+    };
+    for (const row of grouped) {
+      summary.byEventType[row.eventType] = row._count._all;
+      summary.total += row._count._all;
+    }
 
     return apiSuccess({
       companyId,
@@ -151,13 +111,14 @@ export async function GET(request: Request) {
         hasPrevious: page > 1,
         hasNext: page < totalPages,
       },
+      summary,
       filters: {
-        eventType,
-        from: from || null,
-        to: to || null,
-        user: user || null,
-        guard: guard || null,
-        sort,
+        eventType: filters.eventType,
+        from: filters.from,
+        to: filters.to,
+        user: filters.user || null,
+        guard: filters.guard || null,
+        sort: filters.sort,
       },
     });
   } catch (error) {

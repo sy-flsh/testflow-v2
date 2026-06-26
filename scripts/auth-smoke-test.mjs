@@ -12,6 +12,8 @@ const BASE_ORIGIN = new URL(BASE_URL).origin;
 const EXTERNAL_SERVER = process.env.TESTFLOW_EXTERNAL_SERVER === "1";
 const PASSWORD = "password123!";
 const RUN_ID = `${Date.now()}`;
+// c9-8: CSV export 안전 상한을 테스트에서 작게 고정(422 경로를 10001건 없이 검증). 서버가 상속.
+process.env.SECURITY_AUDIT_EXPORT_LIMIT = "5";
 
 const accounts = {
   admin: "qa.lead@testflow.local",
@@ -2980,6 +2982,168 @@ async function main() {
           await prisma.userRole.deleteMany({
             where: { userId: backendUser.id, scopeType: "COMPANY", scopeId: companyId, role: "CO" },
           });
+          if (otherCompanyId) {
+            await prisma.company.delete({ where: { id: otherCompanyId } }).catch(() => {});
+          }
+        }
+      }
+
+      // c9-8: 보안 감사 로그 summary + CSV export
+      {
+        await prisma.securityAuditEvent.deleteMany({});
+        let otherCompanyId = null;
+        let injectUserId = null;
+
+        async function mkEvent(data) {
+          return prisma.securityAuditEvent.create({
+            data: { ...data, occurredAt: new Date(data.occurredAt) },
+          });
+        }
+        async function listAudit(query) {
+          return request(`/api/company/security-audit${query ? `?${query}` : ""}`, {
+            jar: adminJar,
+            expectedStatus: 200,
+          });
+        }
+        async function exportAudit(jar, query, expectedStatus = 200) {
+          return request(`/api/company/security-audit/export${query ? `?${query}` : ""}`, {
+            jar,
+            expectedStatus,
+          });
+        }
+
+        try {
+          const other = await prisma.company.create({
+            data: { name: `C98 Other ${RUN_ID}`, slug: `c98-other-${RUN_ID}` },
+          });
+          otherCompanyId = other.id;
+          const injectUser = await prisma.user.create({
+            data: { name: "=SUM(1,1)", email: `+evil.${RUN_ID}@x.local`, passwordHash: "x" },
+          });
+          injectUserId = injectUser.id;
+
+          // demo 5건
+          await mkEvent({ eventType: "COMPANY_USER_DEACTIVATED", occurredAt: "2026-06-10T12:00:00.000Z", guardName: "company.users.deactivate", actorUserId: leadUser.id, targetUserId: backendUser.id, companyId });
+          await mkEvent({ eventType: "COMPANY_USER_REACTIVATED", occurredAt: "2026-06-15T12:00:00.000Z", guardName: "company.users.activate", actorUserId: leadUser.id, targetUserId: backendUser.id, companyId });
+          await mkEvent({ eventType: "INACTIVE_COMPANY_ACCESS_DENIED", occurredAt: "2026-06-20T12:00:00.000Z", guardName: "requireCurrentWorkspace", actorUserId: null, targetUserId: pmUser.id, companyId });
+          await mkEvent({ eventType: "INACTIVE_COMPANY_ACCESS_DENIED", occurredAt: "2026-06-21T12:00:00.000Z", guardName: "=SUM(1,1)", actorUserId: null, targetUserId: injectUser.id, companyId });
+          await mkEvent({ eventType: "INACTIVE_COMPANY_ACCESS_DENIED", occurredAt: "2026-06-22T12:00:00.000Z", guardName: 'a,b"c\nd', actorUserId: null, targetUserId: pmUser.id, companyId });
+          // 범위 밖
+          await mkEvent({ eventType: "INACTIVE_COMPANY_ACCESS_DENIED", occurredAt: "2026-06-23T12:00:00.000Z", guardName: "OTHERCOMPANY-guard", actorUserId: null, targetUserId: pmUser.id, companyId: other.id });
+          await mkEvent({ eventType: "INACTIVE_COMPANY_ACCESS_DENIED", occurredAt: "2026-06-24T12:00:00.000Z", guardName: "NULLCOMPANY-guard", actorUserId: null, targetUserId: pmUser.id, companyId: null });
+
+          await check("c9-8 summary counts (eventType excluded; total = byEventType sum)", async () => {
+            const r = await listAudit("");
+            const s = r.json.data.summary;
+            assert(s.total === 5, `summary total 5, got ${s.total}`);
+            assert(s.byEventType.COMPANY_USER_DEACTIVATED === 1, "DEACTIVATED 1");
+            assert(s.byEventType.COMPANY_USER_REACTIVATED === 1, "REACTIVATED 1");
+            assert(s.byEventType.INACTIVE_COMPANY_ACCESS_DENIED === 3, "ACCESS_DENIED 3");
+            const sum = s.byEventType.COMPANY_USER_DEACTIVATED + s.byEventType.COMPANY_USER_REACTIVATED + s.byEventType.INACTIVE_COMPANY_ACCESS_DENIED;
+            assert(sum === s.total, "byEventType sum === total");
+          });
+
+          await check("c9-8 eventType filter narrows list but summary stays full", async () => {
+            const r = await listAudit("eventType=COMPANY_USER_DEACTIVATED");
+            assert(r.json.data.pagination.total === 1, "list narrowed to 1");
+            assert(r.json.data.summary.total === 5, "summary unaffected by eventType (still 5)");
+          });
+
+          await check("c9-8 summary applies date/user/guard filters", async () => {
+            const byDate = await listAudit("from=2026-06-20&to=2026-06-22");
+            assert(byDate.json.data.summary.total === 3, "date-filtered summary 3");
+            const byUser = await listAudit(`user=${encodeURIComponent("박개발")}`);
+            assert(byUser.json.data.summary.total === 2, "user backend summary 2");
+            const byGuard = await listAudit("guard=requirecurrent");
+            assert(byGuard.json.data.summary.total === 1, "guard summary 1");
+          });
+
+          await check("c9-8 summary excludes other-company / null-company events", async () => {
+            const r = await listAudit("");
+            assert(r.json.data.summary.total === 5, "summary scoped to current company only");
+          });
+
+          await check("c9-8 CO export → 200 CSV with BOM + header + scoped rows", async () => {
+            const r = await exportAudit(adminJar, "");
+            const ct = r.response.headers.get("content-type") ?? "";
+            const cd = r.response.headers.get("content-disposition") ?? "";
+            assert(ct.includes("text/csv"), `content-type text/csv, got ${ct}`);
+            assert(/attachment; filename="security-audit-\d{8}-\d{6}\.csv"/.test(cd), `filename format, got ${cd}`);
+            // BOM 은 raw bytes 로 확인(response.text() 는 디코딩 시 BOM 을 제거함).
+            const rawRes = await fetch(new URL("/api/company/security-audit/export", BASE_URL), {
+              headers: { Cookie: adminJar.header() },
+            });
+            const bytes = new Uint8Array(await rawRes.arrayBuffer());
+            assert(bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf, "UTF-8 BOM bytes (EF BB BF) present");
+            assert(r.text.includes("발생 시각"), "header row present");
+            const dataLines = r.text.replace(/^﻿/, "").split("\r\n").filter(Boolean);
+            assert(dataLines.length === 6, `header + 5 data rows = 6 lines, got ${dataLines.length}`);
+            assert(!r.text.includes("OTHERCOMPANY-guard") && !r.text.includes("NULLCOMPANY-guard"), "out-of-scope events excluded");
+          });
+
+          await check("c9-8 CSV formula injection prevented (=/+/-/@ prefixed with ')", async () => {
+            const r = await exportAudit(adminJar, "eventType=INACTIVE_COMPANY_ACCESS_DENIED");
+            assert(r.text.includes("'=SUM(1,1)"), "=SUM guard/name prefixed with '");
+            assert(r.text.includes("'+evil."), "+email prefixed with '");
+          });
+
+          await check("c9-8 CSV escapes comma/quote/newline (RFC4180)", async () => {
+            const r = await exportAudit(adminJar, "eventType=INACTIVE_COMPANY_ACCESS_DENIED");
+            assert(r.text.includes('"a,b""c'), "comma/quote/newline guard wrapped + escaped");
+          });
+
+          await check("c9-8 CSV never exposes metadata/throttle/sensitive fields", async () => {
+            const r = await exportAudit(adminJar, "");
+            for (const banned of ["metadata", "throttleKey", "expiresAt", "lastEmittedAt", "password", "tokenHash", "inviteUrl", "cookie", companyId]) {
+              assert(!r.text.includes(banned), `CSV must not contain "${banned}"`);
+            }
+          });
+
+          await check("c9-8 empty result export → header-only CSV 200", async () => {
+            const r = await exportAudit(adminJar, "from=2020-01-01&to=2020-01-02");
+            const lines = r.text.replace(/^﻿/, "").split("\r\n").filter(Boolean);
+            assert(lines.length === 1 && lines[0].includes("발생 시각"), "header-only CSV");
+          });
+
+          await check("c9-8 non-CO export 403; INACTIVE CO export 403 USER_INACTIVE", async () => {
+            const nonCo = await exportAudit(memberJar, "", 403);
+            assert(nonCo.json?.error?.code === "AUTH_FORBIDDEN", "non-CO AUTH_FORBIDDEN");
+            // backend 를 INACTIVE CO 로
+            await prisma.userRole.upsert({
+              where: { userId_scopeType_scopeId: { userId: backendUser.id, scopeType: "COMPANY", scopeId: companyId } },
+              update: { role: "CO" },
+              create: { userId: backendUser.id, scopeType: "COMPANY", scopeId: companyId, role: "CO" },
+            });
+            await prisma.companyUserState.upsert({
+              where: { companyId_userId: { companyId, userId: backendUser.id } },
+              update: { status: "INACTIVE" },
+              create: { companyId, userId: backendUser.id, status: "INACTIVE" },
+            });
+            const inactive = await exportAudit(memberJar, "", 403);
+            assert(inactive.json?.error?.code === "USER_INACTIVE", "INACTIVE CO USER_INACTIVE");
+            await prisma.companyUserState.update({ where: { companyId_userId: { companyId, userId: backendUser.id } }, data: { status: "ACTIVE" } });
+            await prisma.userRole.deleteMany({ where: { userId: backendUser.id, scopeType: "COMPANY", scopeId: companyId, role: "CO" } });
+          });
+
+          await check("c9-8 export over limit → 422 SECURITY_AUDIT_EXPORT_LIMIT_EXCEEDED", async () => {
+            // 현재 demo 5건 + 1건 = 6 > limit(5) → 422 (실제 10001건 생성 없이 검증)
+            await mkEvent({ eventType: "COMPANY_USER_DEACTIVATED", occurredAt: "2026-06-26T12:00:00.000Z", guardName: "company.users.deactivate", actorUserId: leadUser.id, targetUserId: backendUser.id, companyId });
+            const r = await exportAudit(adminJar, "", 422);
+            assert(r.json?.error?.code === "SECURITY_AUDIT_EXPORT_LIMIT_EXCEEDED", "expected limit-exceeded code");
+          });
+        } finally {
+          await prisma.securityAuditEvent.deleteMany({});
+          await prisma.companyUserState.upsert({
+            where: { companyId_userId: { companyId, userId: backendUser.id } },
+            update: { status: "ACTIVE" },
+            create: { companyId, userId: backendUser.id, status: "ACTIVE" },
+          });
+          await prisma.userRole.deleteMany({
+            where: { userId: backendUser.id, scopeType: "COMPANY", scopeId: companyId, role: "CO" },
+          });
+          if (injectUserId) {
+            await prisma.user.delete({ where: { id: injectUserId } }).catch(() => {});
+          }
           if (otherCompanyId) {
             await prisma.company.delete({ where: { id: otherCompanyId } }).catch(() => {});
           }
