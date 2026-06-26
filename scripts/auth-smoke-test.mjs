@@ -5,6 +5,14 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
+// c9-9: audit 화면 순수 URL/필터 helper(브라우저 의존성 없음) — unit 수준 검증.
+import {
+  activePreset,
+  buildActiveChips,
+  exportButtonLabel,
+  presetPatch,
+  toggleEventTypePatch,
+} from "../src/lib/company/security-audit-url.mjs";
 
 const PORT = process.env.TESTFLOW_TEST_PORT || "3210";
 const BASE_URL = process.env.TESTFLOW_BASE_URL || `http://127.0.0.1:${PORT}`;
@@ -3148,6 +3156,120 @@ async function main() {
             await prisma.company.delete({ where: { id: otherCompanyId } }).catch(() => {});
           }
         }
+      }
+
+      // c9-9: audit 화면 순수 URL/필터 helper 단위 검증 (서버/DB 불필요, 결정적).
+      {
+        const EVENT_LABELS = {
+          COMPANY_USER_DEACTIVATED: "사용자 비활성화",
+          COMPANY_USER_REACTIVATED: "사용자 활성화",
+          INACTIVE_COMPANY_ACCESS_DENIED: "비활성 사용자 접근 차단",
+        };
+        const NOW = new Date("2026-06-15T00:00:00.000Z");
+        const keysOf = (obj) => Object.keys(obj).sort().join(",");
+
+        await check("c9-9 toggleEventTypePatch: ALL→type sets type + page 1", async () => {
+          const p = toggleEventTypePatch("ALL", "COMPANY_USER_DEACTIVATED");
+          assert(p && p.auditType === "COMPANY_USER_DEACTIVATED", "auditType set to clicked type");
+          assert(p.auditPage === null, "auditPage reset to default (null)");
+          assert(keysOf(p) === "auditPage,auditType", "only auditType/auditPage touched");
+        });
+
+        await check("c9-9 toggleEventTypePatch: same type re-click → ALL + page 1", async () => {
+          const p = toggleEventTypePatch("COMPANY_USER_DEACTIVATED", "COMPANY_USER_DEACTIVATED");
+          assert(p && p.auditType === null, "auditType cleared to ALL");
+          assert(p.auditPage === null, "auditPage reset");
+        });
+
+        await check("c9-9 toggleEventTypePatch: ALL re-click → no-op (null, no history push)", async () => {
+          assert(toggleEventTypePatch("ALL", "ALL") === null, "ALL re-click must be no-op");
+        });
+
+        await check("c9-9 toggleEventTypePatch: switch type replaces + page 1", async () => {
+          const p = toggleEventTypePatch("COMPANY_USER_DEACTIVATED", "COMPANY_USER_REACTIVATED");
+          assert(p && p.auditType === "COMPANY_USER_REACTIVATED", "auditType replaced");
+          assert(p.auditPage === null, "auditPage reset");
+        });
+
+        await check("c9-9 buildActiveChips: all-default filters → 0 chips", async () => {
+          const chips = buildActiveChips(
+            { eventType: "ALL", from: "", to: "", user: "", guard: "", sort: "newest", size: 20 },
+            EVENT_LABELS,
+          );
+          assert(chips.length === 0, `expected 0 chips, got ${chips.length}`);
+        });
+
+        await check("c9-9 buildActiveChips: each filter → chip w/ isolated removePatch", async () => {
+          const chips = buildActiveChips(
+            {
+              eventType: "COMPANY_USER_DEACTIVATED",
+              from: "2026-06-01",
+              to: "2026-06-30",
+              user: "alice",
+              guard: "deactivate",
+              sort: "oldest",
+              size: 50,
+            },
+            EVENT_LABELS,
+          );
+          const byKey = Object.fromEntries(chips.map((c) => [c.key, c]));
+          assert(chips.length === 6, `expected 6 chips, got ${chips.length}`);
+          // 라벨
+          assert(byKey.eventType.label === "사용자 비활성화", "eventType label localized");
+          assert(byKey.date.label === "2026-06-01 ~ 2026-06-30", "date range label");
+          assert(byKey.user.label === "사용자: alice", "user label");
+          assert(byKey.guard.label === "Guard: deactivate", "guard label");
+          assert(byKey.sort.label === "오래된순", "sort label");
+          assert(byKey.size.label === "50개씩 보기", "size label");
+          // removePatch 는 자기 key(+page)만 건드린다.
+          assert(keysOf(byKey.eventType.removePatch) === "auditPage,auditType", "eventType removePatch isolated");
+          assert(keysOf(byKey.date.removePatch) === "auditFrom,auditPage,auditTo", "date removePatch isolated");
+          assert(keysOf(byKey.user.removePatch) === "auditPage,auditUser", "user removePatch isolated");
+          assert(keysOf(byKey.guard.removePatch) === "auditGuard,auditPage", "guard removePatch isolated");
+          assert(keysOf(byKey.sort.removePatch) === "auditPage,auditSort", "sort removePatch isolated");
+          assert(keysOf(byKey.size.removePatch) === "auditPage,auditSize", "size removePatch isolated");
+          // 모든 removePatch 값은 기본값(null) 이어야 한다(기본값 복귀).
+          for (const c of chips) {
+            for (const v of Object.values(c.removePatch)) {
+              assert(v === null, `${c.key} removePatch values must be null`);
+            }
+          }
+        });
+
+        await check("c9-9 buildActiveChips: from-only / to-only date labels", async () => {
+          const fromOnly = buildActiveChips(
+            { eventType: "ALL", from: "2026-06-01", to: "", user: "", guard: "", sort: "newest", size: 20 },
+            EVENT_LABELS,
+          );
+          assert(fromOnly.length === 1 && fromOnly[0].label === "2026-06-01 이후", "from-only label");
+          const toOnly = buildActiveChips(
+            { eventType: "ALL", from: "", to: "2026-06-30", user: "", guard: "", sort: "newest", size: 20 },
+            EVENT_LABELS,
+          );
+          assert(toOnly.length === 1 && toOnly[0].label === "2026-06-30 이전", "to-only label");
+        });
+
+        await check("c9-9 activePreset + presetPatch UTC boundaries (today/7d/30d/all)", async () => {
+          // today
+          assert(JSON.stringify(presetPatch("today", NOW)) === JSON.stringify({ auditFrom: "2026-06-15", auditTo: "2026-06-15", auditPage: null }), "today patch");
+          assert(activePreset("2026-06-15", "2026-06-15", NOW) === "today", "today active");
+          // 7d = 6일 전 ~ 오늘
+          assert(JSON.stringify(presetPatch("7d", NOW)) === JSON.stringify({ auditFrom: "2026-06-09", auditTo: "2026-06-15", auditPage: null }), "7d patch");
+          assert(activePreset("2026-06-09", "2026-06-15", NOW) === "7d", "7d active");
+          // 30d = 29일 전 ~ 오늘 (월 경계 넘김)
+          assert(JSON.stringify(presetPatch("30d", NOW)) === JSON.stringify({ auditFrom: "2026-05-17", auditTo: "2026-06-15", auditPage: null }), "30d patch");
+          assert(activePreset("2026-05-17", "2026-06-15", NOW) === "30d", "30d active");
+          // all + 비프리셋
+          assert(activePreset("", "", NOW) === "all", "empty → all");
+          assert(activePreset("2026-01-01", "2026-02-01", NOW) === null, "arbitrary range → no preset");
+        });
+
+        await check("c9-9 exportButtonLabel: 0 / N / null / exporting", async () => {
+          assert(exportButtonLabel(0, false) === "CSV 내보내기 (0건)", "0건 label");
+          assert(exportButtonLabel(42, false) === "CSV 내보내기 (42건)", "N건 label");
+          assert(exportButtonLabel(null, false) === "CSV 내보내기", "loading(null) label");
+          assert(exportButtonLabel(5, true) === "내보내는 중…", "exporting label");
+        });
       }
 
       await check("CO can sync WORKSPACE role to another user", async () => {
