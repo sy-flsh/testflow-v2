@@ -3,6 +3,7 @@
 import { useContext, useEffect, useState } from "react";
 import { AuthContext } from "@/features/auth/auth-provider";
 import {
+  getErrorCode,
   getErrorMessage,
   requestAuthData,
   type AuthMeResponse,
@@ -14,6 +15,7 @@ export function useCurrentAuth() {
   const [fallbackAuth, setFallbackAuth] = useState<AuthMeResponse | null>(null);
   const [fallbackLoading, setFallbackLoading] = useState(true);
   const [fallbackError, setFallbackError] = useState("");
+  const [fallbackErrorCode, setFallbackErrorCode] = useState("");
 
   useEffect(() => {
     if (hasContext) {
@@ -26,6 +28,7 @@ export function useCurrentAuth() {
     async function loadAuth() {
       setFallbackLoading(true);
       setFallbackError("");
+      setFallbackErrorCode("");
 
       try {
         const currentAuth =
@@ -38,6 +41,7 @@ export function useCurrentAuth() {
         if (!ignore) {
           setFallbackAuth(null);
           setFallbackError(getErrorMessage(loadError));
+          setFallbackErrorCode(getErrorCode(loadError));
         }
       } finally {
         if (!ignore) {
@@ -65,16 +69,19 @@ export function useCurrentAuth() {
     role: fallbackAuth?.role ?? null,
     isLoading: fallbackLoading,
     error: fallbackError,
+    errorCode: fallbackErrorCode,
     refetch: async () => {
       try {
         const currentAuth =
           await requestAuthData<AuthMeResponse>("/api/auth/me");
         setFallbackAuth(currentAuth);
         setFallbackError("");
+        setFallbackErrorCode("");
         return currentAuth;
       } catch (loadError) {
         setFallbackAuth(null);
         setFallbackError(getErrorMessage(loadError));
+        setFallbackErrorCode(getErrorCode(loadError));
         return null;
       }
     },
@@ -85,6 +92,7 @@ export function useCurrentAuth() {
         });
       } finally {
         setFallbackAuth(null);
+        setFallbackErrorCode("");
       }
     },
   };

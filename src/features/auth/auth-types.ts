@@ -34,6 +34,21 @@ export type AuthMeResponse = {
 
 export type SpecRole = "MASTER" | "CO" | "WO" | "PO" | "MEMBER" | "VIEWER";
 
+/**
+ * c9-4: 인증 요청 실패 시 HTTP status 와 error code 를 보존하는 에러.
+ * (기존엔 message 만 가진 일반 Error 라 USER_INACTIVE 같은 code 를 클라이언트가 구분할 수 없었다.)
+ */
+export class AuthRequestError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+    public readonly code: string,
+  ) {
+    super(message);
+    this.name = "AuthRequestError";
+  }
+}
+
 export async function requestAuthData<T>(url: string, init?: RequestInit) {
   const headers = new Headers(init?.headers);
 
@@ -48,11 +63,15 @@ export async function requestAuthData<T>(url: string, init?: RequestInit) {
   });
   const payload = (await response.json()) as {
     data?: T;
-    error?: { message?: string };
+    error?: { message?: string; code?: string };
   };
 
   if (!response.ok || payload.data === undefined) {
-    throw new Error(payload.error?.message || "요청을 처리하지 못했습니다.");
+    throw new AuthRequestError(
+      payload.error?.message || "요청을 처리하지 못했습니다.",
+      response.status,
+      payload.error?.code ?? "",
+    );
   }
 
   return payload.data;
@@ -60,4 +79,9 @@ export async function requestAuthData<T>(url: string, init?: RequestInit) {
 
 export function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "요청을 처리하지 못했습니다.";
+}
+
+/** 인증 에러의 code (예: "USER_INACTIVE" / "AUTH_UNAUTHORIZED"). 없으면 빈 문자열. */
+export function getErrorCode(error: unknown): string {
+  return error instanceof AuthRequestError ? error.code : "";
 }

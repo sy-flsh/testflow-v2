@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import {
+  getErrorCode,
   getErrorMessage,
   requestAuthData,
   type AuthMeResponse,
@@ -22,6 +23,8 @@ export type AuthContextValue = {
   permissions: AuthMeResponse["permissions"] | null;
   isLoading: boolean;
   error: string;
+  // c9-4: /api/auth/me 실패 시 error code (예: "USER_INACTIVE"). 정상/없으면 빈 문자열.
+  errorCode: string;
   refetch: () => Promise<AuthMeResponse | null>;
   logout: () => Promise<void>;
 };
@@ -32,10 +35,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [auth, setAuth] = useState<AuthMeResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
+  const [errorCode, setErrorCode] = useState("");
 
   const refetch = useCallback(async () => {
     setIsLoading(true);
     setError("");
+    setErrorCode("");
 
     try {
       const currentAuth =
@@ -45,6 +50,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (loadError) {
       setAuth(null);
       setError(getErrorMessage(loadError));
+      setErrorCode(getErrorCode(loadError));
       return null;
     } finally {
       setIsLoading(false);
@@ -59,6 +65,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       setAuth(null);
       setError("");
+      setErrorCode("");
     }
   }, []);
 
@@ -75,10 +82,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       permissions: auth?.permissions ?? null,
       isLoading,
       error,
+      errorCode,
       refetch,
       logout,
     }),
-    [auth, error, isLoading, logout, refetch],
+    [auth, error, errorCode, isLoading, logout, refetch],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

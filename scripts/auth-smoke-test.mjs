@@ -2397,6 +2397,132 @@ async function main() {
         }
       }
 
+      // c9-4: 비활성 Company 사용자 접근 제한 — /api/auth/me USER_INACTIVE 식별
+      {
+        await prisma.rateLimitBucket.deleteMany({ where: { scope: { in: ["auth:login:ip"] } } });
+        const bePwHash = (
+          await prisma.user.findUnique({ where: { email: accounts.member }, select: { passwordHash: true } })
+        ).passwordHash;
+        let tempUserId = null;
+        let tempCompanyId = null;
+        let tempWorkspaceId = null;
+        let vUserId = null;
+
+        try {
+          await check("c9-4 unauthenticated /api/auth/me → 401 AUTH_UNAUTHORIZED", async () => {
+            const r = await request("/api/auth/me", { expectedStatus: 401 });
+            assert(r.json?.error?.code === "AUTH_UNAUTHORIZED", "expected AUTH_UNAUTHORIZED");
+          });
+
+          await check("c9-4 ACTIVE user /api/auth/me → 200 (workspace/role preserved)", async () => {
+            const r = await request("/api/auth/me", { jar: adminJar, expectedStatus: 200 });
+            assert(r.json?.data?.workspace?.id, "active user me should return workspace");
+            assert(r.json?.data?.role, "active user me should return role");
+          });
+
+          await check("c9-4 INACTIVE-only user → me 403 USER_INACTIVE (no leak); project/dashboard 403; reactivate restores", async () => {
+            await prisma.companyUserState.upsert({
+              where: { companyId_userId: { companyId, userId: backendUser.id } },
+              update: { status: "INACTIVE", deactivatedAt: new Date() },
+              create: { companyId, userId: backendUser.id, status: "INACTIVE", deactivatedAt: new Date() },
+            });
+
+            const me = await request("/api/auth/me", { jar: memberJar, expectedStatus: 403 });
+            assert(me.json?.error?.code === "USER_INACTIVE", "me should be USER_INACTIVE");
+            assert(me.json?.data === undefined, "no auth payload leaked on USER_INACTIVE");
+            assert(
+              !("rolesByScope" in (me.json?.error ?? {})) && !("workspace" in (me.json?.error ?? {})),
+              "error must not include role/workspace detail",
+            );
+
+            const proj = await request("/api/projects", { jar: memberJar, expectedStatus: 403 });
+            assert(proj.json?.error?.code === "USER_INACTIVE", "projects should stay USER_INACTIVE");
+            const dash = await request("/api/dashboard/summary", { jar: memberJar, expectedStatus: 403 });
+            assert(dash.json?.error?.code === "USER_INACTIVE", "dashboard should stay USER_INACTIVE");
+
+            // CO 가 재활성화 → 기존 세션으로 me 200 복구.
+            await prisma.companyUserState.update({
+              where: { companyId_userId: { companyId, userId: backendUser.id } },
+              data: { status: "ACTIVE", reactivatedAt: new Date() },
+            });
+            const me2 = await request("/api/auth/me", { jar: memberJar, expectedStatus: 200 });
+            assert(me2.json?.data?.workspace?.id, "me restored to 200 after reactivate");
+          });
+
+          await check("c9-4 multi-company: INACTIVE in one, ACTIVE in another → me 200 fallback (not USER_INACTIVE)", async () => {
+            const other = await prisma.company.create({
+              data: { name: `C94 Other ${RUN_ID}`, slug: `c94-other-${RUN_ID}` },
+            });
+            tempCompanyId = other.id;
+            const otherWs = await prisma.workspace.create({
+              data: { name: `C94 WS ${RUN_ID}`, slug: `c94-ws-${RUN_ID}`, companyId: other.id },
+            });
+            tempWorkspaceId = otherWs.id;
+            const u = await prisma.user.create({
+              data: { email: `c94.multi.${RUN_ID}@state.local`, name: "C94 Multi", passwordHash: bePwHash },
+            });
+            tempUserId = u.id;
+            // demo(A): membership + INACTIVE state / other(B): membership + ACTIVE state.
+            await prisma.workspaceMember.create({
+              data: { workspaceId, userId: u.id, role: "MEMBER", status: "ACTIVE" },
+            });
+            await prisma.companyUserState.create({ data: { companyId, userId: u.id, status: "INACTIVE" } });
+            await prisma.workspaceMember.create({
+              data: { workspaceId: otherWs.id, userId: u.id, role: "MEMBER", status: "ACTIVE" },
+            });
+            await prisma.companyUserState.create({
+              data: { companyId: other.id, userId: u.id, status: "ACTIVE" },
+            });
+
+            const jar = await loginRaw(u.email);
+            const me = await request("/api/auth/me", { jar, expectedStatus: 200 });
+            assert(
+              me.json?.data?.workspace?.id === otherWs.id,
+              "should fall back to ACTIVE company workspace (not USER_INACTIVE)",
+            );
+          });
+
+          await check("c9-4 logged-in user with no active membership (not inactive) → me 401, not USER_INACTIVE", async () => {
+            const v = await prisma.user.create({
+              data: { email: `c94.nomem.${RUN_ID}@state.local`, name: "C94 NoMem", passwordHash: bePwHash },
+            });
+            vUserId = v.id;
+            // 로그인 가능하도록 demo ACTIVE 멤버십 부여(상태 없음 → Company ACTIVE).
+            await prisma.workspaceMember.create({
+              data: { workspaceId, userId: v.id, role: "MEMBER", status: "ACTIVE" },
+            });
+            const jar = await loginRaw(v.email);
+            // 활성 멤버십 제거(PENDING). Company 는 ACTIVE 유지 → INACTIVE 사유 아님.
+            await prisma.workspaceMember.updateMany({ where: { userId: v.id }, data: { status: "PENDING" } });
+            const me = await request("/api/auth/me", { jar, expectedStatus: 401 });
+            assert(
+              me.json?.error?.code === "AUTH_UNAUTHORIZED",
+              `expected AUTH_UNAUTHORIZED (not USER_INACTIVE), got ${me.json?.error?.code}`,
+            );
+          });
+        } finally {
+          await prisma.companyUserState.upsert({
+            where: { companyId_userId: { companyId, userId: backendUser.id } },
+            update: { status: "ACTIVE" },
+            create: { companyId, userId: backendUser.id, status: "ACTIVE" },
+          });
+          for (const id of [tempUserId, vUserId]) {
+            if (id) {
+              await prisma.companyUserState.deleteMany({ where: { userId: id } });
+              await prisma.workspaceMember.deleteMany({ where: { userId: id } });
+              await prisma.session.deleteMany({ where: { userId: id } });
+              await prisma.user.delete({ where: { id } }).catch(() => {});
+            }
+          }
+          if (tempWorkspaceId) {
+            await prisma.workspace.delete({ where: { id: tempWorkspaceId } }).catch(() => {});
+          }
+          if (tempCompanyId) {
+            await prisma.company.delete({ where: { id: tempCompanyId } }).catch(() => {});
+          }
+        }
+      }
+
       await check("CO can sync WORKSPACE role to another user", async () => {
         const original = await prisma.userRole.findUnique({
           where: {

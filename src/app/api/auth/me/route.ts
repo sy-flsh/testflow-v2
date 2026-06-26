@@ -2,7 +2,10 @@ import { apiError, apiSuccess } from "@/lib/api/response";
 import { getUserWorkspaces, mapAuthPayload, resolveActiveMembership } from "@/lib/auth/me";
 import { getRolesByScope, resolveWorkspaceAuthRole } from "@/lib/auth/roles";
 import { getCurrentSession } from "@/lib/auth/session";
-import { getInactiveCompanyIdsForUser } from "@/lib/company/company-user-state";
+import {
+  getInactiveCompanyIdsForUser,
+  hasMembershipBlockedByInactiveCompany,
+} from "@/lib/company/company-user-state";
 import { prisma } from "@/lib/db/prisma";
 
 export const runtime = "nodejs";
@@ -25,6 +28,17 @@ export async function GET() {
     );
 
     if (!membership) {
+      // c9-4: 활성 workspace 후보가 0인 사유 구분.
+      //  - INACTIVE Company 때문에 제외된 ACTIVE 멤버십이 있으면 → 403 USER_INACTIVE(전용 안내 화면).
+      //  - 그 외(멤버십 자체 없음 / Company-only CO 등)는 기존 계약대로 401 유지.
+      if (await hasMembershipBlockedByInactiveCompany(session.userId, inactiveCompanyIds)) {
+        return apiError(
+          "현재 Company에서 비활성화되어 접근할 수 없습니다. 관리자에게 문의해 주세요.",
+          403,
+          "USER_INACTIVE",
+        );
+      }
+
       // 접근 가능한 ACTIVE Company workspace 가 없음 → 기존 계약대로 401(미들웨어/UI 가 로그인으로 안내).
       return apiError("활성 워크스페이스 멤버십을 찾을 수 없습니다.", 401, "AUTH_UNAUTHORIZED");
     }

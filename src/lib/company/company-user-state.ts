@@ -32,6 +32,31 @@ export async function getInactiveCompanyIdsForUser(userId: string): Promise<Set<
   return new Set(rows.map((row) => row.companyId));
 }
 
+/**
+ * c9-4: 해당 User 가 **INACTIVE Company 때문에 제외된** ACTIVE WorkspaceMember 를 갖는지.
+ * (활성 workspace 후보가 0인 사유가 "비활성 Company" 인지, "멤버십 자체가 없음(예: Company-only CO)"
+ *  인지 구분하는 데 사용한다. companyId 가 null 인 legacy/personal workspace 는 INACTIVE 대상이 아님.)
+ */
+export async function hasMembershipBlockedByInactiveCompany(
+  userId: string,
+  inactiveCompanyIds: Set<string>,
+): Promise<boolean> {
+  if (inactiveCompanyIds.size === 0) {
+    return false;
+  }
+
+  const membership = await prisma.workspaceMember.findFirst({
+    where: {
+      userId,
+      status: "ACTIVE",
+      workspace: { companyId: { in: Array.from(inactiveCompanyIds) } },
+    },
+    select: { id: true },
+  });
+
+  return Boolean(membership);
+}
+
 /** companyIds 중 해당 User 가 INACTIVE 인 집합. */
 export async function getInactiveCompanyIdsAmong(
   userId: string,
