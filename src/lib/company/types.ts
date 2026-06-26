@@ -1,4 +1,9 @@
-import type { InvitationStatus, Role, ScopeType } from "@prisma/client";
+import type {
+  InvitationStatus,
+  Role,
+  ScopeType,
+  SecurityAuditEventType,
+} from "@prisma/client";
 
 /** c7-1: CO 회원 목록 항목 DTO. */
 export type CompanyUserScopedRole = {
@@ -94,6 +99,41 @@ export type CompanyInvitationListDto = {
   invitations: CompanyInvitationDto[];
   pagination: InvitationPagination;
   filters: { q: string | null; status: InvitationStatusFilter; sort: InvitationSort };
+};
+
+/** c9-7: Company 보안 감사 로그 조회 DTO. */
+export type SecurityAuditEventTypeFilter = "ALL" | SecurityAuditEventType;
+export type SecurityAuditSort = "newest" | "oldest";
+
+/** 감사 actor/target 표시용. 삭제된 사용자는 userId 만 유지하고 name/email 은 null. */
+export type SecurityAuditUserRef = {
+  userId: string;
+  name: string | null;
+  email: string | null;
+};
+
+export type SecurityAuditEventDto = {
+  id: string;
+  eventType: SecurityAuditEventType;
+  occurredAt: string;
+  guardName: string | null;
+  actor: SecurityAuditUserRef | null;
+  target: SecurityAuditUserRef | null;
+  // metadata/throttle/internal 은 절대 포함하지 않는다.
+};
+
+export type CompanySecurityAuditListDto = {
+  companyId: string;
+  events: SecurityAuditEventDto[];
+  pagination: InvitationPagination;
+  filters: {
+    eventType: SecurityAuditEventTypeFilter;
+    from: string | null;
+    to: string | null;
+    user: string | null;
+    guard: string | null;
+    sort: SecurityAuditSort;
+  };
 };
 
 /** c8-1: 초대 목록/생성 응답 DTO (tokenHash·raw token 절대 미포함). */

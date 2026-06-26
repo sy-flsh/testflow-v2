@@ -2827,6 +2827,165 @@ async function main() {
         }
       }
 
+      // c9-7: Company 보안 감사 로그 조회 API
+      {
+        // 결정적 검증을 위해 깨끗한 상태에서 고정 fixture 를 만든다(이전 블록 잔여 이벤트 제거).
+        await prisma.securityAuditEvent.deleteMany({});
+        const deletedTargetId = `deleted-user-${RUN_ID}`;
+        let otherCompanyId = null;
+
+        async function mkEvent(data) {
+          return prisma.securityAuditEvent.create({
+            data: { ...data, occurredAt: new Date(data.occurredAt) },
+          });
+        }
+        async function listAudit(jar, query, expectedStatus = 200) {
+          return request(`/api/company/security-audit${query ? `?${query}` : ""}`, {
+            jar,
+            expectedStatus,
+          });
+        }
+
+        try {
+          const other = await prisma.company.create({
+            data: { name: `C97 Other ${RUN_ID}`, slug: `c97-other-${RUN_ID}` },
+          });
+          otherCompanyId = other.id;
+
+          // demo company 고정 이벤트 5건
+          await mkEvent({ eventType: "COMPANY_USER_DEACTIVATED", occurredAt: "2026-06-10T12:00:00.000Z", guardName: "company.users.deactivate", actorUserId: leadUser.id, targetUserId: backendUser.id, companyId });
+          await mkEvent({ eventType: "COMPANY_USER_DEACTIVATED", occurredAt: "2026-06-12T12:00:00.000Z", guardName: null, actorUserId: leadUser.id, targetUserId: backendUser.id, companyId });
+          await mkEvent({ eventType: "COMPANY_USER_REACTIVATED", occurredAt: "2026-06-15T12:00:00.000Z", guardName: "company.users.activate", actorUserId: leadUser.id, targetUserId: backendUser.id, companyId });
+          await mkEvent({ eventType: "INACTIVE_COMPANY_ACCESS_DENIED", occurredAt: "2026-06-20T12:00:00.000Z", guardName: "requireCurrentWorkspace", actorUserId: null, targetUserId: pmUser.id, companyId });
+          await mkEvent({ eventType: "INACTIVE_COMPANY_ACCESS_DENIED", occurredAt: "2026-06-25T12:00:00.000Z", guardName: "auth.me", actorUserId: null, targetUserId: deletedTargetId, companyId });
+          // 범위 밖: 타 Company + companyId null → 절대 포함되면 안 됨
+          await mkEvent({ eventType: "INACTIVE_COMPANY_ACCESS_DENIED", occurredAt: "2026-06-22T12:00:00.000Z", guardName: "auth.me", actorUserId: null, targetUserId: pmUser.id, companyId: other.id });
+          await mkEvent({ eventType: "INACTIVE_COMPANY_ACCESS_DENIED", occurredAt: "2026-06-23T12:00:00.000Z", guardName: "auth.me", actorUserId: null, targetUserId: pmUser.id, companyId: null });
+
+          await check("c9-7 CO lists only current-company events (other company / null excluded)", async () => {
+            const r = await listAudit(adminJar, "");
+            assert(r.json?.data?.companyId === companyId, "companyId returned");
+            assert(r.json.data.pagination.total === 5, `expected 5 demo events, got ${r.json.data.pagination.total}`);
+            assert(Array.isArray(r.json.data.events), "events array");
+          });
+
+          await check("c9-7 non-CO → 403 AUTH_FORBIDDEN", async () => {
+            const r = await listAudit(memberJar, "", 403);
+            assert(r.json?.error?.code === "AUTH_FORBIDDEN", "expected AUTH_FORBIDDEN");
+          });
+
+          await check("c9-7 INACTIVE CO → 403 USER_INACTIVE", async () => {
+            await prisma.userRole.upsert({
+              where: { userId_scopeType_scopeId: { userId: backendUser.id, scopeType: "COMPANY", scopeId: companyId } },
+              update: { role: "CO" },
+              create: { userId: backendUser.id, scopeType: "COMPANY", scopeId: companyId, role: "CO" },
+            });
+            await prisma.companyUserState.upsert({
+              where: { companyId_userId: { companyId, userId: backendUser.id } },
+              update: { status: "INACTIVE" },
+              create: { companyId, userId: backendUser.id, status: "INACTIVE" },
+            });
+            const r = await listAudit(memberJar, "", 403);
+            assert(r.json?.error?.code === "USER_INACTIVE", "expected USER_INACTIVE");
+            await prisma.companyUserState.update({
+              where: { companyId_userId: { companyId, userId: backendUser.id } },
+              data: { status: "ACTIVE" },
+            });
+            await prisma.userRole.deleteMany({
+              where: { userId: backendUser.id, scopeType: "COMPANY", scopeId: companyId, role: "CO" },
+            });
+          });
+
+          await check("c9-7 eventType filter counts", async () => {
+            assert((await listAudit(adminJar, "eventType=COMPANY_USER_DEACTIVATED")).json.data.pagination.total === 2, "DEACTIVATED=2");
+            assert((await listAudit(adminJar, "eventType=COMPANY_USER_REACTIVATED")).json.data.pagination.total === 1, "REACTIVATED=1");
+            assert((await listAudit(adminJar, "eventType=INACTIVE_COMPANY_ACCESS_DENIED")).json.data.pagination.total === 2, "ACCESS_DENIED=2");
+          });
+
+          await check("c9-7 date from/to boundaries inclusive (UTC)", async () => {
+            const mid = await listAudit(adminJar, "from=2026-06-15&to=2026-06-20");
+            assert(mid.json.data.pagination.total === 2, `from/to range should be 2, got ${mid.json.data.pagination.total}`);
+            const single = await listAudit(adminJar, "from=2026-06-25&to=2026-06-25");
+            assert(single.json.data.pagination.total === 1, "single-day inclusive should be 1");
+            assert(single.json.data.events[0].occurredAt.startsWith("2026-06-25"), "06-25 event returned");
+          });
+
+          await check("c9-7 from > to disables date filter (fallback)", async () => {
+            const r = await listAudit(adminJar, "from=2026-06-25&to=2026-06-10");
+            assert(r.json.data.pagination.total === 5, "from>to should disable date filter → all 5");
+            assert(r.json.data.filters.from === null && r.json.data.filters.to === null, "filters cleared");
+          });
+
+          await check("c9-7 invalid query params fall back to safe defaults", async () => {
+            const r = await listAudit(adminJar, "eventType=BOGUS&size=999&page=abc&sort=weird&from=2026-13-40");
+            const d = r.json.data;
+            assert(d.filters.eventType === "ALL", "invalid eventType → ALL");
+            assert(d.pagination.size === 20 && d.pagination.page === 1, "invalid size/page fallback");
+            assert(d.filters.sort === "newest", "invalid sort → newest");
+            assert(d.filters.from === null, "invalid date ignored");
+            assert(d.pagination.total === 5, "fallback total 5");
+          });
+
+          await check("c9-7 user search matches actor or target (name/email, case-insensitive)", async () => {
+            const byActor = await listAudit(adminJar, `user=${encodeURIComponent("김QA")}`);
+            assert(byActor.json.data.pagination.total === 3, `actor 김QA should match 3 (e1,e2,e3 actor), got ${byActor.json.data.pagination.total}`);
+            const byTargetEmail = await listAudit(adminJar, "user=PM@TESTFLOW");
+            assert(byTargetEmail.json.data.pagination.total === 1, "target email pm@ → 1 (the demo pm access-denied)");
+          });
+
+          await check("c9-7 deleted user appears with userId fallback (name/email null)", async () => {
+            const r = await listAudit(adminJar, "eventType=INACTIVE_COMPANY_ACCESS_DENIED&sort=newest");
+            const e = r.json.data.events.find((ev) => ev.target?.userId === deletedTargetId);
+            assert(e, "deleted-target event present");
+            assert(e.target.name === null && e.target.email === null, "deleted user name/email null");
+            assert(e.target.userId === deletedTargetId, "deleted user userId kept");
+            assert(e.actor === null, "actor null shown");
+          });
+
+          await check("c9-7 guard search case-insensitive contains; null guard excluded when querying", async () => {
+            const r = await listAudit(adminJar, "guard=REQUIRECURRENT");
+            assert(r.json.data.pagination.total === 1, "guard requireCurrent → 1");
+            const company = await listAudit(adminJar, "guard=company");
+            assert(company.json.data.pagination.total === 2, "guard 'company' → 2 (null guard excluded)");
+          });
+
+          await check("c9-7 sort newest/oldest + pagination meta + page clamp", async () => {
+            const newest = await listAudit(adminJar, "sort=newest");
+            assert(newest.json.data.events[0].occurredAt.startsWith("2026-06-25"), "newest first = 06-25");
+            const oldest = await listAudit(adminJar, "sort=oldest");
+            assert(oldest.json.data.events[0].occurredAt.startsWith("2026-06-10"), "oldest first = 06-10");
+            const clamp = await listAudit(adminJar, "size=10&page=99");
+            assert(clamp.json.data.pagination.page === 1 && clamp.json.data.pagination.totalPages === 1, "overflow page clamps to 1");
+            assert(clamp.json.data.events.length === 5, "all 5 on single page");
+          });
+
+          await check("c9-7 response never exposes metadata/throttle/internal fields", async () => {
+            const r = await listAudit(adminJar, "");
+            const e = r.json.data.events[0];
+            assert(!("metadata" in e), "no metadata");
+            assert(!("throttleKey" in e) && !("expiresAt" in e) && !("lastEmittedAt" in e), "no throttle internals");
+            assert(!("companyId" in e), "event row should not leak companyId per-row");
+            const actorKeys = e.actor ? Object.keys(e.actor).sort().join(",") : "";
+            if (e.actor) {
+              assert(actorKeys === "email,name,userId", `actor DTO keys limited, got ${actorKeys}`);
+            }
+          });
+        } finally {
+          await prisma.securityAuditEvent.deleteMany({});
+          await prisma.companyUserState.upsert({
+            where: { companyId_userId: { companyId, userId: backendUser.id } },
+            update: { status: "ACTIVE" },
+            create: { companyId, userId: backendUser.id, status: "ACTIVE" },
+          });
+          await prisma.userRole.deleteMany({
+            where: { userId: backendUser.id, scopeType: "COMPANY", scopeId: companyId, role: "CO" },
+          });
+          if (otherCompanyId) {
+            await prisma.company.delete({ where: { id: otherCompanyId } }).catch(() => {});
+          }
+        }
+      }
+
       await check("CO can sync WORKSPACE role to another user", async () => {
         const original = await prisma.userRole.findUnique({
           where: {

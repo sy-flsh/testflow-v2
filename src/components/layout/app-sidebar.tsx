@@ -8,6 +8,7 @@ import {
   FolderKanban,
   LayoutDashboard,
   Play,
+  ShieldCheck,
   Settings,
   Users,
 } from "lucide-react";
@@ -71,7 +72,15 @@ export function AppSidebar() {
             href="/company/users"
             label="회원 관리"
             icon={Users}
-            active={pathname.startsWith("/company")}
+            active={pathname.startsWith("/company/users")}
+          />
+        )}
+        {isCompanyOwner && (
+          <SidebarLink
+            href="/company/security-audit"
+            label="보안 감사 로그"
+            icon={ShieldCheck}
+            active={pathname.startsWith("/company/security-audit")}
           />
         )}
         <SidebarLink
