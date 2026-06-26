@@ -7,6 +7,7 @@ import {
 } from "@/lib/auth/guards";
 import { isUserInCompany } from "@/lib/company/company-user-state";
 import { prisma } from "@/lib/db/prisma";
+import { recordSecurityAuditEvent } from "@/lib/security/audit-log";
 import { enforceCsrfProtection } from "@/lib/security/csrf";
 
 export const runtime = "nodejs";
@@ -61,10 +62,10 @@ export async function POST(request: Request, context: RouteContext) {
       return apiError("대상 사용자를 찾을 수 없습니다.", 404, "USER_NOT_FOUND");
     }
 
-    let status: "INACTIVE";
+    let result: { status: "INACTIVE"; changed: boolean };
 
     try {
-      status = await prisma.$transaction(
+      result = await prisma.$transaction(
         async (tx) => {
           const current = await tx.companyUserState.findUnique({
             where: { companyId_userId: { companyId, userId: targetUserId } },
@@ -72,8 +73,8 @@ export async function POST(request: Request, context: RouteContext) {
           });
 
           if (current?.status === "INACTIVE") {
-            // 멱등: 이미 비활성 → no-op.
-            return "INACTIVE" as const;
+            // 멱등: 이미 비활성 → no-op(감사 시각/actor 미변경).
+            return { status: "INACTIVE" as const, changed: false };
           }
 
           // 마지막 ACTIVE CO 보호: 대상이 ACTIVE CO 이고 ACTIVE CO 가 1명뿐이면 차단.
@@ -126,7 +127,7 @@ export async function POST(request: Request, context: RouteContext) {
             },
           });
 
-          return "INACTIVE" as const;
+          return { status: "INACTIVE" as const, changed: true };
         },
         { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
       );
@@ -138,7 +139,18 @@ export async function POST(request: Request, context: RouteContext) {
       throw error;
     }
 
-    return apiSuccess({ userId: targetUserId, companyId, status });
+    // c9-5: 실제 전이(ACTIVE→INACTIVE)일 때만 감사 이벤트 기록(fire-and-forget).
+    if (result.changed) {
+      recordSecurityAuditEvent({
+        eventType: "COMPANY_USER_DEACTIVATED",
+        actorUserId: actor.id,
+        targetUserId,
+        companyId,
+        guardName: "company.users.deactivate",
+      });
+    }
+
+    return apiSuccess({ userId: targetUserId, companyId, status: result.status });
   } catch (error) {
     if (isAuthGuardError(error)) {
       return authGuardErrorResponse(error);

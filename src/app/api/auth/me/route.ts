@@ -7,6 +7,7 @@ import {
   hasMembershipBlockedByInactiveCompany,
 } from "@/lib/company/company-user-state";
 import { prisma } from "@/lib/db/prisma";
+import { recordSecurityAuditEvent } from "@/lib/security/audit-log";
 
 export const runtime = "nodejs";
 
@@ -32,6 +33,13 @@ export async function GET() {
       //  - INACTIVE Company 때문에 제외된 ACTIVE 멤버십이 있으면 → 403 USER_INACTIVE(전용 안내 화면).
       //  - 그 외(멤버십 자체 없음 / Company-only CO 등)는 기존 계약대로 401 유지.
       if (await hasMembershipBlockedByInactiveCompany(session.userId, inactiveCompanyIds)) {
+        recordSecurityAuditEvent({
+          eventType: "INACTIVE_COMPANY_ACCESS_DENIED",
+          targetUserId: session.userId,
+          // 비활성 사유 Company 1건(best-effort). 복수면 대표 1건만 기록.
+          companyId: inactiveCompanyIds.values().next().value,
+          guardName: "auth.me",
+        });
         return apiError(
           "현재 Company에서 비활성화되어 접근할 수 없습니다. 관리자에게 문의해 주세요.",
           403,

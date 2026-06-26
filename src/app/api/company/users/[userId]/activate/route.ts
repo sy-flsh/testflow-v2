@@ -6,6 +6,7 @@ import {
 } from "@/lib/auth/guards";
 import { isUserInCompany } from "@/lib/company/company-user-state";
 import { prisma } from "@/lib/db/prisma";
+import { recordSecurityAuditEvent } from "@/lib/security/audit-log";
 import { enforceCsrfProtection } from "@/lib/security/csrf";
 
 export const runtime = "nodejs";
@@ -42,21 +43,40 @@ export async function POST(request: Request, context: RouteContext) {
       return apiError("대상 사용자를 찾을 수 없습니다.", 404, "USER_NOT_FOUND");
     }
 
-    await prisma.companyUserState.upsert({
+    // c9-5: 멱등 — 이미 ACTIVE 면 no-op(reactivatedAt/By 를 덮어쓰지 않는다).
+    // 실제 전이(INACTIVE/없음 → ACTIVE)일 때만 감사 시각/actor 를 기록한다.
+    const current = await prisma.companyUserState.findUnique({
       where: { companyId_userId: { companyId, userId: targetUserId } },
-      update: {
-        status: "ACTIVE",
-        reactivatedAt: new Date(),
-        reactivatedByUserId: actor.id,
-      },
-      create: {
-        companyId,
-        userId: targetUserId,
-        status: "ACTIVE",
-        reactivatedAt: new Date(),
-        reactivatedByUserId: actor.id,
-      },
+      select: { status: true },
     });
+
+    const changed = current?.status !== "ACTIVE";
+
+    if (changed) {
+      await prisma.companyUserState.upsert({
+        where: { companyId_userId: { companyId, userId: targetUserId } },
+        update: {
+          status: "ACTIVE",
+          reactivatedAt: new Date(),
+          reactivatedByUserId: actor.id,
+        },
+        create: {
+          companyId,
+          userId: targetUserId,
+          status: "ACTIVE",
+          reactivatedAt: new Date(),
+          reactivatedByUserId: actor.id,
+        },
+      });
+
+      recordSecurityAuditEvent({
+        eventType: "COMPANY_USER_REACTIVATED",
+        actorUserId: actor.id,
+        targetUserId,
+        companyId,
+        guardName: "company.users.activate",
+      });
+    }
 
     return apiSuccess({ userId: targetUserId, companyId, status: "ACTIVE" });
   } catch (error) {

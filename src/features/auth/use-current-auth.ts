@@ -68,6 +68,8 @@ export function useCurrentAuth() {
     permissions: fallbackAuth?.permissions ?? null,
     role: fallbackAuth?.role ?? null,
     isLoading: fallbackLoading,
+    isInitialLoading: fallbackLoading,
+    isRefreshing: false,
     error: fallbackError,
     errorCode: fallbackErrorCode,
     refetch: async () => {

@@ -12,7 +12,9 @@ import { useCurrentAuth } from "@/features/auth/use-current-auth";
  * - 인증 로딩 중에는 민감한 page 콘텐츠 대신 로딩 표시(비활성 사용자의 콘텐츠 깜빡임 방지).
  */
 export function AppShellBody({ children }: { children: React.ReactNode }) {
-  const { errorCode, isLoading } = useCurrentAuth();
+  // c9-5: isInitialLoading 일 때만 로딩 표시. background revalidation(isRefreshing) 에서는
+  // 현재 화면(정상 셸 또는 AccessRestricted)을 그대로 유지해 깜빡임을 막는다.
+  const { errorCode, isInitialLoading } = useCurrentAuth();
 
   if (errorCode === "USER_INACTIVE") {
     return <AccessRestricted />;
@@ -24,7 +26,7 @@ export function AppShellBody({ children }: { children: React.ReactNode }) {
       <AppSidebar />
       <main className="tf-main">
         <div className="tf-main-inner mx-auto max-w-7xl">
-          {isLoading ? (
+          {isInitialLoading ? (
             <div className="px-6 py-12 text-center text-sm text-[var(--text-secondary)]">
               불러오는 중…
             </div>

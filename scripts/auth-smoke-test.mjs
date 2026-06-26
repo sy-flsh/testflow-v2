@@ -2523,6 +2523,100 @@ async function main() {
         }
       }
 
+      // c9-5: deactivate/activate 감사 필드 + idempotent no-op 보존 + audit 로깅이 403을 깨지 않음
+      {
+        await prisma.rateLimitBucket.deleteMany({ where: { scope: { in: ["auth:login:ip"] } } });
+        const targetId = pmUser.id; // 일반 사용자(viewer)를 대상으로 사용
+        const coId = leadUser.id;
+        const stateKey = { companyId_userId: { companyId, userId: targetId } };
+
+        // baseline ACTIVE
+        await prisma.companyUserState.upsert({
+          where: stateKey,
+          update: { status: "ACTIVE" },
+          create: { companyId, userId: targetId, status: "ACTIVE" },
+        });
+
+        try {
+          await check("c9-5 deactivate records audit fields (deactivatedAt/By = acting CO)", async () => {
+            const r = await request(`/api/company/users/${targetId}/deactivate`, {
+              method: "POST",
+              jar: adminJar,
+              expectedStatus: 200,
+            });
+            assert(r.json?.data?.status === "INACTIVE", "deactivate returns INACTIVE");
+            const s = await prisma.companyUserState.findUnique({ where: stateKey });
+            assert(s.status === "INACTIVE", "DB status INACTIVE");
+            assert(s.deactivatedAt, "deactivatedAt recorded");
+            assert(s.deactivatedByUserId === coId, "deactivatedByUserId === acting CO");
+          });
+
+          await check("c9-5 deactivate idempotent no-op preserves audit fields", async () => {
+            const before = await prisma.companyUserState.findUnique({ where: stateKey });
+            await request(`/api/company/users/${targetId}/deactivate`, {
+              method: "POST",
+              jar: adminJar,
+              expectedStatus: 200,
+            });
+            const after = await prisma.companyUserState.findUnique({ where: stateKey });
+            assert(
+              after.deactivatedAt.getTime() === before.deactivatedAt.getTime(),
+              "deactivatedAt must not be overwritten on no-op",
+            );
+            assert(
+              after.deactivatedByUserId === before.deactivatedByUserId,
+              "deactivatedByUserId must not change on no-op",
+            );
+          });
+
+          await check("c9-5 audit logging does not break USER_INACTIVE 403 (access denied paths)", async () => {
+            // 대상(pm)은 위에서 INACTIVE. 자기 세션으로 보호 API → 여전히 403 USER_INACTIVE.
+            const pmJar = await login(accounts.viewer, "Viewer");
+            const proj = await request("/api/projects", { jar: pmJar, expectedStatus: 403 });
+            assert(proj.json?.error?.code === "USER_INACTIVE", "projects still USER_INACTIVE");
+            const me = await request("/api/auth/me", { jar: pmJar, expectedStatus: 403 });
+            assert(me.json?.error?.code === "USER_INACTIVE", "me still USER_INACTIVE");
+          });
+
+          await check("c9-5 activate records audit fields (reactivatedAt/By = acting CO)", async () => {
+            const r = await request(`/api/company/users/${targetId}/activate`, {
+              method: "POST",
+              jar: adminJar,
+              expectedStatus: 200,
+            });
+            assert(r.json?.data?.status === "ACTIVE", "activate returns ACTIVE");
+            const s = await prisma.companyUserState.findUnique({ where: stateKey });
+            assert(s.status === "ACTIVE", "DB status ACTIVE");
+            assert(s.reactivatedAt, "reactivatedAt recorded");
+            assert(s.reactivatedByUserId === coId, "reactivatedByUserId === acting CO");
+          });
+
+          await check("c9-5 activate idempotent no-op preserves audit fields", async () => {
+            const before = await prisma.companyUserState.findUnique({ where: stateKey });
+            await request(`/api/company/users/${targetId}/activate`, {
+              method: "POST",
+              jar: adminJar,
+              expectedStatus: 200,
+            });
+            const after = await prisma.companyUserState.findUnique({ where: stateKey });
+            assert(
+              after.reactivatedAt.getTime() === before.reactivatedAt.getTime(),
+              "reactivatedAt must not be overwritten on no-op",
+            );
+            assert(
+              after.reactivatedByUserId === before.reactivatedByUserId,
+              "reactivatedByUserId must not change on no-op",
+            );
+          });
+        } finally {
+          await prisma.companyUserState.upsert({
+            where: stateKey,
+            update: { status: "ACTIVE" },
+            create: { companyId, userId: targetId, status: "ACTIVE" },
+          });
+        }
+      }
+
       await check("CO can sync WORKSPACE role to another user", async () => {
         const original = await prisma.userRole.findUnique({
           where: {

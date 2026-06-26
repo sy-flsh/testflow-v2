@@ -23,6 +23,7 @@ import {
   isCompanyUserActive,
 } from "@/lib/company/company-user-state";
 import { prisma } from "@/lib/db/prisma";
+import { recordSecurityAuditEvent } from "@/lib/security/audit-log";
 
 export type PermissionAction = "read" | "create" | "update" | "delete" | "danger";
 
@@ -95,6 +96,12 @@ export async function requireCompanyOwner(): Promise<CompanyOwnerAuth> {
   const activeCompanyId = companyIds.find((id) => !inactiveCompanyIds.has(id));
 
   if (!activeCompanyId) {
+    recordSecurityAuditEvent({
+      eventType: "INACTIVE_COMPANY_ACCESS_DENIED",
+      targetUserId: session.userId,
+      companyId: companyIds[0],
+      guardName: "requireCompanyOwner",
+    });
     throw new AuthGuardError(
       "이 Company에서 비활성화된 사용자입니다.",
       403,
@@ -130,6 +137,12 @@ export async function requireCurrentWorkspace(): Promise<CurrentWorkspaceAuth> {
     membership.workspace.companyId &&
     !(await isCompanyUserActive(membership.workspace.companyId, session.userId))
   ) {
+    recordSecurityAuditEvent({
+      eventType: "INACTIVE_COMPANY_ACCESS_DENIED",
+      targetUserId: session.userId,
+      companyId: membership.workspace.companyId,
+      guardName: "requireCurrentWorkspace",
+    });
     throw new AuthGuardError("이 Company에서 비활성화된 사용자입니다.", 403, "USER_INACTIVE");
   }
 
