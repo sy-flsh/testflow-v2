@@ -3,6 +3,7 @@ import { apiError, apiSuccess } from "@/lib/api/response";
 import { readJsonBody, readTrimmedString } from "@/lib/api/request";
 import { DELETION_REASON } from "@/lib/auth/account";
 import { clearSessionCookie, getCurrentSession } from "@/lib/auth/session";
+import { getCompaniesWhereUserIsLastActiveCO } from "@/lib/company/company-user-state";
 import { prisma } from "@/lib/db/prisma";
 import { recordSecurityAuditEvent } from "@/lib/security/audit-log";
 import { enforceCsrfProtection } from "@/lib/security/csrf";
@@ -19,6 +20,18 @@ const CONFIRMATION_PHRASE = "탈퇴합니다";
 
 const WITHDRAW_WINDOW_MS = 10 * 60 * 1000;
 const WITHDRAW_IP_LIMIT = 20;
+
+/** c10-1.1: 마지막 ACTIVE CO 자기 탈퇴 차단 메시지(어떤 Company 인지 노출하지 않는 고정 문구). */
+const LAST_CO_WITHDRAWAL_MESSAGE =
+  "현재 Company의 마지막 회사 관리자입니다. 다른 회사 관리자를 지정한 뒤 탈퇴할 수 있습니다.";
+
+/** tx 내부에서 마지막 CO 차단을 알리는 sentinel(롤백 + 409 매핑용). */
+class WithdrawalBlockedError extends Error {
+  constructor() {
+    super("LAST_CO_WITHDRAWAL_FORBIDDEN");
+    this.name = "WithdrawalBlockedError";
+  }
+}
 
 /**
  * c10-1: 본인 계정 전역 탈퇴(soft delete).
@@ -81,6 +94,14 @@ export async function POST(request: Request) {
           return { changed: false as const, missing: false as const };
         }
 
+        // c10-1.1: 마지막 ACTIVE CO 자기 탈퇴 차단(같은 Serializable tx 내부 재검증 → 동시
+        // deactivate/role 변경 경쟁에서도 관리자 공백 방지). 차단 시 throw → tx rollback,
+        // 아래 soft delete/세션 삭제가 실행되지 않는다(상태 변경 없음).
+        const lastCoCompanies = await getCompaniesWhereUserIsLastActiveCO(tx, userId);
+        if (lastCoCompanies.length > 0) {
+          throw new WithdrawalBlockedError();
+        }
+
         await tx.user.update({
           where: { id: userId },
           data: {
@@ -117,6 +138,10 @@ export async function POST(request: Request) {
 
     return apiSuccess({ ok: true });
   } catch (error) {
+    if (error instanceof WithdrawalBlockedError) {
+      // 마지막 ACTIVE CO → 차단. 상태 변경 없음(deletedAt/세션/쿠키/audit 미변경 → 로그인 유지).
+      return apiError(LAST_CO_WITHDRAWAL_MESSAGE, 409, "USER_LAST_CO_WITHDRAWAL_FORBIDDEN");
+    }
     console.error(error);
     return apiError("계정 탈퇴를 처리하지 못했습니다.", 500, "ACCOUNT_WITHDRAWAL_FAILED");
   }

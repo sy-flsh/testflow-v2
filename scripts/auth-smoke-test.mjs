@@ -3615,6 +3615,113 @@ async function main() {
         }
       }
 
+      // c10-1.1: 마지막 ACTIVE CO 자기 탈퇴 차단 (격리된 신규 Company/CO 로 demo 회사 미오염).
+      {
+        const seedHash = (
+          await prisma.user.findUnique({ where: { email: accounts.admin }, select: { passwordHash: true } })
+        )?.passwordHash;
+        const FWD = { "x-forwarded-for": "198.51.100.91" };
+        const userIds = [];
+        const companyIds = [];
+        const workspaceIds = [];
+
+        async function login1011(email) {
+          const jar = new CookieJar();
+          await request("/api/auth/login", { method: "POST", headers: FWD, body: { email, password: PASSWORD }, jar, expectedStatus: 200 });
+          assert(jar.cookies.has("tf_session"), `${email} login failed`);
+          return jar;
+        }
+        async function mkCompany(tag) {
+          const c = await prisma.company.create({ data: { name: `C1011-${tag} ${RUN_ID}`, slug: `c1011-${tag}-${RUN_ID}` } });
+          const w = await prisma.workspace.create({ data: { name: `WS1011-${tag} ${RUN_ID}`, slug: `ws1011-${tag}-${RUN_ID}`, companyId: c.id } });
+          companyIds.push(c.id);
+          workspaceIds.push(w.id);
+          return { company: c, workspace: w };
+        }
+        // CO user(+멤버십). withState=false 면 legacy(CompanyUserState 없음), status 로 ACTIVE/INACTIVE 지정.
+        async function mkCo(tag, company, workspace, { withState = true, status = "ACTIVE" } = {}) {
+          const u = await prisma.user.create({ data: { email: `co-${tag}.${RUN_ID}@x.local`, name: `CO ${tag}`, passwordHash: seedHash } });
+          userIds.push(u.id);
+          await prisma.workspaceMember.create({ data: { workspaceId: workspace.id, userId: u.id, role: "ADMIN", status: "ACTIVE" } });
+          await prisma.userRole.create({ data: { userId: u.id, scopeType: "COMPANY", scopeId: company.id, role: "CO" } });
+          if (withState) {
+            await prisma.companyUserState.create({ data: { companyId: company.id, userId: u.id, status } });
+          }
+          return u;
+        }
+
+        try {
+          const { company: c1, workspace: w1 } = await mkCompany("A");
+          const coA = await mkCo("a", c1, w1, { withState: true, status: "ACTIVE" });
+
+          await check("c10-1.1 sole ACTIVE CO self-withdrawal → 409, no state change", async () => {
+            const jar = await login1011(coA.email);
+            const r = await request("/api/account/withdraw", { method: "POST", jar, headers: FWD, body: { confirmation: "탈퇴합니다" }, expectedStatus: 409 });
+            assert(r.json?.error?.code === "USER_LAST_CO_WITHDRAWAL_FORBIDDEN", "expected USER_LAST_CO_WITHDRAWAL_FORBIDDEN");
+            const u = await prisma.user.findUnique({ where: { id: coA.id } });
+            assert(u?.deletedAt === null && u?.deletedByUserId === null && u?.deletionReason === null, "no soft-delete fields set");
+            assert((await prisma.session.count({ where: { userId: coA.id } })) >= 1, "session preserved (still logged in)");
+            assert((await prisma.securityAuditEvent.count({ where: { eventType: "USER_SOFT_DELETED", targetUserId: coA.id } })) === 0, "no USER_SOFT_DELETED audit");
+            assert((await prisma.userRole.count({ where: { userId: coA.id } })) === 1, "UserRole unchanged");
+            assert((await prisma.workspaceMember.count({ where: { userId: coA.id } })) === 1, "WorkspaceMember unchanged");
+          });
+
+          // INACTIVE 다른 CO 는 ACTIVE 카운트에 미포함 → 여전히 마지막 ACTIVE CO.
+          const coB = await mkCo("b", c1, w1, { withState: true, status: "INACTIVE" });
+          await check("c10-1.1 INACTIVE other CO does not count → still 409", async () => {
+            const jar = await login1011(coA.email);
+            const r = await request("/api/account/withdraw", { method: "POST", jar, headers: FWD, body: { confirmation: "탈퇴합니다" }, expectedStatus: 409 });
+            assert(r.json?.error?.code === "USER_LAST_CO_WITHDRAWAL_FORBIDDEN", "INACTIVE co does not rescue withdrawal");
+          });
+
+          // 다른 Company 에선 CO 가 더 있어도, 첫 Company 의 마지막 CO 이면 차단.
+          const { company: c2, workspace: w2 } = await mkCompany("B");
+          await prisma.userRole.create({ data: { userId: coA.id, scopeType: "COMPANY", scopeId: c2.id, role: "CO" } });
+          await prisma.companyUserState.create({ data: { companyId: c2.id, userId: coA.id, status: "ACTIVE" } });
+          await prisma.workspaceMember.create({ data: { workspaceId: w2.id, userId: coA.id, role: "ADMIN", status: "ACTIVE" } });
+          await mkCo("c", c2, w2, { withState: true, status: "ACTIVE" }); // c2 의 다른 ACTIVE CO
+          await check("c10-1.1 last CO in ONE company blocks withdrawal even if CO elsewhere has backup", async () => {
+            const jar = await login1011(coA.email);
+            const r = await request("/api/account/withdraw", { method: "POST", jar, headers: FWD, body: { confirmation: "탈퇴합니다" }, expectedStatus: 409 });
+            assert(r.json?.error?.code === "USER_LAST_CO_WITHDRAWAL_FORBIDDEN", "company1 still last-CO → blocked");
+          });
+
+          // c1 에 두 번째 ACTIVE CO 확보(coB ACTIVE) → coA 는 어디서도 마지막 CO 아님 → 탈퇴 허용.
+          await prisma.companyUserState.update({ where: { companyId_userId: { companyId: c1.id, userId: coB.id } }, data: { status: "ACTIVE" } });
+          await check("c10-1.1 adding a 2nd ACTIVE CO unblocks withdrawal → 200 soft-delete + audit", async () => {
+            const jar = await login1011(coA.email);
+            const r = await request("/api/account/withdraw", { method: "POST", jar, headers: FWD, body: { confirmation: "탈퇴합니다" }, expectedStatus: 200 });
+            assert(r.json?.data?.ok === true, "withdrawal now allowed");
+            const u = await prisma.user.findUnique({ where: { id: coA.id } });
+            assert(u?.deletedAt instanceof Date && u?.deletionReason === "SELF_WITHDRAWAL", "soft-deleted");
+            assert((await prisma.session.count({ where: { userId: coA.id } })) === 0, "sessions deleted");
+            assert((await prisma.securityAuditEvent.count({ where: { eventType: "USER_SOFT_DELETED", targetUserId: coA.id } })) === 1, "USER_SOFT_DELETED recorded");
+          });
+
+          // legacy: CompanyUserState 없는 단독 CO 도 ACTIVE 로 간주 → 차단(c9-1 fallback 일관).
+          const { company: c3, workspace: w3 } = await mkCompany("L");
+          const coLegacy = await mkCo("legacy", c3, w3, { withState: false });
+          await check("c10-1.1 legacy CO without CompanyUserState is treated ACTIVE → sole CO 409", async () => {
+            const jar = await login1011(coLegacy.email);
+            const r = await request("/api/account/withdraw", { method: "POST", jar, headers: FWD, body: { confirmation: "탈퇴합니다" }, expectedStatus: 409 });
+            assert(r.json?.error?.code === "USER_LAST_CO_WITHDRAWAL_FORBIDDEN", "legacy sole CO blocked (no-state = active)");
+            const u = await prisma.user.findUnique({ where: { id: coLegacy.id } });
+            assert(u?.deletedAt === null, "legacy CO not soft-deleted");
+          });
+        } finally {
+          await prisma.securityAuditEvent.deleteMany({ where: { OR: [{ actorUserId: { in: userIds } }, { targetUserId: { in: userIds } }] } });
+          for (const id of userIds) {
+            await prisma.user.delete({ where: { id } }).catch(() => {});
+          }
+          for (const id of workspaceIds) {
+            await prisma.workspace.delete({ where: { id } }).catch(() => {});
+          }
+          for (const id of companyIds) {
+            await prisma.company.delete({ where: { id } }).catch(() => {});
+          }
+        }
+      }
+
       await check("CO can sync WORKSPACE role to another user", async () => {
         const original = await prisma.userRole.findUnique({
           where: {

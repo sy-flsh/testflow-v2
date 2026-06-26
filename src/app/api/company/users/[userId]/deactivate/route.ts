@@ -6,7 +6,10 @@ import {
   isAuthGuardError,
   requireCompanyOwner,
 } from "@/lib/auth/guards";
-import { isUserInCompany } from "@/lib/company/company-user-state";
+import {
+  getActiveCompanyOwnerIds,
+  isUserInCompany,
+} from "@/lib/company/company-user-state";
 import { prisma } from "@/lib/db/prisma";
 import { recordSecurityAuditEvent } from "@/lib/security/audit-log";
 import { enforceCsrfProtection } from "@/lib/security/csrf";
@@ -85,28 +88,16 @@ export async function POST(request: Request, context: RouteContext) {
           }
 
           // 마지막 ACTIVE CO 보호: 대상이 ACTIVE CO 이고 ACTIVE CO 가 1명뿐이면 차단.
-          const cos = await tx.userRole.findMany({
-            where: { scopeType: "COMPANY", scopeId: companyId, role: "CO" },
-            select: { userId: true },
-          });
-          const coIds = cos.map((co) => co.userId);
+          // c10-1.1: ACTIVE CO 판별을 공용 helper 로 일원화(withdraw 와 동일 기준). 대상은 현재 ACTIVE
+          // (위에서 INACTIVE 면 이미 반환)이므로 CO 라면 activeCoIds 에 포함된다.
+          const activeCoIds = await getActiveCompanyOwnerIds(tx, companyId);
 
-          if (coIds.includes(targetUserId)) {
-            const inactiveStates = await tx.companyUserState.findMany({
-              where: { companyId, userId: { in: coIds }, status: "INACTIVE" },
-              select: { userId: true },
-            });
-            const inactiveSet = new Set(inactiveStates.map((s) => s.userId));
-            const activeCoCount = coIds.filter((id) => !inactiveSet.has(id)).length;
-
-            // 대상은 현재 ACTIVE(위에서 INACTIVE 면 이미 반환). ACTIVE CO 가 1명뿐이면 마지막 CO.
-            if (activeCoCount <= 1) {
-              throw new StateProtectionError(
-                "Company 의 마지막 활성 CO 는 비활성화할 수 없습니다.",
-                400,
-                "USER_LAST_CO_DEACTIVATE_FORBIDDEN",
-              );
-            }
+          if (activeCoIds.includes(targetUserId) && activeCoIds.length <= 1) {
+            throw new StateProtectionError(
+              "Company 의 마지막 활성 CO 는 비활성화할 수 없습니다.",
+              400,
+              "USER_LAST_CO_DEACTIVATE_FORBIDDEN",
+            );
           }
 
           // 본인 비활성 금지(마지막 CO 가 아닌 경우의 본인 비활성).

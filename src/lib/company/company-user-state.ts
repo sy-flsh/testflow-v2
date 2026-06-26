@@ -1,5 +1,8 @@
-import type { CompanyUserStatus } from "@prisma/client";
+import type { CompanyUserStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
+
+/** prisma 또는 트랜잭션 client(둘 다 같은 delegate 시그니처). 공용 CO helper 가 tx 안에서도 동작하게 한다. */
+type DbClient = Prisma.TransactionClient | typeof prisma;
 
 /**
  * c9-1: Company 단위 사용자 활성/비활성 상태 helper.
@@ -122,6 +125,94 @@ export async function isUserInCompany(companyId: string, userId: string): Promis
   });
 
   return Boolean(role);
+}
+
+/**
+ * c9-1/c10-1.1 공용: 한 Company 의 **ACTIVE CO** userId 목록.
+ *
+ * 기준(deactivate 와 withdrawal 이 동일): COMPANY/CO UserRole 보유자 중
+ * CompanyUserState 가 **INACTIVE 인 사람만 제외**한다. CompanyUserState 레코드가 없는
+ * legacy CO 는 ACTIVE 로 간주(레코드 없음=ACTIVE 인 기존 fallback 과 일관).
+ *
+ * client 로 트랜잭션 client 를 받을 수 있어 deactivate/withdraw 의 tx 내부에서 재검증 가능.
+ */
+export async function getActiveCompanyOwnerIds(
+  client: DbClient,
+  companyId: string,
+): Promise<string[]> {
+  const cos = await client.userRole.findMany({
+    where: { scopeType: "COMPANY", scopeId: companyId, role: "CO" },
+    select: { userId: true },
+  });
+  const coIds = cos.map((co) => co.userId);
+  if (coIds.length === 0) {
+    return [];
+  }
+  const inactive = await client.companyUserState.findMany({
+    where: { companyId, userId: { in: coIds }, status: "INACTIVE" },
+    select: { userId: true },
+  });
+  const inactiveSet = new Set(inactive.map((state) => state.userId));
+  return coIds.filter((id) => !inactiveSet.has(id));
+}
+
+/**
+ * c10-1.1: 해당 User 가 **마지막 ACTIVE CO** 인 Company id 목록(bulk, Company 별 N+1 없음).
+ *
+ * - 사용자가 COMPANY/CO Role 을 가진 Company 만 대상.
+ * - 사용자가 그 Company 에서 INACTIVE 면 이미 ACTIVE CO 가 아니므로 제외(관리자 공백 유발 안 함).
+ * - 남은 Company 중 ACTIVE CO 수가 1명(=본인)뿐인 Company 를 반환.
+ *   legacy(상태 레코드 없음) CO 는 ACTIVE 로 계산(c9-1 fallback 과 동일) → 단독 legacy CO 도 차단된다.
+ *
+ * 반환이 비어있지 않으면 self withdrawal 을 차단한다. tx client 로 같은 트랜잭션 내부 재검증에 사용.
+ */
+export async function getCompaniesWhereUserIsLastActiveCO(
+  client: DbClient,
+  userId: string,
+): Promise<string[]> {
+  const myCoRoles = await client.userRole.findMany({
+    where: { userId, scopeType: "COMPANY", role: "CO" },
+    select: { scopeId: true },
+  });
+  const coCompanyIds = Array.from(new Set(myCoRoles.map((role) => role.scopeId)));
+  if (coCompanyIds.length === 0) {
+    return [];
+  }
+
+  // 본인이 INACTIVE 인 Company 는 제외(이미 ACTIVE CO 아님).
+  const myInactive = await client.companyUserState.findMany({
+    where: { userId, companyId: { in: coCompanyIds }, status: "INACTIVE" },
+    select: { companyId: true },
+  });
+  const myInactiveSet = new Set(myInactive.map((state) => state.companyId));
+  const activeCoCompanyIds = coCompanyIds.filter((id) => !myInactiveSet.has(id));
+  if (activeCoCompanyIds.length === 0) {
+    return [];
+  }
+
+  // 대상 Company 들의 모든 CO + INACTIVE 상태를 각각 1회 bulk 조회(N+1 없음).
+  const allCos = await client.userRole.findMany({
+    where: { scopeType: "COMPANY", role: "CO", scopeId: { in: activeCoCompanyIds } },
+    select: { userId: true, scopeId: true },
+  });
+  const coUserIds = Array.from(new Set(allCos.map((co) => co.userId)));
+  const inactiveStates = await client.companyUserState.findMany({
+    where: { companyId: { in: activeCoCompanyIds }, userId: { in: coUserIds }, status: "INACTIVE" },
+    select: { companyId: true, userId: true },
+  });
+  const inactivePair = new Set(inactiveStates.map((state) => `${state.companyId}:${state.userId}`));
+
+  // Company 별 ACTIVE CO 수 집계.
+  const activeCountByCompany = new Map<string, number>();
+  for (const co of allCos) {
+    if (inactivePair.has(`${co.scopeId}:${co.userId}`)) {
+      continue;
+    }
+    activeCountByCompany.set(co.scopeId, (activeCountByCompany.get(co.scopeId) ?? 0) + 1);
+  }
+
+  // 본인이 ACTIVE CO 이면서 그 Company 의 ACTIVE CO 가 1명뿐 → 마지막 ACTIVE CO.
+  return activeCoCompanyIds.filter((id) => (activeCountByCompany.get(id) ?? 0) <= 1);
 }
 
 export type CompanyUserStateView = {
