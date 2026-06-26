@@ -139,9 +139,9 @@ export async function POST(request: Request, context: RouteContext) {
       throw error;
     }
 
-    // c9-5: 실제 전이(ACTIVE→INACTIVE)일 때만 감사 이벤트 기록(fire-and-forget).
+    // c9-5/c9-6: 실제 전이(ACTIVE→INACTIVE)일 때만 영속 감사 기록(best-effort, 응답 영향 없음).
     if (result.changed) {
-      recordSecurityAuditEvent({
+      await recordSecurityAuditEvent({
         eventType: "COMPANY_USER_DEACTIVATED",
         actorUserId: actor.id,
         targetUserId,

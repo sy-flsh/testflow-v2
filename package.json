@@ -16,6 +16,7 @@
     "db:seed": "prisma db seed",
     "db:reset:dev": "tsx prisma/reset-dev.ts",
     "auth:cleanup": "tsx scripts/auth-cleanup.ts",
+    "audit:cleanup": "node scripts/cleanup-security-audit.mjs",
     "test:auth": "node scripts/auth-smoke-test.mjs",
     "test:smoke": "npm run test:auth",
     "format": "prettier --write .",

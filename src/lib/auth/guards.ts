@@ -96,7 +96,8 @@ export async function requireCompanyOwner(): Promise<CompanyOwnerAuth> {
   const activeCompanyId = companyIds.find((id) => !inactiveCompanyIds.has(id));
 
   if (!activeCompanyId) {
-    recordSecurityAuditEvent({
+    // best-effort durable audit (helper 는 throw 하지 않음 → 권한 판단/응답에 영향 없음).
+    await recordSecurityAuditEvent({
       eventType: "INACTIVE_COMPANY_ACCESS_DENIED",
       targetUserId: session.userId,
       companyId: companyIds[0],
@@ -137,7 +138,7 @@ export async function requireCurrentWorkspace(): Promise<CurrentWorkspaceAuth> {
     membership.workspace.companyId &&
     !(await isCompanyUserActive(membership.workspace.companyId, session.userId))
   ) {
-    recordSecurityAuditEvent({
+    await recordSecurityAuditEvent({
       eventType: "INACTIVE_COMPANY_ACCESS_DENIED",
       targetUserId: session.userId,
       companyId: membership.workspace.companyId,

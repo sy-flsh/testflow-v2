@@ -50,6 +50,13 @@ enum CompanyUserStatus {
   INACTIVE
 }
 
+// c9-6: 보안 감사 이벤트 종류(서버 내부 고정 집합 → enum).
+enum SecurityAuditEventType {
+  COMPANY_USER_DEACTIVATED
+  COMPANY_USER_REACTIVATED
+  INACTIVE_COMPANY_ACCESS_DENIED
+}
+
 enum ProjectStatus {
   ACTIVE
   COMPLETED
@@ -306,6 +313,46 @@ model CompanyUserState {
   @@unique([companyId, userId])
   @@index([companyId, status])
   @@map("company_user_states")
+}
+
+// c9-6: 영속 보안 감사 이벤트.
+// actor/target/company 는 **relation 없는 scalar ID** 로 보관한다 — 감사 로그는 User/Company
+// 삭제 후에도 보존되어야 하므로 FK cascade 로 흔적이 사라지면 안 된다.
+// 민감정보(token/password/cookie/inviteUrl/body/IP 원문 등)는 저장하지 않는다.
+model SecurityAuditEvent {
+  id           String                 @id @default(cuid())
+  eventType    SecurityAuditEventType
+  occurredAt   DateTime               @default(now())
+  actorUserId  String?
+  targetUserId String?
+  companyId    String?
+  guardName    String?
+  metadata     Json?
+
+  @@index([occurredAt])
+  @@index([eventType, occurredAt])
+  @@index([companyId, occurredAt])
+  @@index([targetUserId, occurredAt])
+  @@map("security_audit_events")
+}
+
+// c9-6: 반복 access-denied 이벤트의 DB 기반 분산 throttle.
+// throttleKey 유니크 + Postgres ON CONFLICT 조건부 update 로 다중 인스턴스 경쟁에서도
+// window 당 1건만 SecurityAuditEvent 를 저장하도록 보장한다.
+model SecurityAuditThrottle {
+  id            String                 @id @default(cuid())
+  throttleKey   String                 @unique
+  eventType     SecurityAuditEventType
+  targetUserId  String?
+  companyId     String?
+  lastEmittedAt DateTime
+  expiresAt     DateTime
+  createdAt     DateTime               @default(now())
+  updatedAt     DateTime               @updatedAt
+
+  @@index([expiresAt])
+  @@index([eventType, targetUserId, companyId])
+  @@map("security_audit_throttles")
 }
 
 model Project {

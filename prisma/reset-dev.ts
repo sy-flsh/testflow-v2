@@ -18,6 +18,9 @@ async function main() {
 
   await prisma.$transaction([
     prisma.rateLimitBucket.deleteMany(),
+    // c9-6: security audit 테이블(FK 없음, 그래도 명시적으로 정리).
+    prisma.securityAuditThrottle.deleteMany(),
+    prisma.securityAuditEvent.deleteMany(),
     prisma.session.deleteMany(),
     prisma.aiTestCaseDraft.deleteMany(),
     prisma.defectLink.deleteMany(),

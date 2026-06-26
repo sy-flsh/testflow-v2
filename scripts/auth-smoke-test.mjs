@@ -2617,6 +2617,216 @@ async function main() {
         }
       }
 
+      // c9-6: 영속 SecurityAuditEvent + DB 분산 throttle + cleanup
+      {
+        await prisma.rateLimitBucket.deleteMany({ where: { scope: { in: ["auth:login:ip"] } } });
+        const bePwHash = (
+          await prisma.user.findUnique({ where: { email: accounts.member }, select: { passwordHash: true } })
+        ).passwordHash;
+        let tId = null;
+        const denyKey = (uid) => `INACTIVE_COMPANY_ACCESS_DENIED:${uid}:${companyId}`;
+
+        try {
+          const t = await prisma.user.create({
+            data: { email: `c96.t.${RUN_ID}@audit.local`, name: "C96 Target", passwordHash: bePwHash },
+          });
+          tId = t.id;
+          await prisma.workspaceMember.create({
+            data: { workspaceId, userId: t.id, role: "MEMBER", status: "ACTIVE" },
+          });
+          await prisma.companyUserState.create({ data: { companyId, userId: t.id, status: "ACTIVE" } });
+
+          await check("c9-6 deactivate persists COMPANY_USER_DEACTIVATED audit event", async () => {
+            await request(`/api/company/users/${t.id}/deactivate`, {
+              method: "POST",
+              jar: adminJar,
+              expectedStatus: 200,
+            });
+            const events = await prisma.securityAuditEvent.findMany({
+              where: { targetUserId: t.id, eventType: "COMPANY_USER_DEACTIVATED" },
+            });
+            assert(events.length === 1, `expected 1 DEACTIVATED event, got ${events.length}`);
+            const e = events[0];
+            assert(e.actorUserId === leadUser.id, "actorUserId === acting CO");
+            assert(e.companyId === companyId, "companyId recorded");
+            assert(e.guardName === "company.users.deactivate", "guardName recorded");
+            assert(e.metadata === null, "metadata null (no payload/sensitive data)");
+          });
+
+          await check("c9-6 access denied persists 1 event and DB-throttles repeats", async () => {
+            const tJar = await loginRaw(t.email);
+            for (let i = 0; i < 5; i += 1) {
+              await request("/api/projects", { jar: tJar, expectedStatus: 403 });
+            }
+            const denied = await prisma.securityAuditEvent.findMany({
+              where: { targetUserId: t.id, eventType: "INACTIVE_COMPANY_ACCESS_DENIED" },
+            });
+            assert(denied.length === 1, `expected exactly 1 access-denied event (throttled), got ${denied.length}`);
+            assert(denied[0].companyId === companyId, "access-denied companyId");
+            assert(denied[0].guardName, "access-denied guardName present");
+            const throttle = await prisma.securityAuditThrottle.findUnique({
+              where: { throttleKey: denyKey(t.id) },
+            });
+            assert(throttle, "throttle row created");
+          });
+
+          await check("c9-6 access denied emits again after throttle window passes", async () => {
+            await prisma.securityAuditThrottle.update({
+              where: { throttleKey: denyKey(t.id) },
+              data: { lastEmittedAt: new Date(Date.now() - 3_600_000) },
+            });
+            const tJar = await loginRaw(t.email);
+            await request("/api/projects", { jar: tJar, expectedStatus: 403 });
+            const denied = await prisma.securityAuditEvent.findMany({
+              where: { targetUserId: t.id, eventType: "INACTIVE_COMPANY_ACCESS_DENIED" },
+            });
+            assert(denied.length === 2, `expected 2 after window passes, got ${denied.length}`);
+          });
+
+          await check("c9-6 concurrent denied requests create at most 1 event per window", async () => {
+            await prisma.securityAuditThrottle.deleteMany({ where: { throttleKey: denyKey(t.id) } });
+            const before = await prisma.securityAuditEvent.count({
+              where: { targetUserId: t.id, eventType: "INACTIVE_COMPANY_ACCESS_DENIED" },
+            });
+            const tJar = await loginRaw(t.email);
+            const results = await Promise.all(
+              Array.from({ length: 5 }, () => request("/api/projects", { jar: tJar })),
+            );
+            assert(
+              results.every((r) => r.status === 403 && r.json?.error?.code === "USER_INACTIVE"),
+              "all concurrent responses must stay 403 USER_INACTIVE",
+            );
+            const after = await prisma.securityAuditEvent.count({
+              where: { targetUserId: t.id, eventType: "INACTIVE_COMPANY_ACCESS_DENIED" },
+            });
+            assert(after - before === 1, `expected exactly 1 new event under concurrency, got ${after - before}`);
+          });
+
+          await check("c9-6 activate persists REACTIVATED; idempotent no-op adds no event", async () => {
+            await request(`/api/company/users/${t.id}/activate`, {
+              method: "POST",
+              jar: adminJar,
+              expectedStatus: 200,
+            });
+            let events = await prisma.securityAuditEvent.findMany({
+              where: { targetUserId: t.id, eventType: "COMPANY_USER_REACTIVATED" },
+            });
+            assert(events.length === 1, "expected 1 REACTIVATED event");
+            assert(events[0].actorUserId === leadUser.id, "REACTIVATED actor === CO");
+
+            await request(`/api/company/users/${t.id}/activate`, {
+              method: "POST",
+              jar: adminJar,
+              expectedStatus: 200,
+            });
+            events = await prisma.securityAuditEvent.findMany({
+              where: { targetUserId: t.id, eventType: "COMPANY_USER_REACTIVATED" },
+            });
+            assert(events.length === 1, "idempotent activate must not add a new event");
+          });
+        } finally {
+          if (tId) {
+            await prisma.securityAuditEvent.deleteMany({ where: { targetUserId: tId } });
+            await prisma.securityAuditThrottle.deleteMany({ where: { throttleKey: denyKey(tId) } });
+            await prisma.companyUserState.deleteMany({ where: { userId: tId } });
+            await prisma.workspaceMember.deleteMany({ where: { userId: tId } });
+            await prisma.session.deleteMany({ where: { userId: tId } });
+            await prisma.user.delete({ where: { id: tId } }).catch(() => {});
+          }
+        }
+      }
+
+      // c9-6: retention cleanup script (dry-run / 실삭제 / env fallback)
+      {
+        const tag = `c96cleanup-${RUN_ID}`;
+        const oldEvent = await prisma.securityAuditEvent.create({
+          data: {
+            eventType: "INACTIVE_COMPANY_ACCESS_DENIED",
+            targetUserId: tag,
+            occurredAt: new Date(Date.now() - 200 * 86_400_000), // 200일 전(기본 90일 retention 초과)
+          },
+        });
+        const recentEvent = await prisma.securityAuditEvent.create({
+          data: { eventType: "COMPANY_USER_DEACTIVATED", targetUserId: tag, occurredAt: new Date() },
+        });
+        const expiredThrottle = await prisma.securityAuditThrottle.create({
+          data: {
+            throttleKey: `exp-${RUN_ID}`,
+            eventType: "INACTIVE_COMPANY_ACCESS_DENIED",
+            lastEmittedAt: new Date(Date.now() - 3_600_000),
+            expiresAt: new Date(Date.now() - 3_600_000),
+          },
+        });
+        const validThrottle = await prisma.securityAuditThrottle.create({
+          data: {
+            throttleKey: `valid-${RUN_ID}`,
+            eventType: "INACTIVE_COMPANY_ACCESS_DENIED",
+            lastEmittedAt: new Date(),
+            expiresAt: new Date(Date.now() + 3_600_000),
+          },
+        });
+
+        async function runCleanup(extraArgs, extraEnv) {
+          return new Promise((resolve, reject) => {
+            const child = spawn("node", ["scripts/cleanup-security-audit.mjs", ...extraArgs], {
+              env: { ...process.env, ...(extraEnv ?? {}) },
+            });
+            let out = "";
+            child.stdout.on("data", (d) => {
+              out += d.toString();
+            });
+            child.stderr.on("data", (d) => {
+              out += d.toString();
+            });
+            child.on("close", (code) =>
+              code === 0 ? resolve(out) : reject(new Error(`cleanup exited ${code}: ${out}`)),
+            );
+          });
+        }
+
+        try {
+          await check("c9-6 audit:cleanup --dry-run reports targets without deleting", async () => {
+            const out = await runCleanup(["--dry-run"]);
+            assert(out.includes("dry-run"), "dry-run output expected");
+            assert(await prisma.securityAuditEvent.findUnique({ where: { id: oldEvent.id } }), "old event kept on dry-run");
+            assert(
+              await prisma.securityAuditThrottle.findUnique({ where: { id: expiredThrottle.id } }),
+              "expired throttle kept on dry-run",
+            );
+          });
+
+          await check("c9-6 audit:cleanup deletes old events + expired throttles, keeps recent/valid", async () => {
+            await runCleanup([]);
+            assert(
+              !(await prisma.securityAuditEvent.findUnique({ where: { id: oldEvent.id } })),
+              "old event must be deleted",
+            );
+            assert(
+              await prisma.securityAuditEvent.findUnique({ where: { id: recentEvent.id } }),
+              "recent event must be kept",
+            );
+            assert(
+              !(await prisma.securityAuditThrottle.findUnique({ where: { id: expiredThrottle.id } })),
+              "expired throttle must be deleted",
+            );
+            assert(
+              await prisma.securityAuditThrottle.findUnique({ where: { id: validThrottle.id } }),
+              "valid throttle must be kept",
+            );
+          });
+
+          await check("c9-6 audit:cleanup invalid SECURITY_AUDIT_RETENTION_DAYS falls back to 90", async () => {
+            const out = await runCleanup(["--dry-run"], { SECURITY_AUDIT_RETENTION_DAYS: "not-a-number" });
+            assert(out.includes("retentionDays=90"), "invalid retention should fall back to 90");
+          });
+        } finally {
+          await prisma.securityAuditEvent.deleteMany({ where: { targetUserId: tag } });
+          await prisma.securityAuditThrottle.deleteMany({
+            where: { throttleKey: { in: [`exp-${RUN_ID}`, `valid-${RUN_ID}`] } },
+          });
+        }
+      }
+
       await check("CO can sync WORKSPACE role to another user", async () => {
         const original = await prisma.userRole.findUnique({
           where: {

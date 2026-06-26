@@ -1,22 +1,20 @@
-/**
- * c9-5: 구조화된 security audit 로그 abstraction.
- *
- * 현재 프로젝트에는 영속 audit/activity 모델이 없으므로(스키마/마이그레이션 추가 금지),
- * production 외부 로그 수집기로 전달 가능한 **JSON structured log** 형태로만 emit 한다.
- * c9-6 에서 영속 테이블 도입 시 이 abstraction 의 호출부는 그대로 두고 sink 만 교체하면 된다.
- *
- * 민감정보(raw token / password / cookie / inviteUrl / 전체 request body)는 절대 기록하지 않는다.
- * 기록 실패가 API 차단/정상 응답을 바꾸지 않도록 모든 경로를 예외 격리한다(fire-and-forget).
- *
- * 주의(throttle 한계): INACTIVE_COMPANY_ACCESS_DENIED 의 중복 억제는 **in-memory best-effort** 라
- * multi-instance(수평 확장) 환경에서는 인스턴스마다 별도 카운트가 되어 완전한 보장이 아니다.
- * 영속/분산 throttle 은 c9-6 영속 audit 설계에서 다룬다.
- */
+import { Prisma } from "@prisma/client";
+import type { SecurityAuditEventType } from "@prisma/client";
+import { prisma } from "@/lib/db/prisma";
 
-export type SecurityAuditEventType =
-  | "COMPANY_USER_DEACTIVATED"
-  | "COMPANY_USER_REACTIVATED"
-  | "INACTIVE_COMPANY_ACCESS_DENIED";
+/**
+ * c9-6: 영속 security audit 로그 + DB 기반 분산 throttle.
+ *
+ * - 상태 변경 이벤트(COMPANY_USER_DEACTIVATED/REACTIVATED)는 실제 전이마다 항상 DB 저장 시도.
+ * - 반복 INACTIVE_COMPANY_ACCESS_DENIED 는 Postgres ON CONFLICT 조건부 update 로
+ *   (targetUserId, companyId) 당 window(기본 5분)에 1건만 저장(다중 인스턴스 분산 throttle).
+ * - 민감정보(token/password/cookie/inviteUrl/request body/IP 원문 등)는 저장하지 않는다.
+ * - 모든 경로를 예외 격리한다: audit 저장/throttle 실패가 호출 API의 200/400/403/404 응답을
+ *   절대 바꾸지 않는다(절대 throw 하지 않고 boolean 을 반환).
+ *
+ * Logging policy: durable DB 저장이 정본. 개발/테스트(NODE_ENV !== "production")에서는 진단용
+ * 구조화 콘솔 라인을 1회 emit 하지만, production 에서는 콘솔 중복 노출을 하지 않는다.
+ */
 
 export type SecurityAuditEventInput = {
   eventType: SecurityAuditEventType;
@@ -26,76 +24,124 @@ export type SecurityAuditEventInput = {
   guardName?: string;
 };
 
-export type SecurityAuditEvent = SecurityAuditEventInput & {
-  occurredAt: string;
-};
+/** SECURITY_AUDIT_DENY_THROTTLE_SECONDS (기본 300, 최소 1, 잘못된 값은 300). */
+export function getDenyThrottleSeconds(): number {
+  const parsed = Number(process.env.SECURITY_AUDIT_DENY_THROTTLE_SECONDS);
+  return Number.isInteger(parsed) && parsed >= 1 ? parsed : 300;
+}
 
-/** 입력 → 표준 이벤트(occurredAt 부착, undefined 필드 제거). 민감 필드는 형식상 받지 않는다. */
-export function buildSecurityAuditEvent(input: SecurityAuditEventInput): SecurityAuditEvent {
-  const event: SecurityAuditEvent = {
+/** SECURITY_AUDIT_RETENTION_DAYS (기본 90, 최소 1, 잘못된 값은 90). */
+export function getAuditRetentionDays(): number {
+  const parsed = Number(process.env.SECURITY_AUDIT_RETENTION_DAYS);
+  return Number.isInteger(parsed) && parsed >= 1 ? parsed : 90;
+}
+
+const ACCESS_DENIED: SecurityAuditEventType = "INACTIVE_COMPANY_ACCESS_DENIED";
+
+/** access-denied throttle 키(결정적). companyId/targetUserId 중 하나라도 없으면 null(기록 생략). */
+export function buildThrottleKey(input: SecurityAuditEventInput): string | null {
+  if (input.eventType !== ACCESS_DENIED) {
+    return null;
+  }
+  if (!input.targetUserId || !input.companyId) {
+    return null;
+  }
+  return `${input.eventType}:${input.targetUserId}:${input.companyId}`;
+}
+
+function devLog(input: SecurityAuditEventInput, occurredAt: string): void {
+  if (process.env.NODE_ENV === "production") {
+    return;
+  }
+  // 민감정보 없는 필드만. (단일 라인 JSON — 외부 수집기 친화)
+  console.info(
+    `[security-audit] ${JSON.stringify({
+      eventType: input.eventType,
+      occurredAt,
+      actorUserId: input.actorUserId,
+      targetUserId: input.targetUserId,
+      companyId: input.companyId,
+      guardName: input.guardName,
+    })}`,
+  );
+}
+
+function toEventData(input: SecurityAuditEventInput): Prisma.SecurityAuditEventCreateInput {
+  return {
     eventType: input.eventType,
-    occurredAt: new Date().toISOString(),
+    actorUserId: input.actorUserId ?? null,
+    targetUserId: input.targetUserId ?? null,
+    companyId: input.companyId ?? null,
+    guardName: input.guardName ?? null,
+    // metadata 는 현재 c9 이벤트에 불필요 → DB NULL. (payload 통째 저장 금지)
+    metadata: Prisma.DbNull,
   };
-
-  if (input.actorUserId) event.actorUserId = input.actorUserId;
-  if (input.targetUserId) event.targetUserId = input.targetUserId;
-  if (input.companyId) event.companyId = input.companyId;
-  if (input.guardName) event.guardName = input.guardName;
-
-  return event;
-}
-
-// --- INACTIVE_COMPANY_ACCESS_DENIED 중복 억제 (in-memory best-effort) ---
-const ACCESS_DENIED_THROTTLE_MS = 5 * 60 * 1000; // 5분
-const lastLoggedAtByKey = new Map<string, number>();
-
-function accessDeniedKey(event: SecurityAuditEvent): string {
-  return `${event.eventType}:${event.targetUserId ?? "?"}:${event.companyId ?? "?"}`;
-}
-
-/** 같은 (event, user, company) 조합을 5분 내 1회만 기록하도록 판단(기록 가능하면 true). */
-export function shouldRecordAccessDenied(key: string, now: number): boolean {
-  const last = lastLoggedAtByKey.get(key);
-
-  if (last !== undefined && now - last < ACCESS_DENIED_THROTTLE_MS) {
-    return false;
-  }
-
-  lastLoggedAtByKey.set(key, now);
-
-  // Map 무한 증가 방지: 임계 초과 시 만료 키 정리.
-  if (lastLoggedAtByKey.size > 1000) {
-    for (const [k, t] of lastLoggedAtByKey) {
-      if (now - t >= ACCESS_DENIED_THROTTLE_MS) {
-        lastLoggedAtByKey.delete(k);
-      }
-    }
-  }
-
-  return true;
-}
-
-function emit(event: SecurityAuditEvent): void {
-  // 외부 수집기 친화적 단일 라인 JSON. (sink 교체 지점 — c9-6 에서 영속화)
-  console.info(`[security-audit] ${JSON.stringify(event)}`);
 }
 
 /**
- * 감사 이벤트 기록(fire-and-forget). 절대 throw 하지 않는다.
- * access-denied 는 throttle 후 emit, 그 외(상태 변경)는 항상 emit.
+ * 감사 이벤트 기록. 절대 throw 하지 않으며, 실제로 DB 에 1건 저장됐으면 true 를 반환한다.
+ * - 상태 변경 이벤트: 항상 저장.
+ * - access-denied: 분산 throttle 통과 시에만 저장(통과/저장을 단일 트랜잭션으로 원자 처리).
  */
-export function recordSecurityAuditEvent(input: SecurityAuditEventInput): void {
+export async function recordSecurityAuditEvent(
+  input: SecurityAuditEventInput,
+): Promise<boolean> {
   try {
-    const event = buildSecurityAuditEvent(input);
+    if (input.eventType === ACCESS_DENIED) {
+      const throttleKey = buildThrottleKey(input);
 
-    if (event.eventType === "INACTIVE_COMPANY_ACCESS_DENIED") {
-      if (!shouldRecordAccessDenied(accessDeniedKey(event), Date.now())) {
-        return;
+      // companyId/targetUserId 를 특정할 수 없으면 억지 추론하지 않고 기록 생략.
+      if (!throttleKey) {
+        return false;
       }
+
+      return await recordThrottledAccessDenied(input, throttleKey);
     }
 
-    emit(event);
+    await prisma.securityAuditEvent.create({ data: toEventData(input) });
+    devLog(input, new Date().toISOString());
+    return true;
   } catch {
-    // 로깅 실패가 호출부(API 차단/정상 응답)에 영향 주지 않도록 무시.
+    // audit 실패가 호출 API 응답을 바꾸지 않도록 무시.
+    return false;
   }
+}
+
+/**
+ * Postgres-native 원자 throttle: throttleKey 를 INSERT 하되, 이미 있으면 lastEmittedAt 이
+ * cutoff 이전일 때만 conditional UPDATE. RETURNING 으로 "이번에 emit 허용" 여부를 판단한다.
+ * 동시 요청은 유니크 인덱스에서 직렬화되어 정확히 1개만 RETURNING row 를 얻는다.
+ * throttle 갱신과 이벤트 저장을 같은 트랜잭션으로 묶어 원자성을 보장한다.
+ */
+async function recordThrottledAccessDenied(
+  input: SecurityAuditEventInput,
+  throttleKey: string,
+): Promise<boolean> {
+  const throttleSeconds = getDenyThrottleSeconds();
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + throttleSeconds * 1000);
+  const cutoff = new Date(now.getTime() - throttleSeconds * 1000);
+
+  return prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<Array<{ id: string }>>`
+      INSERT INTO "security_audit_throttles"
+        ("id", "throttleKey", "eventType", "targetUserId", "companyId", "lastEmittedAt", "expiresAt", "createdAt", "updatedAt")
+      VALUES
+        (gen_random_uuid()::text, ${throttleKey}, ${input.eventType}::"SecurityAuditEventType",
+         ${input.targetUserId ?? null}, ${input.companyId ?? null}, ${now}, ${expiresAt}, ${now}, ${now})
+      ON CONFLICT ("throttleKey") DO UPDATE
+        SET "lastEmittedAt" = ${now}, "expiresAt" = ${expiresAt}, "updatedAt" = ${now}
+        WHERE "security_audit_throttles"."lastEmittedAt" < ${cutoff}
+      RETURNING "id";
+    `;
+
+    // RETURNING row 가 없으면 window 내 중복 → 저장 생략(403 응답은 호출부에서 그대로 유지).
+    if (rows.length === 0) {
+      return false;
+    }
+
+    await tx.securityAuditEvent.create({ data: toEventData(input) });
+    devLog(input, now.toISOString());
+    return true;
+  });
 }

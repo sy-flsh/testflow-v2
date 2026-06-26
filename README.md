@@ -139,7 +139,13 @@ The UI reflects the same permissions by hiding or disabling restricted actions, 
   - **deactivate/activate 감사 필드**: deactivate 성공 시 `deactivatedAt`=현재시각·`deactivatedByUserId`=요청 CO, activate 성공 시 `reactivatedAt`·`reactivatedByUserId` 기록. **멱등 no-op은 감사 시각/actor를 덮어쓰지 않음**(이미 INACTIVE 재-deactivate / 이미 ACTIVE 재-activate는 상태/감사 유지 — 실제 전이일 때만 기록). 보호규칙(self/last-CO)·CO+CSRF·Serializable 유지.
   - **AuthProvider background revalidation**: `isLoading`을 **`isInitialLoading`(최초 로드만)** 과 **`isRefreshing`(백그라운드)** 으로 분리 — `isLoading`은 초기 로드만 true라 background 재검증에서 화면/권한 메시지 깜빡임 없음. **단일 in-flight ref**로 interval/focus/visibility 동시 트리거에도 me 요청 1개만, 짧은 중복 트리거는 3초 cooldown으로 억제. unmount 시 interval/listener cleanup + `mountedRef` 가드로 종료 컴포넌트 setState 방지. 성공 시점에만 상태 갱신(미리 비우지 않음)이라 USER_INACTIVE 유지/전환이 깜빡이지 않음.
   - **재검증 트리거**: ① 60초 주기(**숨김 탭에서는 polling 안 함** — 불필요 요청 절약, 복귀 시 즉시 확인) ② `window focus` ③ `document visibilitychange`(visible). 비활성→활성 전환 시 **새로고침 없이** 다음 polling/focus에서 me 200 → `errorCode` 제거 → AccessRestricted 사라지고 정상 셸 복귀. USER_INACTIVE 동안에도 재검증은 계속(콘솔 오류/깜빡임 없이 AccessRestricted 유지). logout 중에는 `loggingOutRef`로 background 재검증을 무시해 `/login` 이동 안정화.
-  - **감사 로그(구조화 abstraction, 영속 테이블 없음)**: `src/lib/security/audit-log.ts`가 `COMPANY_USER_DEACTIVATED`/`COMPANY_USER_REACTIVATED`(상태 변경 시) + `INACTIVE_COMPANY_ACCESS_DENIED`(`requireCompanyOwner`/`requireCurrentWorkspace`/`auth.me` 차단 시)를 **단일 라인 JSON**(`[security-audit] {...}`)으로 emit. 필드: `eventType`·`occurredAt`·`actorUserId?`·`targetUserId?`·`companyId?`·`guardName?`. **민감정보(token/password/cookie/inviteUrl/body) 미기록**. access-denied는 `(eventType,userId,companyId)` 기준 **5분 in-memory throttle**로 중복 억제. **fire-and-forget·예외 격리**라 로깅 실패가 403/정상 응답을 바꾸지 않음. companyId를 특정 못 하면 억지 추론하지 않음. **주의: in-memory throttle은 multi-instance에서 인스턴스별 카운트라 완전 보장이 아님**(분산/영속 throttle은 c9-6). 현재는 영속 audit 테이블이 없어 구조화 로그까지만 제공 — c9-6에서 영속화(아래 설계안).
+  - **감사 로그(구조화 abstraction, 영속 테이블 없음)**: `src/lib/security/audit-log.ts`가 `COMPANY_USER_DEACTIVATED`/`COMPANY_USER_REACTIVATED`(상태 변경 시) + `INACTIVE_COMPANY_ACCESS_DENIED`(`requireCompanyOwner`/`requireCurrentWorkspace`/`auth.me` 차단 시)를 **단일 라인 JSON**(`[security-audit] {...}`)으로 emit. 필드: `eventType`·`occurredAt`·`actorUserId?`·`targetUserId?`·`companyId?`·`guardName?`. **민감정보(token/password/cookie/inviteUrl/body) 미기록**. access-denied는 `(eventType,userId,companyId)` 기준 **5분 in-memory throttle**로 중복 억제. **예외 격리**라 로깅 실패가 403/정상 응답을 바꾸지 않음. companyId를 특정 못 하면 억지 추론하지 않음. (c9-5 시점엔 in-memory throttle + 구조화 로그뿐 → **c9-6에서 영속 DB + 분산 throttle로 확장**.)
+- c9-6: 영속 Security Audit Log + retention + DB 기반 분산 throttle.
+  - 모델: `SecurityAuditEvent`(`security_audit_events`) + `SecurityAuditThrottle`(`security_audit_throttles`) + `SecurityAuditEventType` enum(3종 — 서버 내부 고정 집합이라 enum 선택). actor/target/company는 **relation 없는 scalar ID**(User/Company 삭제 후에도 감사 보존, FK cascade로 흔적이 사라지지 않게). migration `add_security_audit_events`. `metadata`는 NULL(payload·민감정보 미저장). 인덱스: `occurredAt`, `[eventType,occurredAt]`, `[companyId,occurredAt]`, `[targetUserId,occurredAt]`, throttle `[expiresAt]`·`[eventType,targetUserId,companyId]`.
+  - `src/lib/security/audit-log.ts`의 sink를 구조화 콘솔 → **durable DB**로 확장(호출부 계약 유지: `recordSecurityAuditEvent(input)`는 이제 `Promise<boolean>`, 절대 throw 안 함). 상태 변경(DEACTIVATED/REACTIVATED)은 실제 전이마다 항상 저장. access-denied는 **Postgres `INSERT … ON CONFLICT(throttleKey) DO UPDATE … WHERE lastEmittedAt < cutoff RETURNING`** 원자 연산으로 window당 1건만 저장(다중 인스턴스 경쟁에서도 유니크 인덱스 직렬화로 정확히 1건) — throttle 갱신+이벤트 저장을 같은 트랜잭션으로 묶음. `throttleKey=INACTIVE_COMPANY_ACCESS_DENIED:<targetUserId>:<companyId>`, companyId/targetUserId 불특정 시 기록 생략(억지 추론 안 함). 콘솔 구조화 로그는 **dev/test에서만**(production은 DB가 정본, 중복 노출 안 함).
+  - 호출부: deactivate/activate는 main 트랜잭션 **성공 후** best-effort `await`(감사 실패가 상태 변경을 rollback시키지 않음). guard/me는 USER_INACTIVE throw/return 직전 `await`(helper가 swallow하므로 403 응답·권한 판단 불변).
+  - retention: `SecurityAuditEvent` 기본 **90일**(`SECURITY_AUDIT_RETENTION_DAYS`, 1↑ 정수 외 90 fallback), throttle은 `expiresAt < now` 정리. throttle window는 `SECURITY_AUDIT_DENY_THROTTLE_SECONDS`(기본 300, 1↑ 외 300 fallback).
+  - **보장 범위/한계**: DB 기반이라 multi-instance에서 분산 throttle이 정확(원자 conditional upsert). 단 access-denied는 "window당 1건 저장"이 목표라 일부 차단 요청은 로깅되지 않음(설계 의도). 상태 변경은 무손실.
 - seed: 기본 Company `testflow-demo` 1건과 MasterAdmin `master@testflow.local` 1명을 생성하고, 기본 Workspace `testflow-qa`를 해당 Company에 연결(owner=`qa.lead@testflow.local`)합니다. 기존 seed 계정/프로젝트/테스트데이터는 그대로 유지됩니다.
 
 ## Local DB Reset
@@ -220,6 +226,27 @@ Cleanup scope is intentionally narrow:
 - `RateLimitBucket` rows where `expiresAt < now`
 
 The command is safe to run in production because it does not delete active sessions or active rate limit buckets. In production, run it from a scheduled job or cron after confirming `DATABASE_URL` points to the intended database.
+
+## Security Audit Cleanup (c9-6)
+
+Persistent security audit records have retention + throttle cleanup:
+
+```bash
+npm run audit:cleanup -- --dry-run   # report only, deletes nothing
+npm run audit:cleanup                # delete old events + expired throttles
+```
+
+Cleanup scope:
+
+- `SecurityAuditEvent` where `occurredAt < now - SECURITY_AUDIT_RETENTION_DAYS` (default **90** days)
+- `SecurityAuditThrottle` where `expiresAt < now`
+
+Env vars (invalid values fall back to defaults):
+
+- `SECURITY_AUDIT_RETENTION_DAYS` — event retention in days (default `90`, must be an integer ≥ 1)
+- `SECURITY_AUDIT_DENY_THROTTLE_SECONDS` — `INACTIVE_COMPANY_ACCESS_DENIED` throttle window (default `300`, ≥ 1)
+
+Run this **once per day** from a cron / CI scheduler (no automatic cron is registered here). Deploy-environment scheduler wiring is out of scope.
 
 ## Before Production
 

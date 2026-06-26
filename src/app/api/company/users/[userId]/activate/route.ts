@@ -69,7 +69,7 @@ export async function POST(request: Request, context: RouteContext) {
         },
       });
 
-      recordSecurityAuditEvent({
+      await recordSecurityAuditEvent({
         eventType: "COMPANY_USER_REACTIVATED",
         actorUserId: actor.id,
         targetUserId,

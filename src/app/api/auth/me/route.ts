@@ -33,7 +33,7 @@ export async function GET() {
       //  - INACTIVE Company 때문에 제외된 ACTIVE 멤버십이 있으면 → 403 USER_INACTIVE(전용 안내 화면).
       //  - 그 외(멤버십 자체 없음 / Company-only CO 등)는 기존 계약대로 401 유지.
       if (await hasMembershipBlockedByInactiveCompany(session.userId, inactiveCompanyIds)) {
-        recordSecurityAuditEvent({
+        await recordSecurityAuditEvent({
           eventType: "INACTIVE_COMPANY_ACCESS_DENIED",
           targetUserId: session.userId,
           // 비활성 사유 Company 1건(best-effort). 복수면 대표 1건만 기록.
