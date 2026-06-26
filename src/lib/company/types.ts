@@ -21,9 +21,15 @@ export type CompanyUserDto = {
   projectRoles: CompanyUserScopedRole[];
 };
 
+/** c9-3: Company 사용자 목록 검색/필터/정렬/페이지네이션. */
+export type CompanyUserStatusFilter = "ALL" | CompanyUserStatusValue;
+export type CompanyUserSort = "nameAsc" | "nameDesc" | "newest";
+
 export type CompanyUserListDto = {
   companyId: string;
   users: CompanyUserDto[];
+  pagination: InvitationPagination;
+  filters: { q: string | null; status: CompanyUserStatusFilter; sort: CompanyUserSort };
 };
 
 /** c7-2: 사용자 상세 + Role Matrix 편집에 필요한 DTO. */

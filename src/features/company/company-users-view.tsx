@@ -4,6 +4,12 @@ import { useCallback, useState } from "react";
 import { UserPlus } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
+  normalizeCompanyUserPage,
+  normalizeCompanyUserSize,
+  normalizeCompanyUserSort,
+  normalizeCompanyUserStatus,
+} from "@/lib/company/company-user-filters";
+import {
   normalizeInvitationPage,
   normalizeInvitationSize,
   normalizeInvitationSort,
@@ -15,17 +21,28 @@ import {
   type InvitationParamPatch,
   type InvitationParams,
 } from "./company-invitation-list";
-import { CompanyUserList } from "./company-user-list";
+import {
+  CompanyUserList,
+  type CompanyUserParamPatch,
+  type CompanyUserParams,
+} from "./company-user-list";
 import { InviteCreateModal } from "./invite-create-modal";
 
 type Tab = "users" | "invitations";
 
 // URL 기본값(생략 시) — 이 값으로 설정하면 URL 에서 제거해 깔끔하게 유지한다.
+// 초대 탭(status/sort/size/page)과 사용자 탭(userStatus/userSort/userSize/userPage)은 키가 달라 충돌 없음.
 const PARAM_DEFAULTS: Record<string, string | number> = {
+  // 초대 탭
   status: "ALL",
   sort: "newest",
   size: 20,
   page: 1,
+  // 사용자 탭
+  userStatus: "ALL",
+  userSort: "nameAsc",
+  userSize: 20,
+  userPage: 1,
 };
 
 /**
@@ -43,12 +60,22 @@ export function CompanyUsersView() {
   const tab: Tab = searchParams.get("tab") === "invitations" ? "invitations" : "users";
   const modalOpen = searchParams.get("modal") === "invite";
 
-  const params: InvitationParams = {
+  // 초대 탭 전용 params (q/status/page/size/sort)
+  const invitationParams: InvitationParams = {
     q: (searchParams.get("q") ?? "").trim(),
     status: normalizeInvitationStatus(searchParams.get("status")),
     page: normalizeInvitationPage(searchParams.get("page")),
     size: normalizeInvitationSize(searchParams.get("size")),
     sort: normalizeInvitationSort(searchParams.get("sort")),
+  };
+
+  // 사용자 탭 전용 params (userQ/userStatus/userPage/userSize/userSort) — 초대 탭과 분리.
+  const userParams: CompanyUserParams = {
+    q: (searchParams.get("userQ") ?? "").trim(),
+    status: normalizeCompanyUserStatus(searchParams.get("userStatus")),
+    page: normalizeCompanyUserPage(searchParams.get("userPage")),
+    size: normalizeCompanyUserSize(searchParams.get("userSize")),
+    sort: normalizeCompanyUserSort(searchParams.get("userSort")),
   };
 
   const updateUrl = useCallback(
@@ -80,6 +107,20 @@ export function CompanyUsersView() {
       }
     },
     [searchParams, pathname, router],
+  );
+
+  // 사용자 탭 params 변경 → userX URL 키로 매핑.
+  const setUserParam = useCallback(
+    (patch: CompanyUserParamPatch, opts?: { replace?: boolean }) => {
+      const mapped: CompanyUserParamPatch = {};
+      if ("q" in patch) mapped.userQ = patch.q;
+      if ("status" in patch) mapped.userStatus = patch.status;
+      if ("page" in patch) mapped.userPage = patch.page;
+      if ("size" in patch) mapped.userSize = patch.size;
+      if ("sort" in patch) mapped.userSort = patch.sort;
+      updateUrl(mapped, opts);
+    },
+    [updateUrl],
   );
 
   function handleModalClose(created: boolean) {
@@ -117,10 +158,10 @@ export function CompanyUsersView() {
       </div>
 
       {tab === "users" ? (
-        <CompanyUserList />
+        <CompanyUserList params={userParams} onParamsChange={setUserParam} />
       ) : (
         <CompanyInvitationList
-          params={params}
+          params={invitationParams}
           refreshNonce={refreshNonce}
           onParamsChange={updateUrl}
         />

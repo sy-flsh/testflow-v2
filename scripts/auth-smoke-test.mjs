@@ -2249,6 +2249,154 @@ async function main() {
         }
       }
 
+      // c9-3: Company 사용자 목록 검색·상태 필터·정렬·서버 페이지네이션
+      {
+        const tag = `c93-${RUN_ID}`;
+        const base = Date.now();
+        let otherCompanyId = null;
+        const name = (i) => `${tag} U${String(i).padStart(2, "0")}`;
+        const email = (i) => `c93.u${String(i).padStart(2, "0")}.${RUN_ID}@u.local`.toLowerCase();
+
+        async function listUsers(jar, query, expectedStatus = 200) {
+          return request(`/api/company/users${query ? `?${query}` : ""}`, { jar, expectedStatus });
+        }
+
+        try {
+          // U01: legacy(상태 없음, demo WorkspaceMember) / U02: INACTIVE state-only(role·member 없음)
+          // U03..U12: ACTIVE state. createdAt 은 U02 를 최대로 둬서 newest 가 nameDesc 와 구분되게 한다.
+          for (let i = 1; i <= 12; i += 1) {
+            const user = await prisma.user.create({
+              data: { name: name(i), email: email(i), passwordHash: "x" },
+            });
+            if (i === 1) {
+              await prisma.workspaceMember.create({
+                data: { workspaceId, userId: user.id, role: "MEMBER", status: "ACTIVE" },
+              });
+            } else if (i === 2) {
+              await prisma.companyUserState.create({
+                data: {
+                  companyId,
+                  userId: user.id,
+                  status: "INACTIVE",
+                  createdAt: new Date(base + 1_000_000),
+                },
+              });
+            } else {
+              await prisma.companyUserState.create({
+                data: {
+                  companyId,
+                  userId: user.id,
+                  status: "ACTIVE",
+                  createdAt: new Date(base + i * 1000),
+                },
+              });
+            }
+          }
+
+          await check("company users: status filter counts (ACTIVE incl. legacy, INACTIVE state-only)", async () => {
+            const all = await listUsers(adminJar, `q=${tag}`);
+            assert(all.json?.data?.pagination?.total === 12, `ALL total should be 12, got ${all.json?.data?.pagination?.total}`);
+            assert(Array.isArray(all.json.data.users), "users array preserved");
+
+            const active = await listUsers(adminJar, `q=${tag}&status=ACTIVE`);
+            assert(active.json.data.pagination.total === 11, "ACTIVE total should be 11 (legacy fallback included)");
+            assert(
+              active.json.data.users.some((u) => u.email === email(1)),
+              "legacy(no state) user must appear under ACTIVE",
+            );
+
+            const inactive = await listUsers(adminJar, `q=${tag}&status=INACTIVE`);
+            assert(inactive.json.data.pagination.total === 1, "INACTIVE total should be 1");
+            assert(inactive.json.data.users[0]?.email === email(2), "state-only INACTIVE user must appear");
+            // state-only INACTIVE 사용자는 UserRole/WorkspaceMember 가 없어도 목록에 보인다.
+            assert(
+              (inactive.json.data.users[0]?.roles ?? []).length === 0,
+              "state-only user has no roles but is still listed",
+            );
+          });
+
+          await check("company users: q name + email case-insensitive contains", async () => {
+            const byName = await listUsers(adminJar, `q=${encodeURIComponent(name(5).toUpperCase())}`);
+            assert(byName.json.data.pagination.total === 1, "name search should match exactly one");
+            assert(byName.json.data.users[0]?.email === email(5), "name search returns U05");
+
+            const byEmail = await listUsers(adminJar, `q=c93.U08`);
+            assert(byEmail.json.data.pagination.total === 1, "email search should match exactly one");
+            assert(byEmail.json.data.users[0]?.email === email(8), "email search returns U08");
+          });
+
+          await check("company users: server pagination meta + clamp", async () => {
+            const p1 = await listUsers(adminJar, `q=${tag}&size=10&page=1`);
+            const meta = p1.json.data.pagination;
+            assert(meta.total === 12 && meta.size === 10 && meta.totalPages === 2, "page1 meta wrong");
+            assert(meta.page === 1 && meta.hasPrevious === false && meta.hasNext === true, "page1 flags wrong");
+            assert(p1.json.data.users.length === 10, "page1 should have 10 rows");
+
+            const p2 = await listUsers(adminJar, `q=${tag}&size=10&page=2`);
+            assert(p2.json.data.users.length === 2, "page2 should have 2 rows");
+
+            const over = await listUsers(adminJar, `q=${tag}&size=10&page=99`);
+            assert(over.json.data.pagination.page === 2, "overflow page should clamp to 2");
+            assert(over.json.data.users.length === 2, "clamped page returns last page rows");
+          });
+
+          await check("company users: sort nameAsc/nameDesc/newest", async () => {
+            const asc = await listUsers(adminJar, `q=${tag}&sort=nameAsc`);
+            assert(asc.json.data.users[0]?.email === email(1), "nameAsc first should be U01");
+            const desc = await listUsers(adminJar, `q=${tag}&sort=nameDesc`);
+            assert(desc.json.data.users[0]?.email === email(12), "nameDesc first should be U12");
+            const newest = await listUsers(adminJar, `q=${tag}&sort=newest`);
+            assert(newest.json.data.users[0]?.email === email(2), "newest first should be U02 (max state createdAt)");
+            // legacy(상태 없음) 는 newest 에서 마지막.
+            const lastIdx = newest.json.data.users.length - 1;
+            assert(
+              newest.json.data.users[lastIdx]?.email === email(1),
+              "legacy user should sort last under newest",
+            );
+          });
+
+          await check("company users: invalid query params fall back to safe defaults", async () => {
+            const r = await listUsers(adminJar, `q=${tag}&status=BOGUS&size=999&sort=weird&page=abc`);
+            const d = r.json.data;
+            assert(d.pagination.size === 20, "invalid size → 20");
+            assert(d.pagination.page === 1, "invalid page → 1");
+            assert(d.filters.status === "ALL", "invalid status → ALL");
+            assert(d.filters.sort === "nameAsc", "invalid sort → nameAsc");
+            assert(d.pagination.total === 12, "ALL fallback total should be 12");
+          });
+
+          await check("company users: non-CO with query is 403", async () => {
+            const r = await listUsers(memberJar, `q=${tag}&status=ACTIVE&page=2`, 403);
+            assert(r.json?.error?.code === "AUTH_FORBIDDEN", "expected AUTH_FORBIDDEN");
+          });
+
+          await check("company users: other-company users never included", async () => {
+            const other = await prisma.company.create({
+              data: { name: `C93 Other ${RUN_ID}`, slug: `c93-other-${RUN_ID}` },
+            });
+            otherCompanyId = other.id;
+            const otherUser = await prisma.user.create({
+              data: { name: `${tag} OtherCo`, email: `c93.otherco.${RUN_ID}@u.local`, passwordHash: "x" },
+            });
+            await prisma.companyUserState.create({
+              data: { companyId: other.id, userId: otherUser.id, status: "ACTIVE" },
+            });
+
+            const r = await listUsers(adminJar, `q=${tag}`);
+            assert(
+              !r.json.data.users.some((u) => u.email === `c93.otherco.${RUN_ID}@u.local`),
+              "other company user must not appear",
+            );
+            assert(r.json.data.pagination.total === 12, "other company user must not affect total");
+          });
+        } finally {
+          await prisma.user.deleteMany({ where: { email: { contains: "c93." } } });
+          if (otherCompanyId) {
+            await prisma.company.delete({ where: { id: otherCompanyId } }).catch(() => {});
+          }
+        }
+      }
+
       await check("CO can sync WORKSPACE role to another user", async () => {
         const original = await prisma.userRole.findUnique({
           where: {
