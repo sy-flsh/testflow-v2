@@ -9,6 +9,7 @@ import {
   FolderKanban,
   LayoutDashboard,
   Play,
+  ScrollText,
   ShieldCheck,
   Settings,
   Users,
@@ -92,6 +93,14 @@ export function AppSidebar() {
             label="탈퇴 계정 관리"
             icon={ArchiveRestore}
             active={pathname.startsWith("/admin/accounts")}
+          />
+        )}
+        {isMasterAdmin && (
+          <SidebarLink
+            href="/admin/security-audit"
+            label="전역 보안 감사"
+            icon={ScrollText}
+            active={pathname.startsWith("/admin/security-audit")}
           />
         )}
         <SidebarLink

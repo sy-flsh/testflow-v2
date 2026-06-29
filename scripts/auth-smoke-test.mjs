@@ -21,6 +21,14 @@ import {
   normalizeAdminDeletedSize,
   normalizeAdminDeletedSort,
 } from "../src/lib/admin/admin-deleted-filters.mjs";
+// c10-3: 전역 보안 감사 콘솔 순수 URL/필터 helper — unit 검증용.
+import {
+  activePreset as adminActivePreset,
+  adminPresetPatch,
+  buildAdminActiveChips,
+  exportButtonLabel as adminExportButtonLabel,
+  toggleAdminEventTypePatch,
+} from "../src/lib/admin/admin-security-audit-url.mjs";
 
 const PORT = process.env.TESTFLOW_TEST_PORT || "3210";
 const BASE_URL = process.env.TESTFLOW_BASE_URL || `http://127.0.0.1:${PORT}`;
@@ -3950,6 +3958,222 @@ async function main() {
           await prisma.securityAuditEvent.deleteMany({
             where: { OR: [{ targetUserId: { in: createdUserIds } }, { actorUserId: { in: createdUserIds } }] },
           });
+          if (delMasterAdminEmail) {
+            await prisma.masterAdmin.deleteMany({ where: { email: delMasterAdminEmail } });
+          }
+          for (const id of createdUserIds) {
+            await prisma.user.delete({ where: { id } }).catch(() => {});
+          }
+        }
+      }
+
+      // c10-3: MasterAdmin 전역 보안 감사 콘솔
+      {
+        const FWD = { "x-forwarded-for": "198.51.100.93" };
+        const markC = `c103-${RUN_ID}`;
+        const markInj = `INJ-${RUN_ID}`;
+        const ghostId = `c103-ghost-${RUN_ID}`;
+        const seedHash = (
+          await prisma.user.findUnique({ where: { email: accounts.admin }, select: { passwordHash: true } })
+        )?.passwordHash;
+        const masterUserId = (
+          await prisma.user.findUnique({ where: { email: "master@testflow.local" }, select: { id: true } })
+        )?.id;
+        const ADMIN_LABELS = {
+          COMPANY_USER_DEACTIVATED: "사용자 비활성화",
+          COMPANY_USER_REACTIVATED: "사용자 활성화",
+          INACTIVE_COMPANY_ACCESS_DENIED: "비활성 사용자 접근 차단",
+          USER_SOFT_DELETED: "계정 탈퇴",
+          USER_RESTORED: "계정 복구",
+        };
+        const SCOPE_LABELS = { COMPANY: "Company 이벤트", GLOBAL: "Global 이벤트" };
+
+        const createdEventIds = [];
+        const createdUserIds = [];
+        let delMasterAdminEmail = null;
+
+        async function c103Login(email) {
+          const jar = new CookieJar();
+          await request("/api/auth/login", { method: "POST", headers: FWD, body: { email, password: PASSWORD }, jar, expectedStatus: 200 });
+          assert(jar.cookies.has("tf_session"), `${email} login failed`);
+          return jar;
+        }
+        async function createSessionFor(userId) {
+          const rawToken = `c103tok-${RUN_ID}-${Math.floor(Math.random() * 1e9)}`;
+          const tokenHash = createHash("sha256").update(rawToken).digest("hex");
+          await prisma.session.create({ data: { userId, tokenHash, expiresAt: new Date(Date.now() + 86_400_000), lastSeenAt: new Date() } });
+          const jar = new CookieJar();
+          jar.cookies.set("tf_session", rawToken);
+          return jar;
+        }
+        async function mkEvent(data) {
+          const e = await prisma.securityAuditEvent.create({ data: { ...data, occurredAt: new Date(data.occurredAt) } });
+          createdEventIds.push(e.id);
+          return e;
+        }
+        async function adminList(query) {
+          return request(`/api/admin/security-audit${query ? `?${query}` : ""}`, { jar: masterJar, expectedStatus: 200 });
+        }
+        async function adminExport(jar, query, expectedStatus = 200) {
+          return request(`/api/admin/security-audit/export${query ? `?${query}` : ""}`, { jar, expectedStatus });
+        }
+
+        let masterJar = null;
+        try {
+          masterJar = await c103Login("master@testflow.local");
+
+          // soft-deleted user(마스킹용) + soft-deleted MasterAdmin(권한 우선순위용)
+          const delUser = await prisma.user.create({
+            data: { email: `del-audit.${RUN_ID}@x.local`, name: "탈퇴감사대상", passwordHash: seedHash, deletedAt: new Date(), deletedByUserId: leadUser.id, deletionReason: "SELF_WITHDRAWAL" },
+          });
+          createdUserIds.push(delUser.id);
+          const delMasterEmail = `delmaster-audit.${RUN_ID}@x.local`;
+          delMasterAdminEmail = delMasterEmail;
+          const delMaster = await prisma.user.create({
+            data: { email: delMasterEmail, name: "탈퇴마스터감사", passwordHash: seedHash, deletedAt: new Date(), deletedByUserId: leadUser.id, deletionReason: "SELF_WITHDRAWAL" },
+          });
+          createdUserIds.push(delMaster.id);
+          await prisma.masterAdmin.create({ data: { email: delMasterEmail, name: "탈퇴마스터감사", passwordHash: seedHash } });
+
+          // core set(markC): company 3 + global 3
+          await mkEvent({ eventType: "COMPANY_USER_DEACTIVATED", companyId, actorUserId: leadUser.id, targetUserId: backendUser.id, guardName: `${markC}-deact`, occurredAt: "2026-06-10T12:00:00.000Z" });
+          await mkEvent({ eventType: "COMPANY_USER_REACTIVATED", companyId, actorUserId: leadUser.id, targetUserId: backendUser.id, guardName: `${markC}-react`, occurredAt: "2026-06-11T12:00:00.000Z" });
+          await mkEvent({ eventType: "INACTIVE_COMPANY_ACCESS_DENIED", companyId, actorUserId: null, targetUserId: pmUser.id, guardName: `${markC}-deny`, occurredAt: "2026-06-12T12:00:00.000Z" });
+          await mkEvent({ eventType: "USER_SOFT_DELETED", companyId: null, actorUserId: delUser.id, targetUserId: delUser.id, guardName: `${markC}-withdraw`, occurredAt: "2026-06-13T12:00:00.000Z" });
+          await mkEvent({ eventType: "USER_RESTORED", companyId: null, actorUserId: masterUserId, targetUserId: leadUser.id, guardName: `${markC}-restore`, occurredAt: "2026-06-14T12:00:00.000Z" });
+          await mkEvent({ eventType: "USER_SOFT_DELETED", companyId: null, actorUserId: null, targetUserId: ghostId, guardName: `${markC}-ghost`, occurredAt: "2026-06-15T12:00:00.000Z" });
+          // injection/escape set(markInj)
+          await mkEvent({ eventType: "USER_RESTORED", companyId: null, actorUserId: null, targetUserId: null, guardName: `=${markInj}`, occurredAt: "2026-06-16T12:00:00.000Z" });
+          await mkEvent({ eventType: "USER_RESTORED", companyId: null, actorUserId: null, targetUserId: null, guardName: `${markInj}-a,b"x`, occurredAt: "2026-06-17T12:00:00.000Z" });
+
+          // A. permission
+          await check("c10-3 permission: master 200; unauth 401; CO/member 403; deleted master 403", async () => {
+            await request("/api/admin/security-audit", { jar: masterJar, expectedStatus: 200 });
+            await adminExport(masterJar, `guard=${markC}&scope=GLOBAL`, 200);
+            assert((await request("/api/admin/security-audit", { expectedStatus: 401 })).json?.error?.code === "AUTH_UNAUTHORIZED", "unauth list 401");
+            assert((await request("/api/admin/security-audit/export", { expectedStatus: 401 })).json?.error?.code === "AUTH_UNAUTHORIZED", "unauth export 401");
+            assert((await request("/api/admin/security-audit", { jar: adminJar, expectedStatus: 403 })).json?.error?.code === "AUTH_FORBIDDEN", "CO list 403");
+            assert((await request("/api/admin/security-audit/export", { jar: adminJar, expectedStatus: 403 })).json?.error?.code === "AUTH_FORBIDDEN", "CO export 403");
+            assert((await request("/api/admin/security-audit", { jar: memberJar, expectedStatus: 403 })).json?.error?.code === "AUTH_FORBIDDEN", "member list 403");
+            const staleJar = await createSessionFor(delMaster.id);
+            assert((await request("/api/admin/security-audit", { jar: staleJar, expectedStatus: 403 })).json?.error?.code === "USER_ACCOUNT_DELETED", "deleted master → USER_ACCOUNT_DELETED");
+          });
+
+          // B. scope + filters
+          await check("c10-3 ALL includes company+global; scope=COMPANY/GLOBAL filter", async () => {
+            const all = await adminList(`guard=${markC}&size=50`);
+            assert(all.json.data.pagination.total === 6, `ALL total 6, got ${all.json.data.pagination.total}`);
+            const scopes = new Set(all.json.data.events.map((e) => e.scope));
+            assert(scopes.has("COMPANY") && scopes.has("GLOBAL"), "both scopes present");
+            const co = await adminList(`guard=${markC}&scope=COMPANY&size=50`);
+            assert(co.json.data.pagination.total === 3 && co.json.data.events.every((e) => e.scope === "COMPANY" && e.company), "scope COMPANY = companyId not null");
+            const gl = await adminList(`guard=${markC}&scope=GLOBAL&size=50`);
+            assert(gl.json.data.pagination.total === 3 && gl.json.data.events.every((e) => e.scope === "GLOBAL" && e.company === null), "scope GLOBAL = companyId null");
+          });
+
+          await check("c10-3 eventType/date/user/guard/sort filters", async () => {
+            assert((await adminList(`guard=${markC}&eventType=USER_SOFT_DELETED&size=50`)).json.data.pagination.total === 2, "eventType USER_SOFT_DELETED = 2");
+            assert((await adminList(`guard=${markC}&from=2026-06-14&to=2026-06-15&size=50`)).json.data.pagination.total === 2, "date range = 2");
+            const byUser = await adminList(`guard=${markC}&user=${encodeURIComponent("탈퇴감사대상")}&size=50`);
+            assert(byUser.json.data.pagination.total === 1 && byUser.json.data.events[0].guardName === `${markC}-withdraw`, "user search matches actor/target");
+            const byGuard = await adminList(`guard=${markC}-deny&size=50`);
+            assert(byGuard.json.data.pagination.total === 1 && byGuard.json.data.events[0].eventType === "INACTIVE_COMPANY_ACCESS_DENIED", "guard contains");
+            assert((await adminList(`guard=${markC}&sort=newest&size=50`)).json.data.events[0].guardName === `${markC}-ghost`, "newest first = latest");
+            assert((await adminList(`guard=${markC}&sort=oldest&size=50`)).json.data.events[0].guardName === `${markC}-deact`, "oldest first = earliest");
+          });
+
+          await check("c10-3 summary: eventType excluded, scope/guard applied, 5 keys", async () => {
+            const s = (await adminList(`guard=${markC}&size=50`)).json.data.summary;
+            assert(s.total === 6, "summary total 6");
+            assert(s.byEventType.COMPANY_USER_DEACTIVATED === 1 && s.byEventType.COMPANY_USER_REACTIVATED === 1 && s.byEventType.INACTIVE_COMPANY_ACCESS_DENIED === 1 && s.byEventType.USER_SOFT_DELETED === 2 && s.byEventType.USER_RESTORED === 1, "byEventType counts");
+            assert(Object.values(s.byEventType).reduce((a, b) => a + b, 0) === s.total, "sum === total");
+            const narrowed = await adminList(`guard=${markC}&eventType=USER_SOFT_DELETED&size=50`);
+            assert(narrowed.json.data.pagination.total === 2 && narrowed.json.data.summary.total === 6, "eventType narrows list, summary stays full");
+            assert((await adminList(`guard=${markC}&scope=GLOBAL&size=50`)).json.data.summary.total === 3, "scope GLOBAL summary 3");
+          });
+
+          await check("c10-3 pagination overflow clamp + invalid query fallback", async () => {
+            const over = await adminList(`guard=${markC}&size=10&page=999`);
+            assert(over.json.data.pagination.page === over.json.data.pagination.totalPages, "overflow clamp");
+            const inv = await adminList(`guard=${markC}&page=abc&size=7&sort=weird&scope=nope&eventType=bad`);
+            assert(inv.json.data.pagination.size === 20 && inv.json.data.pagination.page === 1, "size/page fallback");
+            assert(inv.json.data.filters.sort === "newest" && inv.json.data.filters.scope === "ALL" && inv.json.data.filters.eventType === "ALL", "sort/scope/eventType fallback");
+          });
+
+          await check("c10-3 masking: soft-deleted withdrawn; physical-deleted fallback; null actor", async () => {
+            const e4 = (await adminList(`guard=${markC}-withdraw&size=50`)).json.data.events[0];
+            assert(e4.target.withdrawn === true && e4.target.name === null && e4.target.email === null, "soft-deleted target masked");
+            assert(e4.target.userId === delUser.id, "userId preserved");
+            const e6 = (await adminList(`guard=${markC}-ghost&size=50`)).json.data.events[0];
+            assert(e6.target.withdrawn === false && e6.target.name === null && e6.actor === null, "physical-deleted fallback + null actor");
+          });
+
+          await check("c10-3 company name bulk-resolved for COMPANY; null for GLOBAL", async () => {
+            const co = await adminList(`guard=${markC}&scope=COMPANY&size=50`);
+            assert(co.json.data.events.every((e) => e.company && e.company.companyId === companyId && typeof e.company.companyName === "string"), "company id+name present");
+            assert((await adminList(`guard=${markC}&scope=GLOBAL&size=50`)).json.data.events.every((e) => e.company === null), "global company null");
+          });
+
+          // C. export
+          await check("c10-3 export same filter as list (scope GLOBAL)", async () => {
+            const list = await adminList(`guard=${markC}&scope=GLOBAL&size=50`);
+            const csv = await adminExport(masterJar, `guard=${markC}&scope=GLOBAL`);
+            const rows = csv.text.replace(/^﻿/, "").split("\r\n").filter(Boolean).length - 1;
+            assert(rows === list.json.data.pagination.total, `CSV data rows(${rows}) === list total(${list.json.data.pagination.total})`);
+          });
+
+          await check("c10-3 CSV BOM (raw bytes) + formula injection + RFC4180 escape", async () => {
+            const rawRes = await fetch(new URL(`/api/admin/security-audit/export?guard=${markInj}`, BASE_URL), { headers: { Cookie: masterJar.header() } });
+            const bytes = new Uint8Array(await rawRes.arrayBuffer());
+            assert(bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf, "UTF-8 BOM bytes");
+            const csv = await adminExport(masterJar, `guard=${markInj}`);
+            assert(csv.text.includes(`'=${markInj}`), "formula injection prefixed with '");
+            assert(csv.text.includes(`"${markInj}-a,b""x"`), "RFC4180 escaped");
+          });
+
+          await check("c10-3 CSV scope/company columns (GLOBAL no companyId; COMPANY includes it)", async () => {
+            const glCsv = await adminExport(masterJar, `guard=${markC}&scope=GLOBAL`);
+            assert(glCsv.text.includes("GLOBAL") && !glCsv.text.includes(companyId), "GLOBAL rows, no companyId");
+            const coCsv = await adminExport(masterJar, `guard=${markC}&scope=COMPANY`);
+            assert(coCsv.text.includes("COMPANY") && coCsv.text.includes(companyId), "COMPANY rows include companyId");
+          });
+
+          await check("c10-3 list/CSV exclude metadata/token/password/session", async () => {
+            const csv = await adminExport(masterJar, `guard=${markC}&scope=GLOBAL`);
+            const list = await adminList(`guard=${markC}&size=50`);
+            for (const banned of ["metadata", "throttleKey", "tokenHash", "passwordHash", "lastEmittedAt", "cookie"]) {
+              assert(!csv.text.includes(banned), `CSV must not contain ${banned}`);
+              assert(!list.text.includes(banned), `list must not contain ${banned}`);
+            }
+          });
+
+          await check("c10-3 export over limit → 422 (limit 5, markC has 6)", async () => {
+            const r = await adminExport(masterJar, `guard=${markC}`, 422);
+            assert(r.json?.error?.code === "SECURITY_AUDIT_EXPORT_LIMIT_EXCEEDED", "limit-exceeded code");
+          });
+
+          await check("c10-3 empty export → header-only CSV 200", async () => {
+            const r = await adminExport(masterJar, `guard=nonexistent-${RUN_ID}`);
+            const lines = r.text.replace(/^﻿/, "").split("\r\n").filter(Boolean);
+            assert(lines.length === 1 && lines[0].includes("발생 시각"), "header-only CSV");
+          });
+
+          // D. UI helpers (pure)
+          await check("c10-3 UI helpers: card toggle / scope chips / preset UTC / export label", async () => {
+            assert(JSON.stringify(toggleAdminEventTypePatch("ALL", "USER_SOFT_DELETED")) === JSON.stringify({ adminAuditType: "USER_SOFT_DELETED", adminAuditPage: null }), "ALL→type");
+            assert(JSON.stringify(toggleAdminEventTypePatch("USER_SOFT_DELETED", "USER_SOFT_DELETED")) === JSON.stringify({ adminAuditType: null, adminAuditPage: null }), "same→ALL");
+            assert(toggleAdminEventTypePatch("ALL", "ALL") === null, "ALL re-click no-op");
+            const NOW = new Date("2026-06-15T00:00:00.000Z");
+            assert(JSON.stringify(adminPresetPatch("7d", NOW)) === JSON.stringify({ adminAuditFrom: "2026-06-09", adminAuditTo: "2026-06-15", adminAuditPage: null }), "7d preset UTC");
+            assert(adminActivePreset("2026-06-09", "2026-06-15", NOW) === "7d", "activePreset 7d");
+            const chips = buildAdminActiveChips({ eventType: "USER_SOFT_DELETED", scope: "GLOBAL", from: "", to: "", user: "", guard: "", sort: "newest", size: 20 }, ADMIN_LABELS, SCOPE_LABELS);
+            const byKey = Object.fromEntries(chips.map((c) => [c.key, c]));
+            assert(chips.length === 2 && byKey.eventType.label === "계정 탈퇴" && byKey.scope.label === "Global 이벤트", "eventType + scope chips");
+            assert(JSON.stringify(Object.keys(byKey.scope.removePatch).sort()) === JSON.stringify(["adminAuditPage", "adminAuditScope"]), "scope removePatch isolated");
+            assert(adminExportButtonLabel(3, false) === "CSV 내보내기 (3건)" && adminExportButtonLabel(0, false) === "CSV 내보내기 (0건)", "export label");
+          });
+        } finally {
+          await prisma.securityAuditEvent.deleteMany({ where: { id: { in: createdEventIds } } });
           if (delMasterAdminEmail) {
             await prisma.masterAdmin.deleteMany({ where: { email: delMasterAdminEmail } });
           }
