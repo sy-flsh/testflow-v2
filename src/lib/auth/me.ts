@@ -102,6 +102,8 @@ export function mapAuthPayload(input: {
   workspaces?: Array<{ id: string; name: string; slug: string; role: AuthRole }>;
   // c5-1: UserRole 기반 scope별 Role. additive 필드 — 전달된 경우에만 응답에 포함한다.
   rolesByScope?: RolesByScope;
+  // c10-2: 전역 운영(MasterAdmin) 여부. additive — 전달된 경우에만 포함(login/signup 은 미전달).
+  isMasterAdmin?: boolean;
 }) {
   const role = input.authRole ?? toAuthRole(input.role);
 
@@ -121,5 +123,6 @@ export function mapAuthPayload(input: {
     permissions: buildPermissions(role),
     ...(input.workspaces ? { workspaces: input.workspaces } : {}),
     ...(input.rolesByScope ? { rolesByScope: input.rolesByScope } : {}),
+    ...(input.isMasterAdmin !== undefined ? { isMasterAdmin: input.isMasterAdmin } : {}),
   };
 }

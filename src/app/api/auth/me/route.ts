@@ -2,6 +2,7 @@ import { apiError, apiSuccess } from "@/lib/api/response";
 import { USER_ACCOUNT_DELETED_CODE, USER_ACCOUNT_DELETED_MESSAGE } from "@/lib/auth/account";
 import { getUserWorkspaces, mapAuthPayload, resolveActiveMembership } from "@/lib/auth/me";
 import { getRolesByScope, resolveWorkspaceAuthRole } from "@/lib/auth/roles";
+import { isMasterAdminEmail } from "@/lib/auth/master-admin";
 import { getCurrentSession } from "@/lib/auth/session";
 import {
   getInactiveCompanyIdsForUser,
@@ -68,6 +69,8 @@ export async function GET() {
 
     const workspaces = await getUserWorkspaces(session.userId, inactiveCompanyIds);
     const rolesByScope = await getRolesByScope(session.userId);
+    // c10-2: MasterAdmin nav 노출 판단용 boolean(민감정보 없음). DB MasterAdmin 테이블 기준.
+    const isMasterAdmin = await isMasterAdminEmail(session.user.email);
     // c5-2: 기존 role/permissions 계산도 UserRole(WORKSPACE) 우선으로 전환.
     // 값 자체는 Admin/Member/Viewer 그대로 유지(계약 불변), 산출 근거만 UserRole 우선.
     const workspaceAuthRole = await resolveWorkspaceAuthRole(
@@ -84,6 +87,7 @@ export async function GET() {
         authRole: workspaceAuthRole,
         workspaces,
         rolesByScope,
+        isMasterAdmin,
       }),
     );
   } catch (error) {

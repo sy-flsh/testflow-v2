@@ -1,5 +1,8 @@
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
-import { recordSecurityAuditEvent } from "@/lib/security/audit-log";
+
+/** prisma 또는 트랜잭션 client. restore helper 가 route 트랜잭션과 결합될 수 있게 한다. */
+type DbClient = Prisma.TransactionClient | typeof prisma;
 
 /**
  * c10-1: 전역 계정 탈퇴(soft delete) 공용 helper.
@@ -55,45 +58,48 @@ export async function getUserDeletionState(
 }
 
 /**
- * c10-1: MasterAdmin 전용 복구 기반 service helper.
+ * c10-1/c10-2: soft-deleted 계정 복구의 **상태 전이 전용** service helper.
  *
- * 권한 경계: **이 helper 자체는 권한을 검사하지 않는다.** 반드시 MasterAdmin guard 를 통과한
- * 내부 route/service 에서만 호출해야 한다. 이번 단계에서는 이 helper 를 호출하는 public
- * endpoint/UI 를 만들지 않는다(향후 c10-2 에서 MasterAdmin guard + CSRF + 테스트와 함께 노출).
+ * 권한 경계: **이 helper 자체는 권한을 검사하지 않는다.** 반드시 MasterAdmin guard(requireMasterAdmin)
+ * 를 통과한 route 에서만 호출한다(현재 유일 caller = `/api/admin/accounts/[userId]/restore`).
  *
- * 복구 동작:
- *  - deletedAt/deletedByUserId/deletionReason = null
- *  - 기존 Session 은 자동 복구하지 않는다(사용자가 다시 로그인해야 한다).
- *  - CompanyUserState/UserRole/WorkspaceMember 는 그대로 보존(건드리지 않음).
- *  - USER_RESTORED audit event 는 best-effort(실패해도 복구 성공에 영향 없음, companyId=null).
+ * 동작/계약:
+ *  - deleted → active 전이만 수행: deletedAt/deletedByUserId/deletionReason = null.
+ *  - **조건부 update(`deletedAt != null`)** 로 동시 복구 경쟁에서 단 1회만 전이(`restored:true`)되게 한다.
+ *  - Session 은 조회/생성/삭제하지 않는다(사용자가 다시 login 해야 함).
+ *  - CompanyUserState/UserRole/WorkspaceMember/Invitation 은 건드리지 않는다(보존).
+ *  - **USER_RESTORED audit 는 여기서 남기지 않는다.** 실제 전이(`restored:true`)일 때만, route 가
+ *    트랜잭션 성공 후 best-effort 로 1회 기록한다(audit 실패가 복구를 rollback 하지 않게 분리).
+ *  - client 로 트랜잭션 client 를 받아 route 트랜잭션 안에서 "다시 확인 + 전이" 를 결합할 수 있다.
  *
- * @returns restored=false 면 대상이 없거나 이미 활성(복구 불필요) 상태.
+ * @returns restored=true(전이됨) | { restored:false, reason:"NOT_FOUND" }(대상 없음)
+ *          | { restored:false, reason:"NOT_DELETED" }(이미 active 또는 경쟁에서 패배).
  */
 export async function restoreSoftDeletedUser(
   targetUserId: string,
-  actorUserId: string,
-): Promise<{ restored: boolean }> {
-  const user = await prisma.user.findUnique({
+  client: DbClient = prisma,
+): Promise<{ restored: boolean; reason?: "NOT_FOUND" | "NOT_DELETED" }> {
+  const user = await client.user.findUnique({
     where: { id: targetUserId },
     select: { id: true, deletedAt: true },
   });
 
-  if (!user || !user.deletedAt) {
-    return { restored: false };
+  if (!user) {
+    return { restored: false, reason: "NOT_FOUND" };
+  }
+  if (!user.deletedAt) {
+    return { restored: false, reason: "NOT_DELETED" };
   }
 
-  await prisma.user.update({
-    where: { id: targetUserId },
+  const updated = await client.user.updateMany({
+    where: { id: targetUserId, deletedAt: { not: null } },
     data: { deletedAt: null, deletedByUserId: null, deletionReason: null },
   });
 
-  // best-effort global account lifecycle audit. recordSecurityAuditEvent 는 throw 하지 않는다.
-  await recordSecurityAuditEvent({
-    eventType: "USER_RESTORED",
-    actorUserId,
-    targetUserId,
-    guardName: "account.restore",
-  });
+  if (updated.count === 0) {
+    // 다른 요청이 먼저 복구함(경쟁 패배) → 전이 없음.
+    return { restored: false, reason: "NOT_DELETED" };
+  }
 
   return { restored: true };
 }

@@ -13,6 +13,14 @@ import {
   presetPatch,
   toggleEventTypePatch,
 } from "../src/lib/company/security-audit-url.mjs";
+// c10-2: admin 탈퇴 계정 목록 필터 정규화(순수 함수) — unit 검증용.
+import {
+  adminDeletedFilterPatch,
+  normalizeAdminDeletedPage,
+  normalizeAdminDeletedQuery,
+  normalizeAdminDeletedSize,
+  normalizeAdminDeletedSort,
+} from "../src/lib/admin/admin-deleted-filters.mjs";
 
 const PORT = process.env.TESTFLOW_TEST_PORT || "3210";
 const BASE_URL = process.env.TESTFLOW_BASE_URL || `http://127.0.0.1:${PORT}`;
@@ -3585,22 +3593,28 @@ async function main() {
             await request("/api/account/restore", { method: "POST", body: { userId: withdrawUser.id }, expectedStatus: 404 });
           });
 
-          await check("c10-1 restore semantics: clearing soft-delete re-enables login; resources preserved", async () => {
-            // 앞선 stale/idempotent 테스트가 만든 crafted 세션을 정리(복구 자체의 세션 생성 여부만 검증).
+          await check("c10-1 restore semantics: MasterAdmin restore re-enables login; resources preserved; no auto-session", async () => {
+            // c10-2: 실제 restore helper 를 admin route 를 통해 호출(직접 DB mimic 제거).
             await prisma.session.deleteMany({ where: { userId: withdrawUser.id } });
-            // restoreSoftDeletedUser 가 수행하는 필드 초기화(deletedAt/by/reason=null)를 DB 레벨로 적용.
-            // (helper 는 public endpoint 가 없어 직접 호출 대신 동일 계약을 검증 + 세션 미자동생성 확인.)
-            await prisma.user.update({
-              where: { id: withdrawUser.id },
-              data: { deletedAt: null, deletedByUserId: null, deletionReason: null },
+            const masterJar = await c10LoginRaw("master@testflow.local");
+            const r = await request(`/api/admin/accounts/${withdrawUser.id}/restore`, {
+              method: "POST",
+              jar: masterJar,
+              headers: C10_FWD,
+              body: {},
+              expectedStatus: 200,
             });
+            assert(r.json?.data?.ok === true, "admin restore ok");
             assert((await prisma.session.count({ where: { userId: withdrawUser.id } })) === 0, "restore does not auto-create sessions");
+            const u = await prisma.user.findUnique({ where: { id: withdrawUser.id } });
+            assert(u?.deletedAt === null && u?.deletedByUserId === null && u?.deletionReason === null, "deleted fields cleared");
             const jar = await c10LoginRaw(withdrawUser.email);
             assert(jar.cookies.has("tf_session"), "restored user can log in again");
             assert((await prisma.userRole.count({ where: { userId: withdrawUser.id } })) >= 1, "UserRole preserved across withdraw+restore");
             assert((await prisma.workspaceMember.count({ where: { userId: withdrawUser.id } })) >= 1, "WorkspaceMember preserved");
             const state = await prisma.companyUserState.findUnique({ where: { companyId_userId: { companyId, userId: withdrawUser.id } } });
             assert(state?.status === "ACTIVE", "CompanyUserState preserved");
+            assert((await prisma.securityAuditEvent.count({ where: { eventType: "USER_RESTORED", targetUserId: withdrawUser.id, actorUserId: { not: null } } })) === 1, "one USER_RESTORED audit");
           });
         } finally {
           // 정리: soft-deleted fixture 가 seed/기존 계정에 남지 않게 한다.
@@ -3718,6 +3732,229 @@ async function main() {
           }
           for (const id of companyIds) {
             await prisma.company.delete({ where: { id } }).catch(() => {});
+          }
+        }
+      }
+
+      // c10-2: MasterAdmin 탈퇴 계정 복구
+      {
+        const FWD = { "x-forwarded-for": "198.51.100.92" };
+        const seedHash = (
+          await prisma.user.findUnique({ where: { email: accounts.admin }, select: { passwordHash: true } })
+        )?.passwordHash;
+        const masterUserId = (
+          await prisma.user.findUnique({ where: { email: "master@testflow.local" }, select: { id: true } })
+        )?.id;
+        const createdUserIds = [];
+        let delMasterAdminEmail = null;
+
+        async function c102Login(email) {
+          const jar = new CookieJar();
+          await request("/api/auth/login", { method: "POST", headers: FWD, body: { email, password: PASSWORD }, jar, expectedStatus: 200 });
+          assert(jar.cookies.has("tf_session"), `${email} login failed`);
+          return jar;
+        }
+        async function createSessionFor(userId) {
+          const rawToken = `c102tok-${RUN_ID}-${Math.floor(Math.random() * 1e9)}`;
+          const tokenHash = createHash("sha256").update(rawToken).digest("hex");
+          await prisma.session.create({ data: { userId, tokenHash, expiresAt: new Date(Date.now() + 86_400_000), lastSeenAt: new Date() } });
+          const jar = new CookieJar();
+          jar.cookies.set("tf_session", rawToken);
+          return jar;
+        }
+        async function mkDeleted(tag, { deletedAtISO, reason = "SELF_WITHDRAWAL", inactiveCompany = false } = {}) {
+          const u = await prisma.user.create({
+            data: {
+              email: `del-${tag}.${RUN_ID}@x.local`,
+              name: `삭제계정${tag}`,
+              passwordHash: seedHash,
+              deletedAt: new Date(deletedAtISO),
+              deletedByUserId: leadUser.id,
+              deletionReason: reason,
+            },
+          });
+          createdUserIds.push(u.id);
+          await prisma.workspaceMember.create({ data: { workspaceId, userId: u.id, role: "MEMBER", status: "ACTIVE" } });
+          await prisma.userRole.create({ data: { userId: u.id, scopeType: "WORKSPACE", scopeId: workspaceId, role: "MEMBER" } });
+          await prisma.companyUserState.create({ data: { companyId, userId: u.id, status: inactiveCompany ? "INACTIVE" : "ACTIVE" } });
+          return u;
+        }
+
+        try {
+          const masterJar = await c102Login("master@testflow.local");
+
+          // A. guard / auth payload
+          await check("c10-2 isMasterAdmin: master=true, CO/member=false", async () => {
+            const m = await request("/api/auth/me", { jar: masterJar, expectedStatus: 200 });
+            assert(m.json?.data?.isMasterAdmin === true, "master isMasterAdmin true");
+            const co = await request("/api/auth/me", { jar: adminJar, expectedStatus: 200 });
+            assert(co.json?.data?.isMasterAdmin === false, "CO isMasterAdmin false");
+            const mem = await request("/api/auth/me", { jar: memberJar, expectedStatus: 200 });
+            assert(mem.json?.data?.isMasterAdmin === false, "member isMasterAdmin false");
+          });
+
+          await check("c10-2 admin API: unauth → 401; non-Master CO/member → 403 AUTH_FORBIDDEN", async () => {
+            const ul = await request("/api/admin/accounts/deleted", { expectedStatus: 401 });
+            assert(ul.json?.error?.code === "AUTH_UNAUTHORIZED", "unauth list 401");
+            const ur = await request(`/api/admin/accounts/${leadUser.id}/restore`, { method: "POST", expectedStatus: 401 });
+            assert(ur.json?.error?.code === "AUTH_UNAUTHORIZED", "unauth restore 401");
+            const col = await request("/api/admin/accounts/deleted", { jar: adminJar, expectedStatus: 403 });
+            assert(col.json?.error?.code === "AUTH_FORBIDDEN", "CO list 403 (CO cannot bypass to master)");
+            const cor = await request(`/api/admin/accounts/${leadUser.id}/restore`, { method: "POST", jar: adminJar, expectedStatus: 403 });
+            assert(cor.json?.error?.code === "AUTH_FORBIDDEN", "CO restore 403");
+            const meml = await request("/api/admin/accounts/deleted", { jar: memberJar, expectedStatus: 403 });
+            assert(meml.json?.error?.code === "AUTH_FORBIDDEN", "member list 403");
+          });
+
+          await check("c10-2 soft-deleted MasterAdmin stale session → 403 USER_ACCOUNT_DELETED (priority)", async () => {
+            const email = `delmaster.${RUN_ID}@x.local`;
+            delMasterAdminEmail = email;
+            const dm = await prisma.user.create({
+              data: { email, name: "탈퇴마스터", passwordHash: seedHash, deletedAt: new Date(), deletedByUserId: leadUser.id, deletionReason: "SELF_WITHDRAWAL" },
+            });
+            createdUserIds.push(dm.id);
+            await prisma.masterAdmin.create({ data: { email, name: "탈퇴마스터", passwordHash: seedHash } });
+            const staleJar = await createSessionFor(dm.id);
+            const r = await request("/api/admin/accounts/deleted", { jar: staleJar, expectedStatus: 403 });
+            assert(r.json?.error?.code === "USER_ACCOUNT_DELETED", "deleted master → USER_ACCOUNT_DELETED, not master pass");
+          });
+
+          // B. deleted list
+          const delA = await mkDeleted("a", { deletedAtISO: "2026-06-01T00:00:00.000Z", inactiveCompany: true });
+          const delB = await mkDeleted("b", { deletedAtISO: "2026-06-02T00:00:00.000Z" });
+          const delC = await mkDeleted("c", { deletedAtISO: "2026-06-03T00:00:00.000Z" });
+
+          await check("c10-2 deleted list returns deleted users; active users excluded", async () => {
+            const r = await request("/api/admin/accounts/deleted?size=50", { jar: masterJar, expectedStatus: 200 });
+            const ids = r.json.data.users.map((u) => u.userId);
+            assert(ids.includes(delA.id) && ids.includes(delB.id) && ids.includes(delC.id), "deleted users present");
+            assert(!ids.includes(leadUser.id) && !ids.includes(backendUser.id), "active users excluded");
+          });
+
+          await check("c10-2 q search (case-insensitive email) + newest/oldest sort", async () => {
+            const byEmail = await request(`/api/admin/accounts/deleted?q=${encodeURIComponent(`DEL-A.${RUN_ID}`)}`, { jar: masterJar, expectedStatus: 200 });
+            assert(byEmail.json.data.users.length === 1 && byEmail.json.data.users[0].userId === delA.id, "case-insensitive email search → only delA");
+            const newest = (await request("/api/admin/accounts/deleted?size=50&sort=newest", { jar: masterJar, expectedStatus: 200 })).json.data.users.filter((u) => [delA.id, delB.id, delC.id].includes(u.userId));
+            assert(newest[0].userId === delC.id && newest[2].userId === delA.id, "newest = deletedAt DESC (delC..delA)");
+            const oldest = (await request("/api/admin/accounts/deleted?size=50&sort=oldest", { jar: masterJar, expectedStatus: 200 })).json.data.users.filter((u) => [delA.id, delB.id, delC.id].includes(u.userId));
+            assert(oldest[0].userId === delA.id && oldest[2].userId === delC.id, "oldest = deletedAt ASC (delA..delC)");
+          });
+
+          await check("c10-2 pagination (valid size 10, multi-page) + page overflow clamp", async () => {
+            // size 는 10/20/50 만 유효 → 다중 page 검증을 위해 가벼운 deleted user 11명 추가.
+            for (let i = 0; i < 11; i += 1) {
+              const u = await prisma.user.create({
+                data: {
+                  email: `bulk-${i}.${RUN_ID}@x.local`,
+                  name: `대량${i}`,
+                  passwordHash: seedHash,
+                  deletedAt: new Date(`2026-05-${String(i + 1).padStart(2, "0")}T00:00:00.000Z`),
+                  deletedByUserId: leadUser.id,
+                  deletionReason: "SELF_WITHDRAWAL",
+                },
+              });
+              createdUserIds.push(u.id);
+            }
+            const total = (await request("/api/admin/accounts/deleted?size=50", { jar: masterJar, expectedStatus: 200 })).json.data.pagination.total;
+            assert(total > 10, `expected >10 deleted for multi-page, got ${total}`);
+            const p1 = await request("/api/admin/accounts/deleted?size=10&page=1", { jar: masterJar, expectedStatus: 200 });
+            assert(p1.json.data.users.length === 10 && p1.json.data.pagination.size === 10, "page1 = 10 rows, size honored");
+            assert(p1.json.data.pagination.hasNext === true && p1.json.data.pagination.hasPrevious === false, "page1 nav flags");
+            assert(p1.json.data.pagination.totalPages === Math.ceil(total / 10), "totalPages computed");
+            const over = await request("/api/admin/accounts/deleted?size=10&page=999", { jar: masterJar, expectedStatus: 200 });
+            assert(over.json.data.pagination.page === over.json.data.pagination.totalPages, "page overflow clamped to last page");
+          });
+
+          await check("c10-2 invalid query falls back to safe defaults", async () => {
+            const r = await request("/api/admin/accounts/deleted?page=abc&size=7&sort=weird", { jar: masterJar, expectedStatus: 200 });
+            assert(r.json.data.pagination.page === 1 && r.json.data.pagination.size === 20, "page/size fallback");
+            assert(r.json.data.filters.sort === "newest", "sort fallback newest");
+          });
+
+          await check("c10-2 list DTO allowlist (no sensitive/role/company/session fields)", async () => {
+            const r = await request(`/api/admin/accounts/deleted?q=${encodeURIComponent(`del-a.${RUN_ID}`)}`, { jar: masterJar, expectedStatus: 200 });
+            const u = r.json.data.users[0];
+            const keys = Object.keys(u).sort().join(",");
+            assert(keys === "deletedAt,deletedByUserId,deletionReason,email,name,userId", `unexpected DTO keys: ${keys}`);
+            for (const banned of ["passwordHash", "tokenHash", "avatarUrl", "lastLoginAt", "emailVerifiedAt", "roles", "metadata", "companyRoles"]) {
+              assert(!r.text.includes(banned), `must not expose "${banned}"`);
+            }
+          });
+
+          // C. restore
+          await check("c10-2 restore: 200, fields null, no session, resources preserved, audit; removed from list", async () => {
+            const r = await request(`/api/admin/accounts/${delB.id}/restore`, { method: "POST", jar: masterJar, headers: FWD, body: {}, expectedStatus: 200 });
+            assert(r.json?.data?.ok === true, "restore ok");
+            const u = await prisma.user.findUnique({ where: { id: delB.id } });
+            assert(u?.deletedAt === null && u?.deletedByUserId === null && u?.deletionReason === null, "deleted fields cleared");
+            assert((await prisma.session.count({ where: { userId: delB.id } })) === 0, "no session created");
+            assert((await prisma.userRole.count({ where: { userId: delB.id } })) === 1, "UserRole preserved");
+            assert((await prisma.workspaceMember.count({ where: { userId: delB.id } })) === 1, "WorkspaceMember preserved");
+            assert(await prisma.companyUserState.findUnique({ where: { companyId_userId: { companyId, userId: delB.id } } }), "CompanyUserState preserved");
+            const ev = await prisma.securityAuditEvent.findMany({ where: { eventType: "USER_RESTORED", targetUserId: delB.id } });
+            assert(ev.length === 1, `exactly one USER_RESTORED, got ${ev.length}`);
+            assert(ev[0].actorUserId === masterUserId, "actor = MasterAdmin user");
+            assert(ev[0].companyId === null && ev[0].guardName === "admin.account.restore", "companyId null, guard admin.account.restore");
+            const list = await request("/api/admin/accounts/deleted?size=50", { jar: masterJar, expectedStatus: 200 });
+            assert(!list.json.data.users.some((x) => x.userId === delB.id), "restored user removed from deleted list");
+          });
+
+          await check("c10-2 restored user can login; INACTIVE-company access stays USER_INACTIVE", async () => {
+            await request(`/api/admin/accounts/${delA.id}/restore`, { method: "POST", jar: masterJar, headers: FWD, body: {}, expectedStatus: 200 });
+            const jar = await c102Login(`del-a.${RUN_ID}@x.local`);
+            const me = await request("/api/auth/me", { jar, expectedStatus: 403 });
+            assert(me.json?.error?.code === "USER_INACTIVE", "INACTIVE company access still blocked after restore");
+          });
+
+          await check("c10-2 already-active restore → 409 USER_ACCOUNT_NOT_DELETED (no dup audit); missing → 404", async () => {
+            const before = await prisma.securityAuditEvent.count({ where: { eventType: "USER_RESTORED", targetUserId: delB.id } });
+            const r = await request(`/api/admin/accounts/${delB.id}/restore`, { method: "POST", jar: masterJar, headers: FWD, body: {}, expectedStatus: 409 });
+            assert(r.json?.error?.code === "USER_ACCOUNT_NOT_DELETED", "already-active → 409");
+            assert((await prisma.securityAuditEvent.count({ where: { eventType: "USER_RESTORED", targetUserId: delB.id } })) === before, "no extra USER_RESTORED");
+            const nf = await request(`/api/admin/accounts/nonexistent-${RUN_ID}/restore`, { method: "POST", jar: masterJar, headers: FWD, body: {}, expectedStatus: 404 });
+            assert(nf.json?.error?.code === "USER_NOT_FOUND", "missing target → 404");
+          });
+
+          await check("c10-2 concurrent restore: exactly one 200, rest 409; one USER_RESTORED", async () => {
+            const delConc = await mkDeleted("conc", { deletedAtISO: "2026-06-04T00:00:00.000Z" });
+            const results = await Promise.all(
+              [0, 1, 2].map(() => request(`/api/admin/accounts/${delConc.id}/restore`, { method: "POST", jar: masterJar, headers: FWD, body: {} })),
+            );
+            const ok = results.filter((r) => r.status === 200).length;
+            const conflict = results.filter((r) => r.status === 409).length;
+            assert(ok === 1, `exactly one 200, got ${ok}`);
+            assert(ok + conflict === 3, `rest are 409 (ok=${ok}, conflict=${conflict})`);
+            assert((await prisma.securityAuditEvent.count({ where: { eventType: "USER_RESTORED", targetUserId: delConc.id } })) === 1, "exactly one USER_RESTORED on real transition");
+          });
+
+          await check("c10-2 restore API does not alter caller session or create target session", async () => {
+            const delX = await mkDeleted("x", { deletedAtISO: "2026-06-05T00:00:00.000Z" });
+            await request(`/api/admin/accounts/${delX.id}/restore`, { method: "POST", jar: masterJar, headers: FWD, body: {}, expectedStatus: 200 });
+            assert((await prisma.session.count({ where: { userId: delX.id } })) === 0, "target gets no session");
+            // master session still valid after restore (no cookie/session mutation for caller).
+            await request("/api/admin/accounts/deleted", { jar: masterJar, expectedStatus: 200 });
+          });
+
+          // D. UI helper (pure normalizers)
+          await check("c10-2 admin filter normalizers + patch (pure)", async () => {
+            assert(normalizeAdminDeletedSize("7") === 20 && normalizeAdminDeletedSize("50") === 50, "size fallback/valid");
+            assert(normalizeAdminDeletedSort("weird") === "newest" && normalizeAdminDeletedSort("oldest") === "oldest", "sort fallback/valid");
+            assert(normalizeAdminDeletedPage("0") === 1 && normalizeAdminDeletedPage("3") === 3, "page fallback/valid");
+            assert(normalizeAdminDeletedQuery("  hi  ") === "hi" && normalizeAdminDeletedQuery(null) === "", "query trim");
+            const patch = adminDeletedFilterPatch({ q: "  x  ", sort: "oldest", size: 50 });
+            assert(patch.adminDeletedPage === null, "patch resets page");
+            assert(patch.adminDeletedQ === "x" && patch.adminDeletedSort === "oldest" && patch.adminDeletedSize === 50, "patch values");
+            assert(adminDeletedFilterPatch({ q: "" }).adminDeletedQ === null, "empty q → null (default strip)");
+          });
+        } finally {
+          await prisma.securityAuditEvent.deleteMany({
+            where: { OR: [{ targetUserId: { in: createdUserIds } }, { actorUserId: { in: createdUserIds } }] },
+          });
+          if (delMasterAdminEmail) {
+            await prisma.masterAdmin.deleteMany({ where: { email: delMasterAdminEmail } });
+          }
+          for (const id of createdUserIds) {
+            await prisma.user.delete({ where: { id } }).catch(() => {});
           }
         }
       }

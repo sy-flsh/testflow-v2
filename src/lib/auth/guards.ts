@@ -11,6 +11,7 @@ import {
   USER_ACCOUNT_DELETED_CODE,
   USER_ACCOUNT_DELETED_MESSAGE,
 } from "@/lib/auth/account";
+import { findActiveMasterAdminByEmail } from "@/lib/auth/master-admin";
 import {
   buildPermissions,
   resolveActiveMembership,
@@ -82,6 +83,36 @@ export async function requireCurrentUser() {
   }
 
   return requireActiveUser(session.user);
+}
+
+export type MasterAdminAuth = {
+  user: User;
+  masterAdminId: string;
+};
+
+/**
+ * c10-2: 전역 운영 권한(MasterAdmin) guard.
+ * - 세션 없음 → 401 AUTH_UNAUTHORIZED
+ * - soft-deleted 계정 → 403 USER_ACCOUNT_DELETED(우선)
+ * - DB MasterAdmin 레코드 없음/비활성 → 403 AUTH_FORBIDDEN
+ * Company CO/Workspace role 과 무관하며, 특정 Company 소속이 아니어도 통과한다.
+ */
+export async function requireMasterAdmin(): Promise<MasterAdminAuth> {
+  const session = await getCurrentSession();
+
+  if (!session) {
+    throw new AuthGuardError("로그인이 필요합니다.", 401, "AUTH_UNAUTHORIZED");
+  }
+
+  requireActiveUser(session.user);
+
+  const master = await findActiveMasterAdminByEmail(session.user.email);
+
+  if (!master) {
+    throw new AuthGuardError("관리자 권한이 필요합니다.", 403, "AUTH_FORBIDDEN");
+  }
+
+  return { user: session.user, masterAdminId: master.id };
 }
 
 export type CompanyOwnerAuth = {

@@ -30,6 +30,8 @@ export type AuthMeResponse = {
     workspace: Array<{ scopeId: string; role: SpecRole }>;
     project: Array<{ scopeId: string; role: SpecRole }>;
   };
+  // c10-2: 전역 운영(MasterAdmin) 여부 (additive). 관리자 nav 노출 판단용. 미포함이면 false 로 간주.
+  isMasterAdmin?: boolean;
 };
 
 export type SpecRole = "MASTER" | "CO" | "WO" | "PO" | "MEMBER" | "VIEWER";

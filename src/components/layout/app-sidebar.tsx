@@ -2,6 +2,7 @@
 
 import type { ComponentType } from "react";
 import {
+  ArchiveRestore,
   BarChart3,
   Bug,
   FileText,
@@ -41,6 +42,8 @@ export function AppSidebar() {
   // c7-1: CO(COMPANY/CO UserRole)인 경우에만 회원 관리 메뉴를 노출한다.
   const isCompanyOwner =
     auth?.rolesByScope?.company?.some((entry) => entry.role === "CO") ?? false;
+  // c10-2: MasterAdmin(전역 운영) 전용 관리자 메뉴. DB MasterAdmin 기준 boolean(email 비교 아님).
+  const isMasterAdmin = auth?.isMasterAdmin ?? false;
   const projectId = getProjectIdFromPathname(pathname);
   const projectName = getProjectName(projectId);
   const projectItems = projectNav.map((item) => ({
@@ -81,6 +84,14 @@ export function AppSidebar() {
             label="보안 감사 로그"
             icon={ShieldCheck}
             active={pathname.startsWith("/company/security-audit")}
+          />
+        )}
+        {isMasterAdmin && (
+          <SidebarLink
+            href="/admin/accounts"
+            label="탈퇴 계정 관리"
+            icon={ArchiveRestore}
+            active={pathname.startsWith("/admin/accounts")}
           />
         )}
         <SidebarLink

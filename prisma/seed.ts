@@ -257,6 +257,30 @@ async function main() {
     },
   });
 
+  // c10-2: MasterAdmin 이 일반 login 으로 운영 콘솔(/admin/accounts)에 접근할 수 있도록
+  // 같은 email 의 User + 개인(Company 미연결) Workspace 멤버십을 보장한다.
+  // MasterAdmin 권한 판정은 email 매칭이 아니라 MasterAdmin 테이블 기준(requireMasterAdmin).
+  // 이 master User 는 demo Company 에 소속되지 않으므로 회사 회원 목록/감사에는 나타나지 않는다.
+  const masterUser = await prisma.user.upsert({
+    where: { email: masterAdminSeed.email },
+    update: { name: masterAdminSeed.name, passwordHash: devPasswordHash },
+    create: {
+      email: masterAdminSeed.email,
+      name: masterAdminSeed.name,
+      passwordHash: devPasswordHash,
+    },
+  });
+  const adminWorkspace = await prisma.workspace.upsert({
+    where: { slug: "testflow-admin" },
+    update: { name: "TestFlow 관리자", ownerUserId: masterUser.id },
+    create: { name: "TestFlow 관리자", slug: "testflow-admin", ownerUserId: masterUser.id },
+  });
+  await prisma.workspaceMember.upsert({
+    where: { workspaceId_userId: { workspaceId: adminWorkspace.id, userId: masterUser.id } },
+    update: { role: "ADMIN", status: "ACTIVE" },
+    create: { workspaceId: adminWorkspace.id, userId: masterUser.id, role: "ADMIN", status: "ACTIVE" },
+  });
+
   const workspace = await prisma.workspace.upsert({
     where: { slug: workspaceSeed.slug },
     update: { ...workspaceSeed, companyId: company.id },
