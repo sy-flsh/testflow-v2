@@ -11,6 +11,12 @@ import {
   USER_ACCOUNT_DELETED_CODE,
   USER_ACCOUNT_DELETED_MESSAGE,
 } from "@/lib/auth/account";
+import {
+  ADMIN_REAUTH_REQUIRED_CODE,
+  ADMIN_REAUTH_REQUIRED_MESSAGE,
+  getAdminReauthExpiresAt,
+  isAdminReauthValid,
+} from "@/lib/auth/admin-reauth";
 import { findActiveMasterAdminByEmail } from "@/lib/auth/master-admin";
 import {
   buildPermissions,
@@ -90,14 +96,18 @@ export type MasterAdminAuth = {
   masterAdminId: string;
 };
 
+export type RecentMasterAdminAuth = MasterAdminAuth & {
+  sessionId: string;
+  adminReauthenticatedAt: Date;
+  adminReauthExpiresAt: Date;
+};
+
 /**
- * c10-2: 전역 운영 권한(MasterAdmin) guard.
- * - 세션 없음 → 401 AUTH_UNAUTHORIZED
- * - soft-deleted 계정 → 403 USER_ACCOUNT_DELETED(우선)
- * - DB MasterAdmin 레코드 없음/비활성 → 403 AUTH_FORBIDDEN
- * Company CO/Workspace role 과 무관하며, 특정 Company 소속이 아니어도 통과한다.
+ * MasterAdmin guard 의 공통 1차 검증(우선순위 고정):
+ * 세션 없음 401 → soft-deleted 403 USER_ACCOUNT_DELETED → 비-MasterAdmin 403 AUTH_FORBIDDEN.
+ * requireMasterAdmin / requireRecentMasterAdminAuth 가 공유한다.
  */
-export async function requireMasterAdmin(): Promise<MasterAdminAuth> {
+async function resolveMasterAdminSession() {
   const session = await getCurrentSession();
 
   if (!session) {
@@ -112,7 +122,37 @@ export async function requireMasterAdmin(): Promise<MasterAdminAuth> {
     throw new AuthGuardError("관리자 권한이 필요합니다.", 403, "AUTH_FORBIDDEN");
   }
 
+  return { session, master };
+}
+
+/**
+ * c10-2: 전역 운영 권한(MasterAdmin) guard. step-up elevation 은 요구하지 않는다
+ * (status/reauth endpoint 및 nav 판정용). 계약은 c10-2 그대로 유지.
+ */
+export async function requireMasterAdmin(): Promise<MasterAdminAuth> {
+  const { session, master } = await resolveMasterAdminSession();
   return { user: session.user, masterAdminId: master.id };
+}
+
+/**
+ * c10-5: MasterAdmin + **현재 Session 의 recent step-up 재인증**까지 요구하는 guard.
+ * resolveMasterAdminSession 우선순위(401 → USER_ACCOUNT_DELETED → AUTH_FORBIDDEN) 뒤에
+ * elevation 이 없거나 만료면 403 ADMIN_REAUTH_REQUIRED. 민감 admin route 에서만 사용한다.
+ */
+export async function requireRecentMasterAdminAuth(): Promise<RecentMasterAdminAuth> {
+  const { session, master } = await resolveMasterAdminSession();
+
+  if (!isAdminReauthValid(session)) {
+    throw new AuthGuardError(ADMIN_REAUTH_REQUIRED_MESSAGE, 403, ADMIN_REAUTH_REQUIRED_CODE);
+  }
+
+  return {
+    user: session.user,
+    masterAdminId: master.id,
+    sessionId: session.id,
+    adminReauthenticatedAt: session.adminReauthenticatedAt as Date,
+    adminReauthExpiresAt: getAdminReauthExpiresAt(session) as Date,
+  };
 }
 
 export type CompanyOwnerAuth = {

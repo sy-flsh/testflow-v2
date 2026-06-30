@@ -5,6 +5,7 @@ import { ArchiveRestore, ShieldAlert, UserX } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { DialogShell } from "@/components/common/dialog-shell";
 import { EmptyState } from "@/components/common/empty-state";
+import { useAdminReauth } from "@/features/admin/admin-reauth-context";
 import {
   normalizeAdminDeletedPage,
   normalizeAdminDeletedQuery,
@@ -56,6 +57,7 @@ export function AdminDeletedAccountsView() {
   const [qDraft, setQDraft] = useState(params.q);
   const [restoreTarget, setRestoreTarget] = useState<DeletedAccountDto | null>(null);
   const dataRef = useRef<ReadyData | null>(null);
+  const { onReauthRequired } = useAdminReauth();
 
   useEffect(() => {
     setQDraft(q);
@@ -108,10 +110,17 @@ export function AdminDeletedAccountsView() {
         cache: "no-store",
       });
       const payload = (await response.json().catch(() => null)) as
-        | { data?: ReadyData; error?: { message?: string } }
+        | { data?: ReadyData; error?: { message?: string; code?: string } }
         | null;
 
       if (response.status === 403) {
+        // c10-5: elevation 만료/없음 → 목록 즉시 숨기고 gate 로 전환(stale 미노출).
+        if (payload?.error?.code === "ADMIN_REAUTH_REQUIRED") {
+          dataRef.current = null;
+          setData(null);
+          onReauthRequired();
+          return;
+        }
         dataRef.current = null;
         setData(null);
         setStatus("forbidden");
@@ -137,7 +146,7 @@ export function AdminDeletedAccountsView() {
     } finally {
       setRefetching(false);
     }
-  }, [q, sort, size, page, updateUrl]);
+  }, [q, sort, size, page, updateUrl, onReauthRequired]);
 
   useEffect(() => {
     void load();
@@ -343,6 +352,7 @@ function RestoreModal({
 }) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { onReauthRequired } = useAdminReauth();
 
   async function handleRestore() {
     setSubmitting(true);
@@ -355,9 +365,15 @@ function RestoreModal({
         body: JSON.stringify({}),
       });
       const payload = (await response.json().catch(() => null)) as
-        | { data?: { ok?: boolean }; error?: { message?: string } }
+        | { data?: { ok?: boolean }; error?: { message?: string; code?: string } }
         | null;
       if (!response.ok || !payload?.data?.ok) {
+        // c10-5: 진행 중 elevation 만료 → 복구 미실행, 메시지 표시 후 gate 로 전환.
+        if (payload?.error?.code === "ADMIN_REAUTH_REQUIRED") {
+          setError(payload.error.message ?? "관리자 인증이 필요합니다.");
+          onReauthRequired();
+          return;
+        }
         setError(payload?.error?.message ?? "계정 복구를 처리하지 못했습니다.");
         return;
       }

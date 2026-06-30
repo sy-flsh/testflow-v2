@@ -3,7 +3,7 @@ import { restoreSoftDeletedUser } from "@/lib/auth/account";
 import {
   authGuardErrorResponse,
   isAuthGuardError,
-  requireMasterAdmin,
+  requireRecentMasterAdminAuth,
 } from "@/lib/auth/guards";
 import { prisma } from "@/lib/db/prisma";
 import { recordSecurityAuditEvent } from "@/lib/security/audit-log";
@@ -40,7 +40,7 @@ export async function POST(request: Request, context: RouteContext) {
       return csrfError;
     }
 
-    const { user: actor } = await requireMasterAdmin();
+    const { user: actor } = await requireRecentMasterAdminAuth();
 
     const ipLimit = await checkRateLimit({
       scope: "admin:account-restore:ip",

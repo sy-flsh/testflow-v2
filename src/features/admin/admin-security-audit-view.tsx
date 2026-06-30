@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Download, Link2, ScrollText, ShieldAlert, X } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { EmptyState } from "@/components/common/empty-state";
+import { useAdminReauth } from "@/features/admin/admin-reauth-context";
 import {
   ADMIN_AUDIT_EVENT_LABELS,
   ADMIN_AUDIT_EVENT_TYPES,
@@ -107,6 +108,7 @@ export function AdminSecurityAuditView() {
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
   const dataRef = useRef<ReadyData | null>(null);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { onReauthRequired } = useAdminReauth();
 
   useEffect(() => setUserDraft(user), [user]);
   useEffect(() => setGuardDraft(guard), [guard]);
@@ -163,10 +165,17 @@ export function AdminSecurityAuditView() {
         cache: "no-store",
       });
       const payload = (await response.json().catch(() => null)) as
-        | { data?: ReadyData; error?: { message?: string } }
+        | { data?: ReadyData; error?: { message?: string; code?: string } }
         | null;
 
       if (response.status === 403) {
+        // c10-5: elevation 만료/없음 → 감사 목록 즉시 숨기고 gate 로 전환(stale 미노출).
+        if (payload?.error?.code === "ADMIN_REAUTH_REQUIRED") {
+          dataRef.current = null;
+          setData(null);
+          onReauthRequired();
+          return;
+        }
         dataRef.current = null;
         setData(null);
         setStatus("forbidden");
@@ -190,7 +199,7 @@ export function AdminSecurityAuditView() {
     } finally {
       setRefetching(false);
     }
-  }, [buildQuery, page, updateUrl]);
+  }, [buildQuery, page, updateUrl, onReauthRequired]);
 
   useEffect(() => {
     void load();
@@ -231,8 +240,14 @@ export function AdminSecurityAuditView() {
       });
       if (!response.ok) {
         const payload = (await response.json().catch(() => null)) as
-          | { error?: { message?: string } }
+          | { error?: { message?: string; code?: string } }
           | null;
+        // c10-5: export 중 elevation 만료 → CSV 미생성, 메시지 표시 후 gate 로 전환.
+        if (payload?.error?.code === "ADMIN_REAUTH_REQUIRED") {
+          setExportError(payload.error.message ?? "관리자 인증이 필요합니다.");
+          onReauthRequired();
+          return;
+        }
         setExportError(payload?.error?.message ?? "전역 보안 감사 로그를 내보내지 못했습니다.");
         return;
       }

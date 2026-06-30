@@ -2,7 +2,7 @@ import { apiError, apiSuccess } from "@/lib/api/response";
 import {
   authGuardErrorResponse,
   isAuthGuardError,
-  requireMasterAdmin,
+  requireRecentMasterAdminAuth,
 } from "@/lib/auth/guards";
 import {
   normalizeAdminDeletedPage,
@@ -26,7 +26,7 @@ export const runtime = "nodejs";
  */
 export async function GET(request: Request) {
   try {
-    await requireMasterAdmin();
+    await requireRecentMasterAdminAuth();
 
     const url = new URL(request.url);
     const q = normalizeAdminDeletedQuery(url.searchParams.get("q"));

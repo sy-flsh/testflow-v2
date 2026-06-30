@@ -2,7 +2,7 @@ import { apiError } from "@/lib/api/response";
 import {
   authGuardErrorResponse,
   isAuthGuardError,
-  requireMasterAdmin,
+  requireRecentMasterAdminAuth,
 } from "@/lib/auth/guards";
 import {
   ADMIN_AUDIT_EVENT_LABELS,
@@ -48,7 +48,7 @@ const CSV_HEADER = [
  */
 export async function GET(request: Request) {
   try {
-    await requireMasterAdmin();
+    await requireRecentMasterAdminAuth();
 
     const url = new URL(request.url);
     const filters = parseAdminAuditFilters(url.searchParams);

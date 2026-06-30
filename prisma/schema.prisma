@@ -198,16 +198,20 @@ model Workspace {
 }
 
 model Session {
-  id                  String     @id @default(cuid())
-  userId              String
-  tokenHash           String     @unique
-  selectedWorkspaceId String?
-  expiresAt           DateTime
-  createdAt           DateTime   @default(now())
-  updatedAt           DateTime   @updatedAt
-  lastSeenAt          DateTime?
-  user                User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  selectedWorkspace   Workspace? @relation("SelectedWorkspaceSession", fields: [selectedWorkspaceId], references: [id], onDelete: SetNull)
+  id                     String     @id @default(cuid())
+  userId                 String
+  tokenHash              String     @unique
+  selectedWorkspaceId    String?
+  expiresAt              DateTime
+  createdAt              DateTime   @default(now())
+  updatedAt              DateTime   @updatedAt
+  lastSeenAt             DateTime?
+  // c10-5: MasterAdmin step-up 재인증 시각(현재 Session 한정). null=미인증.
+  // not null 이면 adminReauthenticatedAt + 15분 동안만 admin elevation 유효(guard 가 현재 시각과 비교).
+  // 자동 연장/다른 Session 전파 없음. logout/session 삭제 시 함께 사라진다.
+  adminReauthenticatedAt DateTime?
+  user                   User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  selectedWorkspace      Workspace? @relation("SelectedWorkspaceSession", fields: [selectedWorkspaceId], references: [id], onDelete: SetNull)
 
   @@index([userId])
   @@index([expiresAt])

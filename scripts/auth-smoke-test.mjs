@@ -3605,6 +3605,8 @@ async function main() {
             // c10-2: 실제 restore helper 를 admin route 를 통해 호출(직접 DB mimic 제거).
             await prisma.session.deleteMany({ where: { userId: withdrawUser.id } });
             const masterJar = await c10LoginRaw("master@testflow.local");
+            // c10-5: 보호 admin API 는 step-up elevation 필요 → master 세션 재인증.
+            await request("/api/admin/reauth", { method: "POST", jar: masterJar, headers: C10_FWD, body: { password: PASSWORD }, expectedStatus: 200 });
             const r = await request(`/api/admin/accounts/${withdrawUser.id}/restore`, {
               method: "POST",
               jar: masterJar,
@@ -3790,6 +3792,8 @@ async function main() {
 
         try {
           const masterJar = await c102Login("master@testflow.local");
+          // c10-5: 보호 admin API 는 step-up elevation 이 필요 → 현재 master 세션을 재인증.
+          await request("/api/admin/reauth", { method: "POST", jar: masterJar, headers: FWD, body: { password: PASSWORD }, expectedStatus: 200 });
 
           // A. guard / auth payload
           await check("c10-2 isMasterAdmin: master=true, CO/member=false", async () => {
@@ -4021,6 +4025,8 @@ async function main() {
         let masterJar = null;
         try {
           masterJar = await c103Login("master@testflow.local");
+          // c10-5: 보호 admin API 는 step-up elevation 이 필요 → 현재 master 세션을 재인증.
+          await request("/api/admin/reauth", { method: "POST", jar: masterJar, headers: FWD, body: { password: PASSWORD }, expectedStatus: 200 });
 
           // soft-deleted user(마스킹용) + soft-deleted MasterAdmin(권한 우선순위용)
           const delUser = await prisma.user.create({
@@ -4174,6 +4180,173 @@ async function main() {
           });
         } finally {
           await prisma.securityAuditEvent.deleteMany({ where: { id: { in: createdEventIds } } });
+          if (delMasterAdminEmail) {
+            await prisma.masterAdmin.deleteMany({ where: { email: delMasterAdminEmail } });
+          }
+          for (const id of createdUserIds) {
+            await prisma.user.delete({ where: { id } }).catch(() => {});
+          }
+        }
+      }
+
+      // c10-5: MasterAdmin step-up 재인증
+      {
+        const FWD = { "x-forwarded-for": "198.51.100.94" };
+        const FWD_RL = { "x-forwarded-for": "198.51.100.95" };
+        const seedHash = (
+          await prisma.user.findUnique({ where: { email: accounts.admin }, select: { passwordHash: true } })
+        )?.passwordHash;
+        const masterUserId = (
+          await prisma.user.findUnique({ where: { email: "master@testflow.local" }, select: { id: true } })
+        )?.id;
+        const createdUserIds = [];
+        let delMasterAdminEmail = null;
+
+        async function c105Login(email) {
+          const jar = new CookieJar();
+          await request("/api/auth/login", { method: "POST", headers: FWD, body: { email, password: PASSWORD }, jar, expectedStatus: 200 });
+          assert(jar.cookies.has("tf_session"), `${email} login failed`);
+          return jar;
+        }
+        async function createSessionFor(userId) {
+          const rawToken = `c105tok-${RUN_ID}-${Math.floor(Math.random() * 1e9)}`;
+          const tokenHash = createHash("sha256").update(rawToken).digest("hex");
+          await prisma.session.create({ data: { userId, tokenHash, expiresAt: new Date(Date.now() + 86_400_000), lastSeenAt: new Date() } });
+          const jar = new CookieJar();
+          jar.cookies.set("tf_session", rawToken);
+          return jar;
+        }
+        async function sessionIdFromJar(jar) {
+          const raw = jar.cookies.get("tf_session");
+          const hash = createHash("sha256").update(raw).digest("hex");
+          return (await prisma.session.findUnique({ where: { tokenHash: hash }, select: { id: true } }))?.id;
+        }
+        async function elevate(jar, fwd = FWD) {
+          await request("/api/admin/reauth", { method: "POST", jar, headers: fwd, body: { password: PASSWORD }, expectedStatus: 200 });
+        }
+        const PROTECTED = ["/api/admin/accounts/deleted", "/api/admin/security-audit", "/api/admin/security-audit/export"];
+
+        try {
+          // soft-deleted 복구 대상 + soft-deleted MasterAdmin
+          const delTarget = await prisma.user.create({
+            data: { email: `reauth-target.${RUN_ID}@x.local`, name: "재인증대상", passwordHash: seedHash, deletedAt: new Date(), deletedByUserId: leadUser.id, deletionReason: "SELF_WITHDRAWAL" },
+          });
+          createdUserIds.push(delTarget.id);
+          const delMasterEmail = `delmaster-reauth.${RUN_ID}@x.local`;
+          delMasterAdminEmail = delMasterEmail;
+          const dm = await prisma.user.create({
+            data: { email: delMasterEmail, name: "탈퇴마스터", passwordHash: seedHash, deletedAt: new Date(), deletedByUserId: leadUser.id, deletionReason: "SELF_WITHDRAWAL" },
+          });
+          createdUserIds.push(dm.id);
+          await prisma.masterAdmin.create({ data: { email: delMasterEmail, name: "탈퇴마스터", passwordHash: seedHash } });
+
+          await check("c10-5 guard priority: unauth 401 / CO·member 403 / deleted-master 403 / no-elevation 403", async () => {
+            const masterJar = await c105Login("master@testflow.local");
+            for (const p of PROTECTED) {
+              assert((await request(p, { expectedStatus: 401 })).json?.error?.code === "AUTH_UNAUTHORIZED", `unauth ${p}`);
+              assert((await request(p, { jar: adminJar, expectedStatus: 403 })).json?.error?.code === "AUTH_FORBIDDEN", `CO ${p}`);
+              assert((await request(p, { jar: memberJar, expectedStatus: 403 })).json?.error?.code === "AUTH_FORBIDDEN", `member ${p}`);
+              assert((await request(p, { jar: masterJar, expectedStatus: 403 })).json?.error?.code === "ADMIN_REAUTH_REQUIRED", `no-elev ${p}`);
+            }
+            const restorePath = `/api/admin/accounts/${delTarget.id}/restore`;
+            assert((await request(restorePath, { method: "POST", expectedStatus: 401 })).json?.error?.code === "AUTH_UNAUTHORIZED", "unauth restore");
+            assert((await request(restorePath, { method: "POST", jar: adminJar, expectedStatus: 403 })).json?.error?.code === "AUTH_FORBIDDEN", "CO restore");
+            assert((await request(restorePath, { method: "POST", jar: masterJar, expectedStatus: 403 })).json?.error?.code === "ADMIN_REAUTH_REQUIRED", "no-elev restore");
+            // soft-deleted MasterAdmin → USER_ACCOUNT_DELETED 우선
+            const staleJar = await createSessionFor(dm.id);
+            assert((await request("/api/admin/security-audit", { jar: staleJar, expectedStatus: 403 })).json?.error?.code === "USER_ACCOUNT_DELETED", "deleted master USER_ACCOUNT_DELETED precedes reauth");
+          });
+
+          await check("c10-5 status + reauth API (no-pw 400 / wrong 401 / correct 200); session timestamp", async () => {
+            const jar = await c105Login("master@testflow.local");
+            const sid = await sessionIdFromJar(jar);
+            assert((await prisma.session.findUnique({ where: { id: sid }, select: { adminReauthenticatedAt: true } }))?.adminReauthenticatedAt === null, "fresh session not elevated (migration default null)");
+            assert((await request("/api/admin/reauth/status", { jar, expectedStatus: 200 })).json.data.elevated === false, "status initial elevated=false");
+            assert((await request("/api/admin/reauth", { method: "POST", jar, headers: FWD, body: {}, expectedStatus: 400 })).json?.error?.code === "ADMIN_REAUTH_PASSWORD_REQUIRED", "no password 400");
+            assert((await request("/api/admin/reauth", { method: "POST", jar, headers: FWD, body: { password: "definitely-wrong-1!" }, expectedStatus: 401 })).json?.error?.code === "ADMIN_REAUTH_FAILED", "wrong password 401");
+            const ok = await request("/api/admin/reauth", { method: "POST", jar, headers: FWD, body: { password: PASSWORD }, expectedStatus: 200 });
+            assert(ok.json.data.ok === true && typeof ok.json.data.expiresAt === "string", "correct → ok + expiresAt");
+            assert((await request("/api/admin/reauth/status", { jar, expectedStatus: 200 })).json.data.elevated === true, "status elevated=true after reauth");
+            assert((await prisma.session.findUnique({ where: { id: sid }, select: { adminReauthenticatedAt: true } }))?.adminReauthenticatedAt instanceof Date, "current session timestamp set");
+          });
+
+          await check("c10-5 reauth has no side effects (no new session/cookie/role/member/audit change)", async () => {
+            const jar = await c105Login("master@testflow.local");
+            const cookieBefore = jar.cookies.get("tf_session");
+            const beforeSessions = await prisma.session.count({ where: { userId: masterUserId } });
+            const beforeRoles = await prisma.userRole.count({ where: { userId: masterUserId } });
+            const beforeMembers = await prisma.workspaceMember.count({ where: { userId: masterUserId } });
+            const beforeEvents = await prisma.securityAuditEvent.count();
+            await request("/api/admin/reauth", { method: "POST", jar, headers: FWD, body: { password: PASSWORD }, expectedStatus: 200 });
+            assert((await prisma.session.count({ where: { userId: masterUserId } })) === beforeSessions, "no new session");
+            assert(jar.cookies.get("tf_session") === cookieBefore, "cookie unchanged");
+            assert((await prisma.userRole.count({ where: { userId: masterUserId } })) === beforeRoles, "UserRole unchanged");
+            assert((await prisma.workspaceMember.count({ where: { userId: masterUserId } })) === beforeMembers, "WorkspaceMember unchanged");
+            assert((await prisma.securityAuditEvent.count()) === beforeEvents, "no SecurityAuditEvent created");
+          });
+
+          await check("c10-5 elevation is per-session; reauth after = success; expiry → ADMIN_REAUTH_REQUIRED (restore not executed)", async () => {
+            const jarA = await c105Login("master@testflow.local");
+            const jarB = await c105Login("master@testflow.local");
+            const sidA = await sessionIdFromJar(jarA);
+            const sidB = await sessionIdFromJar(jarB);
+            await elevate(jarA);
+            // A elevated → all protected succeed
+            await request("/api/admin/accounts/deleted", { jar: jarA, expectedStatus: 200 });
+            await request("/api/admin/security-audit", { jar: jarA, expectedStatus: 200 });
+            await request("/api/admin/security-audit/export", { jar: jarA, expectedStatus: 200 });
+            // B not elevated (elevation didn't propagate)
+            assert((await request("/api/admin/security-audit", { jar: jarB, expectedStatus: 403 })).json?.error?.code === "ADMIN_REAUTH_REQUIRED", "session B still requires reauth");
+            assert((await prisma.session.findUnique({ where: { id: sidB }, select: { adminReauthenticatedAt: true } }))?.adminReauthenticatedAt === null, "session B timestamp untouched");
+            // expiry: A 의 timestamp 를 TTL 밖으로 → 만료
+            await prisma.session.update({ where: { id: sidA }, data: { adminReauthenticatedAt: new Date(Date.now() - 20 * 60 * 1000) } });
+            assert((await request("/api/admin/security-audit", { jar: jarA, expectedStatus: 403 })).json?.error?.code === "ADMIN_REAUTH_REQUIRED", "expired elevation → reauth required");
+            // 만료 상태에서 restore 미실행
+            const tgtBefore = await prisma.user.findUnique({ where: { id: delTarget.id }, select: { deletedAt: true } });
+            const evBefore = await prisma.securityAuditEvent.count({ where: { eventType: "USER_RESTORED", targetUserId: delTarget.id } });
+            assert((await request(`/api/admin/accounts/${delTarget.id}/restore`, { method: "POST", jar: jarA, expectedStatus: 403 })).json?.error?.code === "ADMIN_REAUTH_REQUIRED", "expired restore blocked");
+            assert((await prisma.user.findUnique({ where: { id: delTarget.id }, select: { deletedAt: true } }))?.deletedAt?.getTime() === tgtBefore.deletedAt?.getTime(), "restore target deletedAt unchanged");
+            assert((await prisma.securityAuditEvent.count({ where: { eventType: "USER_RESTORED", targetUserId: delTarget.id } })) === evBefore, "no USER_RESTORED on expired reauth");
+            // logout 시 elevation 도 사라짐(세션 삭제)
+            await elevate(jarB);
+            await request("/api/auth/logout", { method: "POST", jar: jarB, expectedStatus: 200 });
+            assert((await request("/api/admin/security-audit", { jar: jarB, expectedStatus: 401 })).json?.error?.code === "AUTH_UNAUTHORIZED", "logout removes session + elevation");
+          });
+
+          await check("c10-5 after elevation, all protected admin APIs succeed (existing contracts)", async () => {
+            const jar = await c105Login("master@testflow.local");
+            await elevate(jar);
+            await request("/api/admin/accounts/deleted", { jar, expectedStatus: 200 });
+            await request("/api/admin/security-audit", { jar, expectedStatus: 200 });
+            await request("/api/admin/security-audit/export", { jar, expectedStatus: 200 });
+            const t2 = await prisma.user.create({
+              data: { email: `reauth-restore.${RUN_ID}@x.local`, name: "복구대상", passwordHash: seedHash, deletedAt: new Date(), deletedByUserId: leadUser.id, deletionReason: "SELF_WITHDRAWAL" },
+            });
+            createdUserIds.push(t2.id);
+            const rr = await request(`/api/admin/accounts/${t2.id}/restore`, { method: "POST", jar, headers: FWD, expectedStatus: 200 });
+            assert(rr.json?.data?.ok === true, "restore succeeds after elevation");
+          });
+
+          await check("c10-5 reauth failure rate limit (isolated IP); other IP bucket unaffected", async () => {
+            const jar = await c105Login("master@testflow.local");
+            let got429 = false;
+            const statuses = [];
+            for (let i = 0; i < 6; i += 1) {
+              const r = await request("/api/admin/reauth", { method: "POST", jar, headers: FWD_RL, body: { password: `wrong-${i}` } });
+              statuses.push(r.status);
+              if (r.status === 429) got429 = true;
+            }
+            assert(got429, `expected 429 after repeated failures; got ${statuses.join(",")}`);
+            // 다른 IP bucket 은 영향 없음 → 정상 비밀번호 200
+            const jar2 = await c105Login("master@testflow.local");
+            const ok = await request("/api/admin/reauth", { method: "POST", jar: jar2, headers: { "x-forwarded-for": "198.51.100.96" }, body: { password: PASSWORD }, expectedStatus: 200 });
+            assert(ok.json?.data?.ok === true, "different IP bucket unaffected");
+          });
+        } finally {
+          await prisma.rateLimitBucket.deleteMany({ where: { scope: "admin:reauth:fail" } });
+          if (masterUserId) {
+            await prisma.session.deleteMany({ where: { userId: masterUserId } });
+          }
           if (delMasterAdminEmail) {
             await prisma.masterAdmin.deleteMany({ where: { email: delMasterAdminEmail } });
           }
