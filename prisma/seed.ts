@@ -247,7 +247,12 @@ async function main() {
     create: { name: companySeed.name, slug: companySeed.slug },
   });
 
-  await prisma.masterAdmin.upsert({
+  // c10-2/c10-7: MasterAdmin 이 일반 login 으로 운영 콘솔(/admin/accounts)에 접근할 수 있도록
+  // 같은 email 의 User + 개인(Company 미연결) Workspace 멤버십을 보장한다.
+  // 이 master User 는 demo Company 에 소속되지 않으므로 회사 회원 목록/감사에는 나타나지 않는다.
+  // c10-7: MasterAdmin 권한 판정은 **MasterAdmin.userId = User.id** 기준(email/passwordHash 아님).
+  //        → User 를 먼저 만들고 MasterAdmin 을 userId 로 bind 한다.
+  const masterUser = await prisma.user.upsert({
     where: { email: masterAdminSeed.email },
     update: { name: masterAdminSeed.name, passwordHash: devPasswordHash },
     create: {
@@ -257,14 +262,11 @@ async function main() {
     },
   });
 
-  // c10-2: MasterAdmin 이 일반 login 으로 운영 콘솔(/admin/accounts)에 접근할 수 있도록
-  // 같은 email 의 User + 개인(Company 미연결) Workspace 멤버십을 보장한다.
-  // MasterAdmin 권한 판정은 email 매칭이 아니라 MasterAdmin 테이블 기준(requireMasterAdmin).
-  // 이 master User 는 demo Company 에 소속되지 않으므로 회사 회원 목록/감사에는 나타나지 않는다.
-  const masterUser = await prisma.user.upsert({
+  await prisma.masterAdmin.upsert({
     where: { email: masterAdminSeed.email },
-    update: { name: masterAdminSeed.name, passwordHash: devPasswordHash },
+    update: { name: masterAdminSeed.name, passwordHash: devPasswordHash, userId: masterUser.id, isActive: true },
     create: {
+      userId: masterUser.id,
       email: masterAdminSeed.email,
       name: masterAdminSeed.name,
       passwordHash: devPasswordHash,

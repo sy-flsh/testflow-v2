@@ -134,6 +134,13 @@ model Company {
 
 model MasterAdmin {
   id           String   @id @default(cuid())
+  // c10-7: MasterAdmin identity 는 **User.id 로 고정**한다(권한 판정의 단일 기준).
+  // userId 는 처음엔 nullable + 1:1 backfill(email→userId, 안전 매칭만). userId null/연결 User 없음은
+  // fail-closed(권한 미인정). onDelete Restrict 로 연결 User 의 물리 삭제를 막아 binding 을 보존한다
+  // (soft delete 는 row 를 지우지 않으므로 영향 없음). MasterAdmin row 는 물리 삭제하지 않는 정책 유지.
+  userId       String?  @unique
+  user         User?    @relation("UserMasterAdmin", fields: [userId], references: [id], onDelete: Restrict)
+  // legacy(인증 source of truth 아님 — c10-7 이후 email/passwordHash 는 권한 판정에 사용하지 않는다).
   email        String   @unique
   passwordHash String
   name         String
@@ -167,6 +174,8 @@ model User {
   roles           UserRole[]
   sentInvitations Invitation[]       @relation("InvitationInvitedBy")
   companyStates   CompanyUserState[] @relation("CompanyUserStateSubject")
+  // c10-7: 이 User 에 연결된 MasterAdmin(있으면). 1:1(MasterAdmin.userId @unique).
+  masterAdmin     MasterAdmin?       @relation("UserMasterAdmin")
 
   @@index([deletedAt])
   @@map("users")

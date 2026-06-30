@@ -4,7 +4,7 @@ import {
   isAuthGuardError,
   requireRecentMasterAdminAuth,
 } from "@/lib/auth/guards";
-import { getActiveMasterAdminEmails } from "@/lib/auth/master-admin";
+import { getActiveMasterAdminUserIds } from "@/lib/auth/master-admin";
 import {
   normalizeAdminDeletedPage,
   normalizeAdminDeletedQuery,
@@ -67,16 +67,16 @@ export async function GET(request: Request) {
       select: { id: true, name: true, email: true, createdAt: true, lastLoginAt: true },
     });
 
-    // bulk UX hint: 활성 MasterAdmin email 집합 + 페이지 User 중 마지막 ACTIVE CO 집합.
-    const activeMasterEmails = await getActiveMasterAdminEmails(prisma);
-    const onlyOneActiveMaster = activeMasterEmails.size === 1;
+    // bulk UX hint: 활성 MasterAdmin userId 집합(c10-7) + 페이지 User 중 마지막 ACTIVE CO 집합.
+    const activeMasterUserIds = await getActiveMasterAdminUserIds(prisma);
+    const onlyOneActiveMaster = activeMasterUserIds.size === 1;
     const lastCoUserIds = await getLastActiveCompanyOwnerUserIds(
       prisma,
       rows.map((u) => u.id),
     );
 
     const users: ActiveAccountDto[] = rows.map((u) => {
-      const isMasterAdmin = activeMasterEmails.has(u.email);
+      const isMasterAdmin = activeMasterUserIds.has(u.id);
       const isLastActiveCompanyOwner = lastCoUserIds.has(u.id);
       // 차단 사유 우선순위: SELF → LAST_MASTER_ADMIN → LAST_ACTIVE_CO (route 검증과 동일 순서).
       let reason: ForceDeleteBlockedReason | null = null;

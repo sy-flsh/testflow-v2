@@ -1,5 +1,5 @@
 import type { Prisma } from "@prisma/client";
-import { getActiveMasterAdminEmails } from "@/lib/auth/master-admin";
+import { getActiveMasterAdminUserIds } from "@/lib/auth/master-admin";
 import { getCompaniesWhereUserIsLastActiveCO } from "@/lib/company/company-user-state";
 import { prisma } from "@/lib/db/prisma";
 
@@ -137,7 +137,7 @@ export async function forceSoftDeleteUser(
 
   const target = await client.user.findUnique({
     where: { id: targetUserId },
-    select: { id: true, email: true, deletedAt: true },
+    select: { id: true, deletedAt: true },
   });
   if (!target) {
     return { deleted: false, reason: "NOT_FOUND" };
@@ -146,9 +146,9 @@ export async function forceSoftDeleteUser(
     return { deleted: false, reason: "NOT_ACTIVE" };
   }
 
-  // 마지막 활성 MasterAdmin 보호.
-  const activeMasterEmails = await getActiveMasterAdminEmails(client);
-  if (activeMasterEmails.has(target.email) && activeMasterEmails.size === 1) {
+  // 마지막 활성 MasterAdmin 보호(c10-7: userId binding 기준).
+  const activeMasterUserIds = await getActiveMasterAdminUserIds(client);
+  if (activeMasterUserIds.has(targetUserId) && activeMasterUserIds.size === 1) {
     return { deleted: false, reason: "LAST_MASTER_ADMIN" };
   }
 

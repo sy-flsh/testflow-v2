@@ -17,7 +17,7 @@ import {
   getAdminReauthExpiresAt,
   isAdminReauthValid,
 } from "@/lib/auth/admin-reauth";
-import { findActiveMasterAdminByEmail } from "@/lib/auth/master-admin";
+import { findActiveMasterAdminByUserId } from "@/lib/auth/master-admin";
 import {
   buildPermissions,
   resolveActiveMembership,
@@ -116,7 +116,8 @@ async function resolveMasterAdminSession() {
 
   requireActiveUser(session.user);
 
-  const master = await findActiveMasterAdminByEmail(session.user.email);
+  // c10-7: MasterAdmin 판정은 session User.id binding 기준(email/passwordHash fallback 없음).
+  const master = await findActiveMasterAdminByUserId(session.user.id);
 
   if (!master) {
     throw new AuthGuardError("관리자 권한이 필요합니다.", 403, "AUTH_FORBIDDEN");

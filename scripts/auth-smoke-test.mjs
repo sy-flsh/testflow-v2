@@ -3825,7 +3825,7 @@ async function main() {
               data: { email, name: "탈퇴마스터", passwordHash: seedHash, deletedAt: new Date(), deletedByUserId: leadUser.id, deletionReason: "SELF_WITHDRAWAL" },
             });
             createdUserIds.push(dm.id);
-            await prisma.masterAdmin.create({ data: { email, name: "탈퇴마스터", passwordHash: seedHash } });
+            await prisma.masterAdmin.create({ data: { userId: dm.id, email, name: "탈퇴마스터", passwordHash: seedHash } });
             const staleJar = await createSessionFor(dm.id);
             const r = await request("/api/admin/accounts/deleted", { jar: staleJar, expectedStatus: 403 });
             assert(r.json?.error?.code === "USER_ACCOUNT_DELETED", "deleted master → USER_ACCOUNT_DELETED, not master pass");
@@ -4039,7 +4039,7 @@ async function main() {
             data: { email: delMasterEmail, name: "탈퇴마스터감사", passwordHash: seedHash, deletedAt: new Date(), deletedByUserId: leadUser.id, deletionReason: "SELF_WITHDRAWAL" },
           });
           createdUserIds.push(delMaster.id);
-          await prisma.masterAdmin.create({ data: { email: delMasterEmail, name: "탈퇴마스터감사", passwordHash: seedHash } });
+          await prisma.masterAdmin.create({ data: { userId: delMaster.id, email: delMasterEmail, name: "탈퇴마스터감사", passwordHash: seedHash } });
 
           // core set(markC): company 3 + global 3
           await mkEvent({ eventType: "COMPANY_USER_DEACTIVATED", companyId, actorUserId: leadUser.id, targetUserId: backendUser.id, guardName: `${markC}-deact`, occurredAt: "2026-06-10T12:00:00.000Z" });
@@ -4238,7 +4238,7 @@ async function main() {
             data: { email: delMasterEmail, name: "탈퇴마스터", passwordHash: seedHash, deletedAt: new Date(), deletedByUserId: leadUser.id, deletionReason: "SELF_WITHDRAWAL" },
           });
           createdUserIds.push(dm.id);
-          await prisma.masterAdmin.create({ data: { email: delMasterEmail, name: "탈퇴마스터", passwordHash: seedHash } });
+          await prisma.masterAdmin.create({ data: { userId: dm.id, email: delMasterEmail, name: "탈퇴마스터", passwordHash: seedHash } });
 
           await check("c10-5 guard priority: unauth 401 / CO·member 403 / deleted-master 403 / no-elevation 403", async () => {
             const masterJar = await c105Login("master@testflow.local");
@@ -4407,7 +4407,7 @@ async function main() {
           const email = `c106-master-${tag}.${RUN_ID}@x.local`;
           const u = await prisma.user.create({ data: { email, name: `마스터${tag}`, passwordHash: seedHash } });
           createdUserIds.push(u.id);
-          await prisma.masterAdmin.create({ data: { email, name: `마스터${tag}`, passwordHash: seedHash } });
+          await prisma.masterAdmin.create({ data: { userId: u.id, email, name: `마스터${tag}`, passwordHash: seedHash } });
           masterFixtureEmails.push(email);
           return u;
         }
@@ -4460,7 +4460,7 @@ async function main() {
             masterFixtureEmails.push(dmEmail);
             const dm = await prisma.user.create({ data: { email: dmEmail, name: "탈퇴마스터", passwordHash: seedHash, deletedAt: new Date(), deletedByUserId: leadUser.id, deletionReason: "ADMIN_FORCED_DELETION" } });
             createdUserIds.push(dm.id);
-            await prisma.masterAdmin.create({ data: { email: dmEmail, name: "탈퇴마스터", passwordHash: seedHash } });
+            await prisma.masterAdmin.create({ data: { userId: dm.id, email: dmEmail, name: "탈퇴마스터", passwordHash: seedHash } });
             const staleJar = await createSessionFor(dm.id);
             assert((await request("/api/admin/accounts/active", { jar: staleJar, expectedStatus: 403 })).json?.error?.code === "USER_ACCOUNT_DELETED", "deleted master USER_ACCOUNT_DELETED");
           });
@@ -4607,6 +4607,121 @@ async function main() {
           }
           for (const id of companyIds) {
             await prisma.company.delete({ where: { id } }).catch(() => {});
+          }
+        }
+      }
+
+      // c10-7: MasterAdmin identity = User.id binding (email/passwordHash 은 인증 기준 아님)
+      {
+        const FWD = { "x-forwarded-for": "198.51.100.98" };
+        const seedHash = (
+          await prisma.user.findUnique({ where: { email: accounts.admin }, select: { passwordHash: true } })
+        )?.passwordHash;
+        const masterUserId = (
+          await prisma.user.findUnique({ where: { email: "master@testflow.local" }, select: { id: true } })
+        )?.id;
+        const createdUserIds = [];
+        const masterFixtureEmails = [];
+        let c107ws = null;
+
+        async function c107Login(email) {
+          const jar = new CookieJar();
+          await request("/api/auth/login", { method: "POST", headers: FWD, body: { email, password: PASSWORD }, jar, expectedStatus: 200 });
+          assert(jar.cookies.has("tf_session"), `${email} login failed`);
+          return jar;
+        }
+        async function elevate(jar) {
+          await request("/api/admin/reauth", { method: "POST", jar, headers: FWD, body: { password: PASSWORD }, expectedStatus: 200 });
+        }
+        let fdSeq = 0;
+        async function fd(jar, userId, expectedStatus) {
+          fdSeq += 1;
+          return request(`/api/admin/accounts/${userId}/force-delete`, {
+            method: "POST", jar, headers: { "x-forwarded-for": `198.51.102.${1 + (fdSeq % 200)}` }, body: { confirmation: "강제 정지합니다" }, ...(expectedStatus ? { expectedStatus } : {}),
+          });
+        }
+        async function mkLoginableUser(tag) {
+          const email = `c107-${tag}.${RUN_ID}@x.local`;
+          const u = await prisma.user.create({ data: { email, name: `c107${tag}`, passwordHash: seedHash } });
+          createdUserIds.push(u.id);
+          await prisma.workspaceMember.create({ data: { workspaceId: c107ws.id, userId: u.id, role: "ADMIN", status: "ACTIVE" } });
+          return u;
+        }
+
+        try {
+          // login 가능하도록 Company 미연결 개인 workspace(데모 회사 미오염).
+          c107ws = await prisma.workspace.create({ data: { name: `C107WS ${RUN_ID}`, slug: `c107ws-${RUN_ID}` } });
+
+          await check("c10-7 seed MasterAdmin is userId-bound to its User", async () => {
+            const sm = await prisma.masterAdmin.findUnique({ where: { email: "master@testflow.local" }, select: { userId: true } });
+            assert(sm?.userId && sm.userId === masterUserId, "seed master MasterAdmin.userId === master User.id");
+          });
+
+          await check("c10-7 unbound MasterAdmin (userId null) is fail-closed (isMasterAdmin false, AUTH_FORBIDDEN)", async () => {
+            const u = await mkLoginableUser("unbound");
+            await prisma.masterAdmin.create({ data: { email: u.email, name: "언바운드", passwordHash: seedHash } }); // userId NULL
+            masterFixtureEmails.push(u.email);
+            const jar = await c107Login(u.email);
+            assert((await request("/api/auth/me", { jar, expectedStatus: 200 })).json.data.isMasterAdmin === false, "unbound → isMasterAdmin false (no email fallback)");
+            assert((await request("/api/admin/accounts/deleted", { jar, expectedStatus: 403 })).json?.error?.code === "AUTH_FORBIDDEN", "unbound → AUTH_FORBIDDEN");
+          });
+
+          await check("c10-7 isActive=false bound MasterAdmin is fail-closed", async () => {
+            const u = await mkLoginableUser("inactive");
+            await prisma.masterAdmin.create({ data: { userId: u.id, email: u.email, name: "비활성", passwordHash: seedHash, isActive: false } });
+            masterFixtureEmails.push(u.email);
+            const jar = await c107Login(u.email);
+            assert((await request("/api/auth/me", { jar, expectedStatus: 200 })).json.data.isMasterAdmin === false, "inactive → isMasterAdmin false");
+            assert((await request("/api/admin/accounts/deleted", { jar, expectedStatus: 403 })).json?.error?.code === "AUTH_FORBIDDEN", "inactive → AUTH_FORBIDDEN");
+          });
+
+          await check("c10-7 email change preserves binding; admin works without email fallback", async () => {
+            const u = await mkLoginableUser("bound");
+            const masterEmail = u.email;
+            await prisma.masterAdmin.create({ data: { userId: u.id, email: masterEmail, name: "이메일변경", passwordHash: seedHash } });
+            masterFixtureEmails.push(masterEmail);
+            // User email 을 바꿔 MasterAdmin.email 과 어긋나게 한다(email fallback 이면 깨질 상태).
+            const newEmail = `c107-bound-renamed.${RUN_ID}@x.local`;
+            await prisma.user.update({ where: { id: u.id }, data: { email: newEmail } });
+            const jar = await c107Login(newEmail);
+            assert((await request("/api/auth/me", { jar, expectedStatus: 200 })).json.data.isMasterAdmin === true, "binding survives email change (userId 기준)");
+            await elevate(jar);
+            await request("/api/admin/accounts/deleted", { jar, expectedStatus: 200 });
+            await request("/api/admin/security-audit", { jar, expectedStatus: 200 });
+          });
+
+          await check("c10-7 force-deleted bound master keeps binding; restore re-grants admin", async () => {
+            const masterJar = await c107Login("master@testflow.local");
+            await elevate(masterJar);
+            const u = await mkLoginableUser("mb");
+            await prisma.masterAdmin.create({ data: { userId: u.id, email: u.email, name: "복구마스터", passwordHash: seedHash } });
+            masterFixtureEmails.push(u.email);
+            // 2명 이상(seed + u) → u(master) force-delete 허용.
+            assert((await fd(masterJar, u.id, 200)).json?.data?.ok === true, "2 masters → force-delete a master allowed");
+            // binding(userId) 보존(MasterAdmin row 미삭제), User soft-deleted.
+            const mAfter = await prisma.masterAdmin.findUnique({ where: { email: u.email }, select: { userId: true } });
+            assert(mAfter?.userId === u.id, "MasterAdmin.userId binding preserved after force-delete");
+            assert((await prisma.user.findUnique({ where: { id: u.id }, select: { deletedAt: true } }))?.deletedAt instanceof Date, "user soft-deleted (isMasterAdmin would be false while deleted)");
+            // restore → User active → binding 으로 다시 master 권한.
+            await request(`/api/admin/accounts/${u.id}/restore`, { method: "POST", jar: masterJar, headers: FWD, body: {}, expectedStatus: 200 });
+            const jar = await c107Login(u.email);
+            assert((await request("/api/auth/me", { jar, expectedStatus: 200 })).json.data.isMasterAdmin === true, "restored bound master regains admin");
+          });
+        } finally {
+          await prisma.securityAuditEvent.deleteMany({ where: { OR: [{ targetUserId: { in: createdUserIds } }, { actorUserId: { in: createdUserIds } }] } });
+          await prisma.rateLimitBucket.deleteMany({ where: { scope: { in: ["admin:account-force-delete:actor", "admin:reauth:fail"] } } });
+          if (masterUserId) {
+            await prisma.session.deleteMany({ where: { userId: masterUserId } });
+          }
+          // FK Restrict: MasterAdmin(userId) 를 User 보다 먼저 삭제.
+          if (masterFixtureEmails.length) {
+            await prisma.masterAdmin.deleteMany({ where: { email: { in: masterFixtureEmails } } });
+          }
+          for (const id of createdUserIds) {
+            await prisma.user.delete({ where: { id } }).catch(() => {});
+          }
+          if (c107ws) {
+            await prisma.workspace.delete({ where: { id: c107ws.id } }).catch(() => {});
           }
         }
       }
