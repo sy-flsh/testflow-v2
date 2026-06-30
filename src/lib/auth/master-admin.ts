@@ -1,4 +1,7 @@
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
+
+type DbClient = Prisma.TransactionClient | typeof prisma;
 
 /**
  * c10-2: MasterAdmin 권한 판정의 단일 진실원.
@@ -22,4 +25,25 @@ export async function findActiveMasterAdminByEmail(
 /** 해당 email 이 활성 MasterAdmin 인지 boolean. (auth payload 의 isMasterAdmin flag 용) */
 export async function isMasterAdminEmail(email: string): Promise<boolean> {
   return Boolean(await findActiveMasterAdminByEmail(email));
+}
+
+/**
+ * c10-6: **활성 MasterAdmin email 집합**.
+ * 활성 = MasterAdmin.isActive 이고 동일 email User 가 존재하며 deletedAt=null(탈퇴/강제정지 미포함).
+ * 마지막 MasterAdmin 보호(force-delete) 및 active-list UX hint 의 bulk 계산용. tx client 재검증 가능.
+ */
+export async function getActiveMasterAdminEmails(client: DbClient = prisma): Promise<Set<string>> {
+  const masters = await client.masterAdmin.findMany({
+    where: { isActive: true },
+    select: { email: true },
+  });
+  const emails = masters.map((m) => m.email);
+  if (emails.length === 0) {
+    return new Set();
+  }
+  const activeUsers = await client.user.findMany({
+    where: { email: { in: emails }, deletedAt: null },
+    select: { email: true },
+  });
+  return new Set(activeUsers.map((u) => u.email));
 }

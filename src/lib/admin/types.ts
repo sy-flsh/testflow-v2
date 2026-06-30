@@ -21,6 +21,28 @@ export type DeletedAccountListDto = {
   filters: { q: string | null; sort: "newest" | "oldest" };
 };
 
+/** c10-6: 강제 정지 차단 사유(UX hint). 실제 차단은 force-delete route 가 tx 재검증. */
+export type ForceDeleteBlockedReason = "SELF" | "LAST_MASTER_ADMIN" | "LAST_ACTIVE_CO";
+
+/** c10-6: MasterAdmin 활성 계정 목록 DTO. role/company/state/session 상세·민감정보 미포함. */
+export type ActiveAccountDto = {
+  userId: string;
+  name: string;
+  email: string;
+  createdAt: string;
+  lastLoginAt: string | null;
+  isMasterAdmin: boolean;
+  isLastActiveCompanyOwner: boolean;
+  forceDeleteAllowed: boolean;
+  forceDeleteBlockedReason: ForceDeleteBlockedReason | null;
+};
+
+export type ActiveAccountListDto = {
+  users: ActiveAccountDto[];
+  pagination: InvitationPagination;
+  filters: { q: string | null; sort: "newest" | "oldest" };
+};
+
 /** c10-3: 전역 보안 감사 이벤트 DTO. metadata/throttle/raw 등 민감정보 미포함. */
 export type AdminAuditScopeValue = "COMPANY" | "GLOBAL";
 

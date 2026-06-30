@@ -1,7 +1,9 @@
 import type { Prisma } from "@prisma/client";
+import { getActiveMasterAdminEmails } from "@/lib/auth/master-admin";
+import { getCompaniesWhereUserIsLastActiveCO } from "@/lib/company/company-user-state";
 import { prisma } from "@/lib/db/prisma";
 
-/** prisma 또는 트랜잭션 client. restore helper 가 route 트랜잭션과 결합될 수 있게 한다. */
+/** prisma 또는 트랜잭션 client. restore/force-delete helper 가 route 트랜잭션과 결합될 수 있게 한다. */
 type DbClient = Prisma.TransactionClient | typeof prisma;
 
 /**
@@ -19,8 +21,8 @@ export const USER_ACCOUNT_DELETED_MESSAGE =
 
 /** 탈퇴 사유 코드(자유 텍스트 미저장 — 코드 상수만 저장). */
 export const DELETION_REASON = {
-  SELF_WITHDRAWAL: "SELF_WITHDRAWAL",
-  MASTER_FORCED: "MASTER_FORCED",
+  SELF_WITHDRAWAL: "SELF_WITHDRAWAL", // c10-1 본인 탈퇴
+  ADMIN_FORCED: "ADMIN_FORCED_DELETION", // c10-6 MasterAdmin 강제 정지
 } as const;
 export type DeletionReason = (typeof DELETION_REASON)[keyof typeof DELETION_REASON];
 
@@ -102,4 +104,75 @@ export async function restoreSoftDeletedUser(
   }
 
   return { restored: true };
+}
+
+export type ForceDeleteBlockedReason =
+  | "NOT_FOUND"
+  | "NOT_ACTIVE"
+  | "SELF"
+  | "LAST_MASTER_ADMIN"
+  | "LAST_ACTIVE_CO";
+
+/**
+ * c10-6: MasterAdmin 강제 계정 정지(전역 soft delete) **상태 전이 service helper**.
+ *
+ * 권한 경계: **권한 미검사** — 반드시 `requireRecentMasterAdminAuth`(step-up) 통과 route 에서만 호출.
+ *
+ * 차단 순서(모두 tx 내부 재검증): SELF → NOT_FOUND → NOT_ACTIVE → LAST_MASTER_ADMIN → LAST_ACTIVE_CO.
+ * 통과 시 **조건부 update(`deletedAt=null`)** 로 동시 요청 중 1회만 전이 → 같은 tx 에서 대상 Session deleteMany.
+ * (Session 삭제 실패 시 tx rollback → soft delete 도 취소.) UserRole/WorkspaceMember/CompanyUserState/
+ * Invitation/기존 SecurityAuditEvent 는 보존(미변경). USER_SOFT_DELETED audit 는 helper 밖(route)에서
+ * 실제 전이 1회에만 best-effort. 복구는 c10-2 restoreSoftDeletedUser.
+ *
+ * @returns { deleted:true } | { deleted:false, reason }
+ */
+export async function forceSoftDeleteUser(
+  targetUserId: string,
+  actorUserId: string,
+  client: DbClient = prisma,
+): Promise<{ deleted: true } | { deleted: false; reason: ForceDeleteBlockedReason }> {
+  if (targetUserId === actorUserId) {
+    return { deleted: false, reason: "SELF" };
+  }
+
+  const target = await client.user.findUnique({
+    where: { id: targetUserId },
+    select: { id: true, email: true, deletedAt: true },
+  });
+  if (!target) {
+    return { deleted: false, reason: "NOT_FOUND" };
+  }
+  if (target.deletedAt) {
+    return { deleted: false, reason: "NOT_ACTIVE" };
+  }
+
+  // 마지막 활성 MasterAdmin 보호.
+  const activeMasterEmails = await getActiveMasterAdminEmails(client);
+  if (activeMasterEmails.has(target.email) && activeMasterEmails.size === 1) {
+    return { deleted: false, reason: "LAST_MASTER_ADMIN" };
+  }
+
+  // 마지막 ACTIVE CO 보호(c10-1.1 helper 재사용).
+  const lastCoCompanies = await getCompaniesWhereUserIsLastActiveCO(client, targetUserId);
+  if (lastCoCompanies.length > 0) {
+    return { deleted: false, reason: "LAST_ACTIVE_CO" };
+  }
+
+  // 조건부 전이(동시 요청 중 1회만).
+  const updated = await client.user.updateMany({
+    where: { id: targetUserId, deletedAt: null },
+    data: {
+      deletedAt: new Date(),
+      deletedByUserId: actorUserId,
+      deletionReason: DELETION_REASON.ADMIN_FORCED,
+    },
+  });
+  if (updated.count === 0) {
+    return { deleted: false, reason: "NOT_ACTIVE" };
+  }
+
+  // 같은 tx 에서 대상 세션 즉시 무효화(실패 시 rollback).
+  await client.session.deleteMany({ where: { userId: targetUserId } });
+
+  return { deleted: true };
 }

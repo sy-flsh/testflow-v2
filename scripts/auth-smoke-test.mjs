@@ -4356,6 +4356,261 @@ async function main() {
         }
       }
 
+      // c10-6: MasterAdmin 강제 계정 정지(force soft delete)
+      {
+        const FWD = { "x-forwarded-for": "198.51.100.97" };
+        const CONFIRM = "강제 정지합니다";
+        const seedHash = (
+          await prisma.user.findUnique({ where: { email: accounts.admin }, select: { passwordHash: true } })
+        )?.passwordHash;
+        const masterUserId = (
+          await prisma.user.findUnique({ where: { email: "master@testflow.local" }, select: { id: true } })
+        )?.id;
+        const createdUserIds = [];
+        const companyIds = [];
+        const workspaceIds = [];
+        const masterFixtureEmails = [];
+
+        async function c106Login(email) {
+          const jar = new CookieJar();
+          await request("/api/auth/login", { method: "POST", headers: FWD, body: { email, password: PASSWORD }, jar, expectedStatus: 200 });
+          assert(jar.cookies.has("tf_session"), `${email} login failed`);
+          return jar;
+        }
+        async function elevate(jar) {
+          await request("/api/admin/reauth", { method: "POST", jar, headers: FWD, body: { password: PASSWORD }, expectedStatus: 200 });
+        }
+        async function createSessionFor(userId) {
+          const rawToken = `c106tok-${RUN_ID}-${Math.floor(Math.random() * 1e9)}`;
+          const tokenHash = createHash("sha256").update(rawToken).digest("hex");
+          await prisma.session.create({ data: { userId, tokenHash, expiresAt: new Date(Date.now() + 86_400_000), lastSeenAt: new Date() } });
+          const jar = new CookieJar();
+          jar.cookies.set("tf_session", rawToken);
+          return jar;
+        }
+        async function sessionIdFromJar(jar) {
+          const raw = jar.cookies.get("tf_session");
+          const hash = createHash("sha256").update(raw).digest("hex");
+          return (await prisma.session.findUnique({ where: { tokenHash: hash }, select: { id: true } }))?.id;
+        }
+        async function mkActiveUser(tag, { withMembership = false } = {}) {
+          const u = await prisma.user.create({ data: { email: `c106-${tag}.${RUN_ID}@x.local`, name: `강제${tag}`, passwordHash: seedHash } });
+          createdUserIds.push(u.id);
+          if (withMembership) {
+            await prisma.workspaceMember.create({ data: { workspaceId, userId: u.id, role: "MEMBER", status: "ACTIVE" } });
+            await prisma.userRole.create({ data: { userId: u.id, scopeType: "WORKSPACE", scopeId: workspaceId, role: "MEMBER" } });
+            await prisma.companyUserState.create({ data: { companyId, userId: u.id, status: "ACTIVE" } });
+          }
+          return u;
+        }
+        async function mkMaster(tag) {
+          const email = `c106-master-${tag}.${RUN_ID}@x.local`;
+          const u = await prisma.user.create({ data: { email, name: `마스터${tag}`, passwordHash: seedHash } });
+          createdUserIds.push(u.id);
+          await prisma.masterAdmin.create({ data: { email, name: `마스터${tag}`, passwordHash: seedHash } });
+          masterFixtureEmails.push(email);
+          return u;
+        }
+        async function mkCompanyCo(tag) {
+          const c = await prisma.company.create({ data: { name: `C106-${tag} ${RUN_ID}`, slug: `c106-${tag}-${RUN_ID}` } });
+          const w = await prisma.workspace.create({ data: { name: `W106-${tag} ${RUN_ID}`, slug: `w106-${tag}-${RUN_ID}`, companyId: c.id } });
+          companyIds.push(c.id);
+          workspaceIds.push(w.id);
+          return { company: c, workspace: w };
+        }
+        async function addCo(tag, company, workspace, { withState = true, status = "ACTIVE" } = {}) {
+          const u = await prisma.user.create({ data: { email: `c106-co-${tag}.${RUN_ID}@x.local`, name: `CO${tag}`, passwordHash: seedHash } });
+          createdUserIds.push(u.id);
+          await prisma.workspaceMember.create({ data: { workspaceId: workspace.id, userId: u.id, role: "ADMIN", status: "ACTIVE" } });
+          await prisma.userRole.create({ data: { userId: u.id, scopeType: "COMPANY", scopeId: company.id, role: "CO" } });
+          if (withState) {
+            await prisma.companyUserState.create({ data: { companyId: company.id, userId: u.id, status } });
+          }
+          return u;
+        }
+        // force-delete 는 (actor+IP) rate-limit(10/10분)이 있어, 기능 테스트는 호출마다 IP 를 돌려
+        // 버킷 누적을 피한다(elevation 은 세션 기준이라 IP 무관).
+        let fdSeq = 0;
+        function fdHeaders() {
+          fdSeq += 1;
+          return { "x-forwarded-for": `198.51.101.${1 + (fdSeq % 200)}` };
+        }
+        async function fd(jar, userId, confirmation = CONFIRM, expectedStatus) {
+          return request(`/api/admin/accounts/${userId}/force-delete`, {
+            method: "POST", jar, headers: fdHeaders(), body: { confirmation }, ...(expectedStatus ? { expectedStatus } : {}),
+          });
+        }
+
+        try {
+          // A. 권한 / step-up / deleted-master 우선
+          await check("c10-6 permission: unauth 401 / CO·member 403 / no-reauth 403 / deleted-master 403", async () => {
+            const masterJar = await c106Login("master@testflow.local"); // 미elevate
+            const dummy = `nope-${RUN_ID}`;
+            const calls = [
+              { run: (opts) => request("/api/admin/accounts/active", opts) },
+              { run: (opts) => request(`/api/admin/accounts/${dummy}/force-delete`, { method: "POST", body: { confirmation: CONFIRM }, ...opts }) },
+            ];
+            for (const c of calls) {
+              assert((await c.run({ expectedStatus: 401 })).json?.error?.code === "AUTH_UNAUTHORIZED", "unauth 401");
+              assert((await c.run({ jar: adminJar, expectedStatus: 403 })).json?.error?.code === "AUTH_FORBIDDEN", "CO 403");
+              assert((await c.run({ jar: memberJar, expectedStatus: 403 })).json?.error?.code === "AUTH_FORBIDDEN", "member 403");
+              assert((await c.run({ jar: masterJar, headers: FWD, expectedStatus: 403 })).json?.error?.code === "ADMIN_REAUTH_REQUIRED", "no-reauth 403");
+            }
+            const dmEmail = `c106-delmaster.${RUN_ID}@x.local`;
+            masterFixtureEmails.push(dmEmail);
+            const dm = await prisma.user.create({ data: { email: dmEmail, name: "탈퇴마스터", passwordHash: seedHash, deletedAt: new Date(), deletedByUserId: leadUser.id, deletionReason: "ADMIN_FORCED_DELETION" } });
+            createdUserIds.push(dm.id);
+            await prisma.masterAdmin.create({ data: { email: dmEmail, name: "탈퇴마스터", passwordHash: seedHash } });
+            const staleJar = await createSessionFor(dm.id);
+            assert((await request("/api/admin/accounts/active", { jar: staleJar, expectedStatus: 403 })).json?.error?.code === "USER_ACCOUNT_DELETED", "deleted master USER_ACCOUNT_DELETED");
+          });
+
+          const masterJar = await c106Login("master@testflow.local");
+          await elevate(masterJar);
+
+          // B. confirmation / NOT_FOUND / NOT_ACTIVE / SELF
+          await check("c10-6 confirmation 400 / NOT_FOUND 404 / NOT_ACTIVE 409 / SELF 409", async () => {
+            const plain = await mkActiveUser("plain");
+            assert((await fd(masterJar, plain.id, "nope", 400)).json?.error?.code === "ADMIN_FORCE_DELETE_CONFIRMATION_REQUIRED", "wrong confirmation 400");
+            assert((await request(`/api/admin/accounts/${plain.id}/force-delete`, { method: "POST", jar: masterJar, headers: fdHeaders(), body: {}, expectedStatus: 400 })).json?.error?.code === "ADMIN_FORCE_DELETE_CONFIRMATION_REQUIRED", "missing confirmation 400");
+            assert((await fd(masterJar, `nonexistent-${RUN_ID}`, CONFIRM, 404)).json?.error?.code === "USER_NOT_FOUND", "not found 404");
+            const del = await prisma.user.create({ data: { email: `c106-del.${RUN_ID}@x.local`, name: "이미탈퇴", passwordHash: seedHash, deletedAt: new Date(), deletedByUserId: leadUser.id, deletionReason: "SELF_WITHDRAWAL" } });
+            createdUserIds.push(del.id);
+            assert((await fd(masterJar, del.id, CONFIRM, 409)).json?.error?.code === "USER_ACCOUNT_NOT_ACTIVE", "already deleted 409");
+            assert((await fd(masterJar, masterUserId, CONFIRM, 409)).json?.error?.code === "ADMIN_CANNOT_FORCE_DELETE_SELF", "self 409");
+          });
+
+          // C. 마지막 master 보호(self 우선) + 2명 이상이면 master force-delete 가능
+          await check("c10-6 sole active master self-protected; with a 2nd active master a master can be force-deleted", async () => {
+            // 현재 seed master 가 유일 active master → 그 계정(=actor) 강제정지 시도는 self 로 차단(409).
+            assert((await fd(masterJar, masterUserId, CONFIRM, 409)).json?.error?.code === "ADMIN_CANNOT_FORCE_DELETE_SELF", "sole master self-protected");
+            // 2번째 active master 추가 → 그 master 는 마지막이 아니므로 force-delete 허용.
+            const masterB = await mkMaster("b");
+            const r = await fd(masterJar, masterB.id, CONFIRM, 200);
+            assert(r.json?.data?.ok === true, "2+ masters → delete a master allowed");
+            assert((await prisma.user.findUnique({ where: { id: masterB.id }, select: { deletedAt: true } }))?.deletedAt instanceof Date, "masterB soft-deleted");
+          });
+
+          // D. 마지막 ACTIVE CO 보호
+          await check("c10-6 last ACTIVE CO 409; INACTIVE other CO still 409; 2nd ACTIVE CO allows; legacy sole CO 409", async () => {
+            const { company: c1, workspace: w1 } = await mkCompanyCo("a");
+            const coA = await addCo("a1", c1, w1, { status: "ACTIVE" });
+            assert((await fd(masterJar, coA.id, CONFIRM, 409)).json?.error?.code === "USER_LAST_CO_FORCE_DELETE_FORBIDDEN", "sole active CO blocked");
+            const coB = await addCo("a2", c1, w1, { status: "INACTIVE" });
+            assert((await fd(masterJar, coA.id, CONFIRM, 409)).json?.error?.code === "USER_LAST_CO_FORCE_DELETE_FORBIDDEN", "INACTIVE other CO does not rescue");
+            await prisma.companyUserState.update({ where: { companyId_userId: { companyId: c1.id, userId: coB.id } }, data: { status: "ACTIVE" } });
+            const ok = await fd(masterJar, coA.id, CONFIRM, 200);
+            assert(ok.json?.data?.ok === true, "2nd ACTIVE CO → coA force-delete allowed");
+            // legacy(상태 레코드 없음) 단독 CO 도 ACTIVE 간주 → 차단
+            const { company: c2, workspace: w2 } = await mkCompanyCo("legacy");
+            const coLegacy = await addCo("legacy", c2, w2, { withState: false });
+            assert((await fd(masterJar, coLegacy.id, CONFIRM, 409)).json?.error?.code === "USER_LAST_CO_FORCE_DELETE_FORBIDDEN", "legacy sole CO blocked");
+          });
+
+          // E. 성공 강제 정지
+          await check("c10-6 success: soft-deleted fields/sessions cleared/resources preserved/audit", async () => {
+            const tgt = await mkActiveUser("success", { withMembership: true });
+            await createSessionFor(tgt.id); // 대상 세션 1건
+            const preRoles = await prisma.userRole.count({ where: { userId: tgt.id } });
+            const r = await fd(masterJar, tgt.id, CONFIRM, 200);
+            assert(r.json?.data?.ok === true, "force-delete ok");
+            const u = await prisma.user.findUnique({ where: { id: tgt.id } });
+            assert(u?.deletedAt instanceof Date && u?.deletedByUserId === masterUserId && u?.deletionReason === "ADMIN_FORCED_DELETION", "soft-delete fields set");
+            assert((await prisma.session.count({ where: { userId: tgt.id } })) === 0, "target sessions deleted");
+            assert((await prisma.userRole.count({ where: { userId: tgt.id } })) === preRoles && preRoles >= 1, "UserRole preserved");
+            assert((await prisma.workspaceMember.count({ where: { userId: tgt.id } })) === 1, "WorkspaceMember preserved");
+            assert(await prisma.companyUserState.findUnique({ where: { companyId_userId: { companyId, userId: tgt.id } } }), "CompanyUserState preserved");
+            const ev = await prisma.securityAuditEvent.findMany({ where: { eventType: "USER_SOFT_DELETED", targetUserId: tgt.id } });
+            assert(ev.length === 1 && ev[0].actorUserId === masterUserId && ev[0].companyId === null && ev[0].guardName === "admin.account.force-delete", "USER_SOFT_DELETED audit correct");
+          });
+
+          // F. 동시 강제 정지
+          await check("c10-6 concurrent force-delete: one 200, rest 409 NOT_ACTIVE; one audit", async () => {
+            const tgt = await mkActiveUser("conc");
+            const results = await Promise.all([0, 1, 2].map(() => fd(masterJar, tgt.id, CONFIRM)));
+            const ok = results.filter((r) => r.status === 200).length;
+            const conflict = results.filter((r) => r.status === 409 && r.json?.error?.code === "USER_ACCOUNT_NOT_ACTIVE").length;
+            assert(ok === 1, `exactly one 200, got ${ok}`);
+            assert(ok + conflict === 3, `rest 409 NOT_ACTIVE (ok=${ok}, conflict=${conflict})`);
+            assert((await prisma.securityAuditEvent.count({ where: { eventType: "USER_SOFT_DELETED", targetUserId: tgt.id } })) === 1, "exactly one audit on real transition");
+          });
+
+          // G. 강제 정지된 계정 login 차단 + restore 후 login
+          await check("c10-6 force-deleted account login 403; c10-2 restore re-enables login", async () => {
+            const tgt = await mkActiveUser("login", { withMembership: true });
+            await fd(masterJar, tgt.id, CONFIRM, 200);
+            assert((await request("/api/auth/login", { method: "POST", headers: FWD, body: { email: tgt.email, password: PASSWORD }, expectedStatus: 403 })).json?.error?.code === "USER_ACCOUNT_DELETED", "force-deleted login blocked");
+            await request(`/api/admin/accounts/${tgt.id}/restore`, { method: "POST", jar: masterJar, headers: FWD, body: {}, expectedStatus: 200 });
+            const jar = await c106Login(tgt.email);
+            assert(jar.cookies.has("tf_session"), "restored account can login");
+          });
+
+          // H. reauth 만료 시 강제 정지 미실행
+          await check("c10-6 expired step-up → 403 ADMIN_REAUTH_REQUIRED; target unchanged, no audit", async () => {
+            const tgt = await mkActiveUser("expire");
+            const sid = await sessionIdFromJar(masterJar);
+            await prisma.session.update({ where: { id: sid }, data: { adminReauthenticatedAt: new Date(Date.now() - 20 * 60 * 1000) } });
+            const evBefore = await prisma.securityAuditEvent.count({ where: { eventType: "USER_SOFT_DELETED", targetUserId: tgt.id } });
+            assert((await fd(masterJar, tgt.id, CONFIRM, 403)).json?.error?.code === "ADMIN_REAUTH_REQUIRED", "expired → reauth required");
+            assert((await prisma.user.findUnique({ where: { id: tgt.id }, select: { deletedAt: true } }))?.deletedAt === null, "target not soft-deleted");
+            assert((await prisma.securityAuditEvent.count({ where: { eventType: "USER_SOFT_DELETED", targetUserId: tgt.id } })) === evBefore, "no audit on blocked");
+            await elevate(masterJar); // 후속 테스트용 재인증
+          });
+
+          // I. active list
+          await check("c10-6 active list: excludes deleted; q/invalid fallback; DTO allowlist; hints", async () => {
+            const plain = await mkActiveUser("listplain");
+            const del = await prisma.user.create({ data: { email: `c106-listdel.${RUN_ID}@x.local`, name: "목록탈퇴", passwordHash: seedHash, deletedAt: new Date(), deletedByUserId: leadUser.id, deletionReason: "SELF_WITHDRAWAL" } });
+            createdUserIds.push(del.id);
+            const { company: c3, workspace: w3 } = await mkCompanyCo("hint");
+            const coHint = await addCo("hint", c3, w3, { status: "ACTIVE" });
+
+            const all = await request("/api/admin/accounts/active?size=50", { jar: masterJar, expectedStatus: 200 });
+            const ids = all.json.data.users.map((u) => u.userId);
+            assert(ids.includes(plain.id) && !ids.includes(del.id), "active list excludes deleted");
+            // q 검색(고유 이메일)
+            const byQ = await request(`/api/admin/accounts/active?q=${encodeURIComponent(`c106-listplain.${RUN_ID}`)}`, { jar: masterJar, expectedStatus: 200 });
+            assert(byQ.json.data.users.length === 1 && byQ.json.data.users[0].userId === plain.id, "q search");
+            // invalid fallback
+            const inv = await request("/api/admin/accounts/active?page=abc&size=7&sort=weird", { jar: masterJar, expectedStatus: 200 });
+            assert(inv.json.data.pagination.size === 20 && inv.json.data.pagination.page === 1 && inv.json.data.filters.sort === "newest", "invalid query fallback");
+            // DTO allowlist
+            const row = byQ.json.data.users[0];
+            const keys = Object.keys(row).sort().join(",");
+            assert(keys === "createdAt,email,forceDeleteAllowed,forceDeleteBlockedReason,isLastActiveCompanyOwner,isMasterAdmin,lastLoginAt,name,userId", `unexpected DTO keys: ${keys}`);
+            for (const banned of ["passwordHash", "tokenHash", "roles", "companyRoles", "metadata", "deletedAt"]) {
+              assert(!all.text.includes(banned), `must not expose ${banned}`);
+            }
+            // hints: self(actor=master) → SELF; sole CO → LAST_ACTIVE_CO; plain → null
+            const findRow = (id) => all.json.data.users.find((u) => u.userId === id);
+            const masterRow = findRow(masterUserId);
+            assert(masterRow && masterRow.forceDeleteBlockedReason === "SELF" && masterRow.isMasterAdmin === true, "actor master → SELF hint");
+            const coRow = findRow(coHint.id);
+            assert(coRow && coRow.isLastActiveCompanyOwner === true && coRow.forceDeleteBlockedReason === "LAST_ACTIVE_CO", "sole CO → LAST_ACTIVE_CO hint");
+            const plainRow = findRow(plain.id);
+            assert(plainRow && plainRow.forceDeleteAllowed === true && plainRow.forceDeleteBlockedReason === null, "plain user → allowed");
+          });
+        } finally {
+          await prisma.securityAuditEvent.deleteMany({ where: { OR: [{ targetUserId: { in: createdUserIds } }, { actorUserId: { in: createdUserIds } }] } });
+          await prisma.rateLimitBucket.deleteMany({ where: { scope: { in: ["admin:account-force-delete:actor", "admin:reauth:fail"] } } });
+          if (masterUserId) {
+            await prisma.session.deleteMany({ where: { userId: masterUserId } });
+          }
+          if (masterFixtureEmails.length) {
+            await prisma.masterAdmin.deleteMany({ where: { email: { in: masterFixtureEmails } } });
+          }
+          for (const id of createdUserIds) {
+            await prisma.user.delete({ where: { id } }).catch(() => {});
+          }
+          for (const id of workspaceIds) {
+            await prisma.workspace.delete({ where: { id } }).catch(() => {});
+          }
+          for (const id of companyIds) {
+            await prisma.company.delete({ where: { id } }).catch(() => {});
+          }
+        }
+      }
+
       await check("CO can sync WORKSPACE role to another user", async () => {
         const original = await prisma.userRole.findUnique({
           where: {

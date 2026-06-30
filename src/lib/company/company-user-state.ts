@@ -215,6 +215,62 @@ export async function getCompaniesWhereUserIsLastActiveCO(
   return activeCoCompanyIds.filter((id) => (activeCountByCompany.get(id) ?? 0) <= 1);
 }
 
+/**
+ * c10-6: 주어진 userIds 중 **어떤 Company 에서든 마지막 ACTIVE CO** 인 userId 집합(bulk, N+1 없음).
+ *
+ * getCompaniesWhereUserIsLastActiveCO 와 동일 기준(CO Role − INACTIVE; legacy 무상태=ACTIVE)을 쓰되,
+ * admin active-list 의 UX hint 계산용으로 여러 User 를 4쿼리로 한 번에 처리한다.
+ * (정확한 차단은 force-delete route 가 tx 내부 getCompaniesWhereUserIsLastActiveCO 로 재검증한다.)
+ */
+export async function getLastActiveCompanyOwnerUserIds(
+  client: DbClient,
+  userIds: string[],
+): Promise<Set<string>> {
+  if (userIds.length === 0) {
+    return new Set();
+  }
+  const myCoRoles = await client.userRole.findMany({
+    where: { userId: { in: userIds }, scopeType: "COMPANY", role: "CO" },
+    select: { scopeId: true },
+  });
+  const companyIds = Array.from(new Set(myCoRoles.map((role) => role.scopeId)));
+  if (companyIds.length === 0) {
+    return new Set();
+  }
+
+  const allCos = await client.userRole.findMany({
+    where: { scopeType: "COMPANY", role: "CO", scopeId: { in: companyIds } },
+    select: { userId: true, scopeId: true },
+  });
+  const coUserIds = Array.from(new Set(allCos.map((co) => co.userId)));
+  const inactiveStates = await client.companyUserState.findMany({
+    where: { companyId: { in: companyIds }, userId: { in: coUserIds }, status: "INACTIVE" },
+    select: { companyId: true, userId: true },
+  });
+  const inactivePair = new Set(inactiveStates.map((state) => `${state.companyId}:${state.userId}`));
+
+  // Company 별 ACTIVE CO 목록.
+  const activeByCompany = new Map<string, string[]>();
+  for (const co of allCos) {
+    if (inactivePair.has(`${co.scopeId}:${co.userId}`)) {
+      continue;
+    }
+    const list = activeByCompany.get(co.scopeId) ?? [];
+    list.push(co.userId);
+    activeByCompany.set(co.scopeId, list);
+  }
+
+  // ACTIVE CO 가 1명뿐인 Company 의 그 단독 CO 가 입력 집합에 있으면 마지막 ACTIVE CO.
+  const inputSet = new Set(userIds);
+  const result = new Set<string>();
+  for (const list of activeByCompany.values()) {
+    if (list.length === 1 && inputSet.has(list[0])) {
+      result.add(list[0]);
+    }
+  }
+  return result;
+}
+
 export type CompanyUserStateView = {
   status: CompanyUserStatus;
   deactivatedAt: string | null;
