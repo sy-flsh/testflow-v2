@@ -96,6 +96,7 @@ export async function GET(request: Request) {
         USER_RESTORED: 0,
         MASTER_ADMIN_GRANTED: 0,
         MASTER_ADMIN_REVOKED: 0,
+        MASTER_ADMIN_LEGACY_BOUND: 0,
       },
     };
     for (const row of grouped) {

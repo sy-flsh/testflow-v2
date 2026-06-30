@@ -14,19 +14,21 @@ export const ADMIN_AUDIT_EVENT_TYPES = [
   "USER_RESTORED",
   "MASTER_ADMIN_GRANTED",
   "MASTER_ADMIN_REVOKED",
+  "MASTER_ADMIN_LEGACY_BOUND",
 ] as const;
 export type AdminAuditEventTypeFilter = (typeof ADMIN_AUDIT_EVENT_TYPES)[number];
 
 export const ADMIN_AUDIT_SCOPES = ["ALL", "COMPANY", "GLOBAL"] as const;
 export type AdminAuditScopeFilter = (typeof ADMIN_AUDIT_SCOPES)[number];
 
-/** 7종 한글 라벨(Company 3종 + 전역 lifecycle 2종 + MasterAdmin 권한 2종). Company audit 라벨 맵(c9)은 그대로 둔다. */
+/** 8종 한글 라벨(Company 3 + 전역 lifecycle 2 + MasterAdmin 권한 2 + legacy bind 1). Company audit 라벨 맵(c9)은 그대로. */
 export const ADMIN_AUDIT_EVENT_LABELS: Record<string, string> = {
   ...SECURITY_AUDIT_EVENT_LABELS,
   USER_SOFT_DELETED: "계정 탈퇴",
   USER_RESTORED: "계정 복구",
   MASTER_ADMIN_GRANTED: "MasterAdmin 권한 부여",
   MASTER_ADMIN_REVOKED: "MasterAdmin 권한 해제",
+  MASTER_ADMIN_LEGACY_BOUND: "MasterAdmin 레코드 연결",
 };
 
 export const ADMIN_AUDIT_SCOPE_LABELS: Record<string, string> = {

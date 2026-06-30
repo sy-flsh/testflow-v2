@@ -82,6 +82,29 @@ export type MasterAdminCandidateDto = {
   eligibility: MasterAdminCandidateEligibility;
 };
 
+/**
+ * c10-9: legacy(userId=null) MasterAdmin 레코드 DTO.
+ * raw email/name/passwordHash 미노출 — 불투명 식별자(masterAdminId)와 메타만.
+ */
+export type LegacyMasterAdminDto = {
+  masterAdminId: string;
+  createdAt: string;
+  updatedAt: string;
+  isActive: boolean;
+};
+
+export type LegacyMasterAdminListDto = {
+  legacyRows: LegacyMasterAdminDto[];
+  pagination: InvitationPagination;
+};
+
+/** c10-9: legacy bind 후보(검색) DTO — 활성·미연결 User 만. eligibility/role/state 미포함. */
+export type MasterAdminBindCandidateDto = {
+  userId: string;
+  name: string;
+  email: string;
+};
+
 /** c10-3: 전역 보안 감사 이벤트 DTO. metadata/throttle/raw 등 민감정보 미포함. */
 export type AdminAuditScopeValue = "COMPANY" | "GLOBAL";
 
@@ -108,6 +131,7 @@ export type AdminAuditSummary = {
     USER_RESTORED: number;
     MASTER_ADMIN_GRANTED: number;
     MASTER_ADMIN_REVOKED: number;
+    MASTER_ADMIN_LEGACY_BOUND: number;
   };
 };
 

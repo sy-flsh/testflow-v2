@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "SecurityAuditEventType" ADD VALUE 'MASTER_ADMIN_LEGACY_BOUND';

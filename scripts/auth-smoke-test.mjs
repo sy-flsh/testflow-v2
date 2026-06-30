@@ -4813,11 +4813,11 @@ async function main() {
           await elevate(masterJar);
 
           // B. audit enum + global/company scope
-          await check("c10-8 audit enum: global audit includes MASTER_ADMIN_* (7 summary keys); company audit unaffected", async () => {
+          await check("c10-8 audit enum: global audit includes MASTER_ADMIN_* (8 summary keys); company audit unaffected", async () => {
             const ev = await prisma.securityAuditEvent.create({ data: { eventType: "MASTER_ADMIN_GRANTED", actorUserId: masterUserId, targetUserId: masterUserId, guardName: `c108enum-${RUN_ID}` } });
             const r = await request(`/api/admin/security-audit?guard=c108enum-${RUN_ID}`, { jar: masterJar, expectedStatus: 200 });
             assert(r.json.data.events.length === 1 && r.json.data.events[0].eventType === "MASTER_ADMIN_GRANTED" && r.json.data.events[0].scope === "GLOBAL", "global audit shows MASTER_ADMIN_GRANTED");
-            assert(Object.keys(r.json.data.summary.byEventType).length === 7, "summary has 7 event keys");
+            assert(Object.keys(r.json.data.summary.byEventType).length === 8, "summary has 8 event keys");
             // company audit summary unchanged (3 keys), global event 미포함
             const co = await request("/api/company/security-audit", { jar: adminJar, expectedStatus: 200 });
             assert(Object.keys(co.json.data.summary.byEventType).length === 3, "company summary stays 3 keys");
@@ -4958,6 +4958,222 @@ async function main() {
           }
           if (c108ws) {
             await prisma.workspace.delete({ where: { id: c108ws.id } }).catch(() => {});
+          }
+        }
+      }
+
+      // c10-9: legacy(userId=null) MasterAdmin 수동 연결(bind)
+      {
+        const FWD = { "x-forwarded-for": "198.51.100.91" };
+        const BIND = "기존 MasterAdmin 레코드를 연결합니다";
+        const seedHash = (await prisma.user.findUnique({ where: { email: accounts.admin }, select: { passwordHash: true } }))?.passwordHash;
+        const masterUserId = (await prisma.user.findUnique({ where: { email: "master@testflow.local" }, select: { id: true } }))?.id;
+        const createdUserIds = [];
+        const fixtureEmails = [];
+        let c109ws = null;
+
+        async function c109Login(email) {
+          const jar = new CookieJar();
+          await request("/api/auth/login", { method: "POST", headers: FWD, body: { email, password: PASSWORD }, jar, expectedStatus: 200 });
+          assert(jar.cookies.has("tf_session"), `${email} login failed`);
+          return jar;
+        }
+        async function elevate(jar) {
+          await request("/api/admin/reauth", { method: "POST", jar, headers: FWD, body: { password: PASSWORD }, expectedStatus: 200 });
+        }
+        async function createSessionFor(userId, elevated = false) {
+          const rawToken = `c109tok-${RUN_ID}-${Math.floor(Math.random() * 1e9)}`;
+          const tokenHash = createHash("sha256").update(rawToken).digest("hex");
+          await prisma.session.create({ data: { userId, tokenHash, expiresAt: new Date(Date.now() + 86_400_000), lastSeenAt: new Date(), adminReauthenticatedAt: elevated ? new Date() : null } });
+          const jar = new CookieJar();
+          jar.cookies.set("tf_session", rawToken);
+          return jar;
+        }
+        async function mkUser(tag) {
+          const u = await prisma.user.create({ data: { email: `c109-${tag}.${RUN_ID}@x.local`, name: `c109${tag}`, passwordHash: seedHash } });
+          createdUserIds.push(u.id);
+          await prisma.workspaceMember.create({ data: { workspaceId: c109ws.id, userId: u.id, role: "ADMIN", status: "ACTIVE" } });
+          return u;
+        }
+        // userId=null 인 legacy 레코드 생성(email/name 보존되지만 인증 source 아님).
+        async function mkLegacy(tag, { isActive = true, email } = {}) {
+          const addr = email ?? `c109legacy-${tag}.${RUN_ID}@x.local`;
+          const row = await prisma.masterAdmin.create({ data: { email: addr, name: `레거시${tag}`, passwordHash: seedHash, isActive } });
+          fixtureEmails.push(addr);
+          return row;
+        }
+        async function mkBoundMaster(tag) {
+          const u = await mkUser(tag);
+          await prisma.masterAdmin.create({ data: { userId: u.id, email: u.email, name: `마스터${tag}`, passwordHash: seedHash, isActive: true } });
+          fixtureEmails.push(u.email);
+          return u;
+        }
+        let chgSeq = 0;
+        function chgHeaders() {
+          chgSeq += 1;
+          return { "x-forwarded-for": `198.51.104.${1 + (chgSeq % 200)}` };
+        }
+        async function bind(jar, masterAdminId, userId, confirmation = BIND, expectedStatus) {
+          return request(`/api/admin/master-admins/legacy-unbound/${masterAdminId}/bind`, { method: "POST", jar, headers: chgHeaders(), body: { userId, confirmation }, ...(expectedStatus ? { expectedStatus } : {}) });
+        }
+
+        try {
+          c109ws = await prisma.workspace.create({ data: { name: `C109WS ${RUN_ID}`, slug: `c109ws-${RUN_ID}` } });
+          const masterJar = await c109Login("master@testflow.local");
+
+          // A. 권한 / step-up (list / candidates / bind 전부)
+          await check("c10-9 permission: unauth 401 / CO·member 403 / no-reauth 403 / deleted-master 403", async () => {
+            const dummy = `nope-${RUN_ID}`;
+            const calls = [
+              (o) => request("/api/admin/master-admins/legacy-unbound", o),
+              (o) => request(`/api/admin/master-admins/legacy-unbound/${dummy}/candidates?q=ab`, o),
+              (o) => request(`/api/admin/master-admins/legacy-unbound/${dummy}/bind`, { method: "POST", body: { userId: dummy, confirmation: BIND }, ...o }),
+            ];
+            for (const c of calls) {
+              assert((await c({ expectedStatus: 401 })).json?.error?.code === "AUTH_UNAUTHORIZED", "unauth 401");
+              assert((await c({ jar: adminJar, expectedStatus: 403 })).json?.error?.code === "AUTH_FORBIDDEN", "CO 403");
+              assert((await c({ jar: memberJar, expectedStatus: 403 })).json?.error?.code === "AUTH_FORBIDDEN", "member 403");
+              assert((await c({ jar: masterJar, headers: FWD, expectedStatus: 403 })).json?.error?.code === "ADMIN_REAUTH_REQUIRED", "no-reauth 403");
+            }
+            const dmEmail = `c109-delmaster.${RUN_ID}@x.local`;
+            const dm = await prisma.user.create({ data: { email: dmEmail, name: "탈퇴마스터", passwordHash: seedHash, deletedAt: new Date(), deletedByUserId: leadUser.id, deletionReason: "ADMIN_FORCED_DELETION" } });
+            createdUserIds.push(dm.id);
+            await prisma.masterAdmin.create({ data: { userId: dm.id, email: dmEmail, name: "탈퇴마스터", passwordHash: seedHash } });
+            fixtureEmails.push(dmEmail);
+            const staleJar = await createSessionFor(dm.id);
+            assert((await request("/api/admin/master-admins/legacy-unbound", { jar: staleJar, expectedStatus: 403 })).json?.error?.code === "USER_ACCOUNT_DELETED", "deleted master USER_ACCOUNT_DELETED");
+          });
+
+          await elevate(masterJar);
+
+          // B. legacy-unbound 목록: unbound 만 / DTO allowlist / raw 미노출
+          await check("c10-9 legacy-unbound list: only userId=null rows, DTO allowlist, no raw email/name/passwordHash", async () => {
+            const legacy = await mkLegacy("listA");
+            const list = await request("/api/admin/master-admins/legacy-unbound?size=100", { jar: masterJar, expectedStatus: 200 });
+            const found = list.json.data.legacyRows.find((r) => r.masterAdminId === legacy.id);
+            assert(found, "created legacy row appears in list");
+            const keys = Object.keys(found).sort().join(",");
+            assert(keys === "createdAt,isActive,masterAdminId,updatedAt", `legacy DTO keys: ${keys}`);
+            // bound master 의 email/name 이 응답에 새지 않아야 함(이번 fixture legacy email 도 미노출)
+            assert(!list.text.includes(legacy.email) && !list.text.includes("레거시listA"), "no raw legacy email/name");
+            for (const banned of ["passwordHash", "tokenHash", "userId\":\"", "roles"]) {
+              assert(!list.text.includes(banned), `must not expose ${banned}`);
+            }
+          });
+
+          // C. candidates: legacy 검증 / min-len / 활성·미연결 만 / DTO
+          await check("c10-9 candidates: 404 not-found, 409 already-bound, q<2 empty, active-unbound only, DTO allowlist", async () => {
+            const legacy = await mkLegacy("candA");
+            // legacy not found
+            assert((await request(`/api/admin/master-admins/legacy-unbound/missing-${RUN_ID}/candidates?q=c109`, { jar: masterJar, expectedStatus: 404 })).json?.error?.code === "MASTER_ADMIN_LEGACY_NOT_FOUND", "missing legacy 404");
+            // already bound legacy → 409
+            const bound = await mkBoundMaster("candbound");
+            const boundRow = await prisma.masterAdmin.findUnique({ where: { userId: bound.id }, select: { id: true } });
+            assert((await request(`/api/admin/master-admins/legacy-unbound/${boundRow.id}/candidates?q=c109`, { jar: masterJar, expectedStatus: 409 })).json?.error?.code === "MASTER_ADMIN_ALREADY_BOUND", "bound legacy 409");
+            // q<2 → empty
+            assert((await request(`/api/admin/master-admins/legacy-unbound/${legacy.id}/candidates?q=a`, { jar: masterJar, expectedStatus: 200 })).json.data.candidates.length === 0, "q<2 empty");
+            // active unbound user appears; bound user & deleted user excluded
+            const target = await mkUser("candtarget");
+            const delU = await prisma.user.create({ data: { email: `c109-canddel.${RUN_ID}@x.local`, name: "c109canddel", passwordHash: seedHash, deletedAt: new Date(), deletedByUserId: leadUser.id, deletionReason: "SELF_WITHDRAWAL" } });
+            createdUserIds.push(delU.id);
+            const cand = await request(`/api/admin/master-admins/legacy-unbound/${legacy.id}/candidates?q=c109`, { jar: masterJar, expectedStatus: 200 });
+            const userIds = cand.json.data.candidates.map((c) => c.userId);
+            assert(userIds.includes(target.id), "active unbound user is a candidate");
+            assert(!userIds.includes(bound.id), "already-bound user excluded");
+            assert(!userIds.includes(delU.id), "soft-deleted user excluded");
+            const ck = Object.keys(cand.json.data.candidates[0]).sort().join(",");
+            assert(ck === "email,name,userId", `candidate DTO allowlist; got: ${ck}`);
+          });
+
+          // D. bind 성공: 연결/audit/no-auto-elevation/no-role-change/isActive 보존
+          await check("c10-9 bind success: binds userId, MASTER_ADMIN_LEGACY_BOUND audit, no elevation/role/admin change, isActive preserved", async () => {
+            const legacy = await mkLegacy("bindok", { isActive: true });
+            const target = await mkUser("bindtarget");
+            await prisma.userRole.create({ data: { userId: target.id, scopeType: "WORKSPACE", scopeId: c109ws.id, role: "MEMBER" } });
+            await createSessionFor(target.id); // 비elevated
+            // confirmation 불일치
+            assert((await bind(masterJar, legacy.id, target.id, "nope", 400)).json?.error?.code === "MASTER_ADMIN_LEGACY_BIND_CONFIRMATION_REQUIRED", "wrong confirmation 400");
+            // 성공
+            const ok = await bind(masterJar, legacy.id, target.id, BIND, 200);
+            assert(ok.json?.data?.ok === true, "bind ok");
+            const row = await prisma.masterAdmin.findUnique({ where: { id: legacy.id }, select: { userId: true, isActive: true } });
+            assert(row?.userId === target.id, "legacy row now bound to target user");
+            assert(row?.isActive === true, "isActive preserved (not auto-changed)");
+            // no auto admin elevation on target
+            assert((await prisma.session.findFirst({ where: { userId: target.id, adminReauthenticatedAt: { not: null } } })) === null, "target session not auto-elevated");
+            // no role/state change
+            assert((await prisma.userRole.count({ where: { userId: target.id } })) === 1, "UserRole preserved");
+            assert((await prisma.workspaceMember.count({ where: { userId: target.id } })) === 1, "WorkspaceMember preserved");
+            assert((await prisma.user.findUnique({ where: { id: target.id }, select: { deletedAt: true } }))?.deletedAt === null, "target not soft-deleted");
+            // audit
+            const ev = await prisma.securityAuditEvent.findMany({ where: { eventType: "MASTER_ADMIN_LEGACY_BOUND", targetUserId: target.id } });
+            assert(ev.length === 1 && ev[0].actorUserId === masterUserId && ev[0].companyId === null && ev[0].guardName === "admin.master-admin.bind-legacy", "MASTER_ADMIN_LEGACY_BOUND audit correct");
+          });
+
+          // E. bind 차단 사유: already-bound / user-not-found / user-not-active / user-already-bound
+          await check("c10-9 bind blocked: legacy already-bound 409, user not-found 404, user not-active 409, user already-bound 409", async () => {
+            // already bound legacy (re-bind)
+            const legacy = await mkLegacy("blkA");
+            const t1 = await mkUser("blkt1");
+            assert((await bind(masterJar, legacy.id, t1.id, BIND, 200)).json?.data?.ok === true, "first bind ok");
+            const t2 = await mkUser("blkt2");
+            assert((await bind(masterJar, legacy.id, t2.id, BIND, 409)).json?.error?.code === "MASTER_ADMIN_ALREADY_BOUND", "re-bind already-bound 409");
+            // missing legacy
+            const fresh = await mkUser("blkfresh");
+            assert((await bind(masterJar, `missing-${RUN_ID}`, fresh.id, BIND, 404)).json?.error?.code === "MASTER_ADMIN_LEGACY_NOT_FOUND", "missing legacy 404");
+            // user not found
+            const legacy2 = await mkLegacy("blkB");
+            assert((await bind(masterJar, legacy2.id, `nouser-${RUN_ID}`, BIND, 404)).json?.error?.code === "USER_NOT_FOUND", "user not found 404");
+            // user not active (soft-deleted)
+            const delU = await prisma.user.create({ data: { email: `c109-blkdel.${RUN_ID}@x.local`, name: "c109blkdel", passwordHash: seedHash, deletedAt: new Date(), deletedByUserId: leadUser.id, deletionReason: "SELF_WITHDRAWAL" } });
+            createdUserIds.push(delU.id);
+            assert((await bind(masterJar, legacy2.id, delU.id, BIND, 409)).json?.error?.code === "USER_ACCOUNT_NOT_ACTIVE", "soft-deleted target 409");
+            // user already bound to another master
+            const boundUser = await mkBoundMaster("blkbound");
+            assert((await bind(masterJar, legacy2.id, boundUser.id, BIND, 409)).json?.error?.code === "USER_ALREADY_BOUND_MASTER_ADMIN", "user already bound 409");
+            assert((await prisma.masterAdmin.findUnique({ where: { id: legacy2.id }, select: { userId: true } }))?.userId === null, "legacy2 remains unbound after blocked attempts");
+          });
+
+          // F. 동시 bind: 단일 승자(one 200, rest 409 ALREADY_BOUND); audit 1건
+          await check("c10-9 concurrent bind: one 200, rest 409 ALREADY_BOUND; one audit", async () => {
+            const legacy = await mkLegacy("conc");
+            const target = await mkUser("conctarget");
+            const results = await Promise.all([0, 1, 2].map(() => bind(masterJar, legacy.id, target.id)));
+            const ok = results.filter((r) => r.status === 200).length;
+            const dup = results.filter((r) => r.status === 409 && r.json?.error?.code === "MASTER_ADMIN_ALREADY_BOUND").length;
+            assert(ok === 1, `one 200, got ${ok}`);
+            assert(ok + dup === 3, `rest 409 ALREADY_BOUND (ok=${ok}, dup=${dup})`);
+            assert((await prisma.masterAdmin.findUnique({ where: { id: legacy.id }, select: { userId: true } }))?.userId === target.id, "legacy bound to target");
+            assert((await prisma.securityAuditEvent.count({ where: { eventType: "MASTER_ADMIN_LEGACY_BOUND", targetUserId: target.id } })) === 1, "one audit");
+          });
+
+          // G. 이메일 일치여도 자동 연결 안 함(no email fallback / no auto-bind)
+          await check("c10-9 no email fallback: legacy whose email == active user is NOT auto-bound; explicit selection still required", async () => {
+            const u = await mkUser("emailmatch");
+            const legacy = await mkLegacy("emailmatch", { email: u.email }); // legacy.email === active user.email
+            // 생성 직후 자동 bind 되지 않음
+            assert((await prisma.masterAdmin.findUnique({ where: { id: legacy.id }, select: { userId: true } }))?.userId === null, "email match does not auto-bind");
+            // candidates 도 email 추론으로 자동 선택/제외하지 않음 — 일반 활성 미연결 사용자로 노출
+            const cand = await request(`/api/admin/master-admins/legacy-unbound/${legacy.id}/candidates?q=c109emailmatch`, { jar: masterJar, expectedStatus: 200 });
+            assert(cand.json.data.candidates.some((c) => c.userId === u.id), "email-match user listed as normal candidate (not pre-bound/hidden)");
+            // 명시 선택으로만 연결됨
+            assert((await bind(masterJar, legacy.id, u.id, BIND, 200)).json?.data?.ok === true, "explicit bind succeeds");
+            // email 중복 unique 충돌 fixture 정리를 위해 bound row email 추적은 이미 fixtureEmails 에 있음
+          });
+        } finally {
+          await prisma.securityAuditEvent.deleteMany({ where: { OR: [{ targetUserId: { in: createdUserIds } }, { actorUserId: { in: createdUserIds } }] } });
+          await prisma.rateLimitBucket.deleteMany({ where: { scope: { in: ["admin:master-admin-change:actor", "admin:reauth:fail"] } } });
+          if (masterUserId) {
+            await prisma.session.deleteMany({ where: { userId: masterUserId } });
+          }
+          if (fixtureEmails.length) {
+            await prisma.masterAdmin.deleteMany({ where: { email: { in: fixtureEmails } } });
+          }
+          for (const id of createdUserIds) {
+            await prisma.user.delete({ where: { id } }).catch(() => {});
+          }
+          if (c109ws) {
+            await prisma.workspace.delete({ where: { id: c109ws.id } }).catch(() => {});
           }
         }
       }

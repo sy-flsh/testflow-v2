@@ -53,6 +53,7 @@ enum CompanyUserStatus {
 // c9-6: 보안 감사 이벤트 종류(서버 내부 고정 집합 → enum).
 // c10-1: 전역 계정 lifecycle 이벤트(USER_SOFT_DELETED/USER_RESTORED) 추가.
 // c10-8: MasterAdmin 권한 위임/해제 이벤트(MASTER_ADMIN_GRANTED/REVOKED) 추가.
+// c10-9: unbound legacy MasterAdmin 수동 연결(MASTER_ADMIN_LEGACY_BOUND) 추가.
 // 이 lifecycle/admin 이벤트는 companyId = null 인 global event 로 기록한다(특정 Company 범위 아님).
 enum SecurityAuditEventType {
   COMPANY_USER_DEACTIVATED
@@ -62,6 +63,7 @@ enum SecurityAuditEventType {
   USER_RESTORED
   MASTER_ADMIN_GRANTED
   MASTER_ADMIN_REVOKED
+  MASTER_ADMIN_LEGACY_BOUND
 }
 
 enum ProjectStatus {

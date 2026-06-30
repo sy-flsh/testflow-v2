@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ShieldAlert, ShieldCheck, ShieldX, UserPlus } from "lucide-react";
+import { Link2, ShieldAlert, ShieldCheck, ShieldX, UserPlus } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { DialogShell } from "@/components/common/dialog-shell";
 import { EmptyState } from "@/components/common/empty-state";
@@ -15,6 +15,8 @@ import {
 } from "@/lib/admin/admin-deleted-filters";
 import type { AdminParamPatch } from "@/lib/admin/admin-deleted-filters";
 import type {
+  LegacyMasterAdminDto,
+  MasterAdminBindCandidateDto,
   MasterAdminCandidateDto,
   MasterAdminDto,
   RevokeBlockedReasonDto,
@@ -50,6 +52,12 @@ const REVOKE_REASON_LABEL: Record<RevokeBlockedReasonDto, string> = {
 };
 const GRANT_PHRASE = "MasterAdmin 권한을 부여합니다";
 const REVOKE_PHRASE = "MasterAdmin 권한을 해제합니다";
+const BIND_PHRASE = "기존 MasterAdmin 레코드를 연결합니다";
+
+/** 불투명 식별자만 짧게 노출(앞 8자) — raw email/name/passwordHash 비노출 원칙. */
+function shortMasterAdminId(id: string): string {
+  return id.length > 8 ? `${id.slice(0, 8)}…` : id;
+}
 
 function normalizeStatus(value: string | null): "ACTIVE" | "INACTIVE" | "ALL" {
   return value === "INACTIVE" || value === "ALL" ? value : "ACTIVE";
@@ -73,6 +81,7 @@ export function AdminMasterAdminsView() {
   const [qDraft, setQDraft] = useState(q);
   const [revokeTarget, setRevokeTarget] = useState<MasterAdminDto | null>(null);
   const [grantOpen, setGrantOpen] = useState(false);
+  const [legacyRepairOpen, setLegacyRepairOpen] = useState(false);
   const dataRef = useRef<ReadyData | null>(null);
   const { onReauthRequired } = useAdminReauth();
 
@@ -165,8 +174,14 @@ export function AdminMasterAdminsView() {
   return (
     <div className="space-y-4">
       {data && data.legacyUnboundCount > 0 && (
-        <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
-          사용자 연결이 확인되지 않은 기존 MasterAdmin 레코드가 {data.legacyUnboundCount}건 있습니다. 이 레코드는 권한으로 인정되지 않으며 별도 확인이 필요합니다.
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+          <span>
+            사용자 연결이 확인되지 않은 기존 MasterAdmin 레코드가 {data.legacyUnboundCount}건 있습니다. 이 레코드는 권한으로 인정되지 않으며 별도 확인이 필요합니다.
+          </span>
+          <button type="button" onClick={() => setLegacyRepairOpen(true)} className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-amber-300 bg-white px-3 text-xs font-semibold text-amber-700 hover:bg-amber-100">
+            <Link2 className="h-3.5 w-3.5" />
+            기존 레코드 연결
+          </button>
         </div>
       )}
 
@@ -277,6 +292,7 @@ export function AdminMasterAdminsView() {
 
       {grantOpen && <GrantModal onClose={() => setGrantOpen(false)} onGranted={() => { setGrantOpen(false); void load(); }} />}
       {revokeTarget && <RevokeModal target={revokeTarget} onClose={() => setRevokeTarget(null)} onRevoked={() => { setRevokeTarget(null); void load(); }} />}
+      {legacyRepairOpen && <LegacyRepairModal onClose={() => setLegacyRepairOpen(false)} onBound={() => { setLegacyRepairOpen(false); void load(); }} />}
     </div>
   );
 }
@@ -466,6 +482,181 @@ function RevokeModal({ target, onClose, onRevoked }: { target: MasterAdminDto; o
           <span className="text-[var(--text-secondary)]">계속하려면 <strong>{REVOKE_PHRASE}</strong>를 정확히 입력해 주세요.</span>
           <input value={confirmation} onChange={(e) => setConfirmation(e.target.value)} placeholder={REVOKE_PHRASE} aria-label="해제 확인 문구" className="mt-2 h-10 w-full rounded-md border border-[var(--border-default)] px-3 text-sm outline-none focus:border-red-500" />
         </label>
+        {error && <p className="text-sm text-[var(--danger-text)]">{error}</p>}
+      </div>
+    </DialogShell>
+  );
+}
+
+function LegacyRepairModal({ onClose, onBound }: { onClose: () => void; onBound: () => void }) {
+  const { onReauthRequired } = useAdminReauth();
+  const [rows, setRows] = useState<LegacyMasterAdminDto[] | null>(null);
+  const [loadingRows, setLoadingRows] = useState(true);
+  const [selectedRow, setSelectedRow] = useState<LegacyMasterAdminDto | null>(null);
+
+  const [searchDraft, setSearchDraft] = useState("");
+  const [candidates, setCandidates] = useState<MasterAdminBindCandidateDto[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [selectedUser, setSelectedUser] = useState<MasterAdminBindCandidateDto | null>(null);
+
+  const [confirmation, setConfirmation] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadRows = useCallback(async () => {
+    setLoadingRows(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/admin/master-admins/legacy-unbound", { cache: "no-store" });
+      const payload = (await res.json().catch(() => null)) as { data?: { legacyRows?: LegacyMasterAdminDto[] }; error?: { code?: string; message?: string } } | null;
+      if (res.status === 403 && payload?.error?.code === "ADMIN_REAUTH_REQUIRED") { onReauthRequired(); return; }
+      setRows(payload?.data?.legacyRows ?? []);
+    } catch {
+      setError("미연결 레코드를 불러오지 못했습니다.");
+    } finally {
+      setLoadingRows(false);
+    }
+  }, [onReauthRequired]);
+
+  useEffect(() => { void loadRows(); }, [loadRows]);
+
+  async function search() {
+    if (!selectedRow) return;
+    const q = searchDraft.trim();
+    if (q.length < 2) { setCandidates([]); return; }
+    setSearching(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin/master-admins/legacy-unbound/${selectedRow.masterAdminId}/candidates?q=${encodeURIComponent(q)}`, { cache: "no-store" });
+      const payload = (await res.json().catch(() => null)) as { data?: { candidates?: MasterAdminBindCandidateDto[] }; error?: { code?: string; message?: string } } | null;
+      if (res.status === 403 && payload?.error?.code === "ADMIN_REAUTH_REQUIRED") { onReauthRequired(); return; }
+      if (!res.ok) { setError(payload?.error?.message ?? "연결 후보를 불러오지 못했습니다."); return; }
+      setCandidates(payload?.data?.candidates ?? []);
+    } catch {
+      setError("연결 후보를 불러오지 못했습니다.");
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  async function handleBind() {
+    if (!selectedRow || !selectedUser || confirmation.trim() !== BIND_PHRASE || submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin/master-admins/legacy-unbound/${selectedRow.masterAdminId}/bind`, {
+        method: "POST", cache: "no-store", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: selectedUser.userId, confirmation: confirmation.trim() }),
+      });
+      const payload = (await res.json().catch(() => null)) as { data?: { ok?: boolean }; error?: { message?: string; code?: string } } | null;
+      if (!res.ok || !payload?.data?.ok) {
+        if (payload?.error?.code === "ADMIN_REAUTH_REQUIRED") { setError(payload.error.message ?? "관리자 인증이 필요합니다."); onReauthRequired(); return; }
+        setError(payload?.error?.message ?? "레코드 연결을 처리하지 못했습니다.");
+        return;
+      }
+      onBound();
+    } catch {
+      setError("레코드 연결을 처리하지 못했습니다. 네트워크 상태를 확인해 주세요.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  function selectRow(row: LegacyMasterAdminDto) {
+    setSelectedRow(row);
+    setSelectedUser(null);
+    setCandidates(null);
+    setSearchDraft("");
+    setConfirmation("");
+    setError(null);
+  }
+
+  return (
+    <DialogShell
+      title="기존 MasterAdmin 레코드 연결"
+      description="사용자 연결이 확인되지 않은 기존 레코드를 명시적으로 선택한 활성 사용자에 연결합니다. 연결만 수행하며 대상의 권한·관리자 인증은 자동 부여되지 않습니다."
+      onClose={() => { if (!submitting) onClose(); }}
+      maxWidth="max-w-lg"
+      footer={
+        <div className="flex justify-end gap-2">
+          <button type="button" onClick={onClose} disabled={submitting} className="h-10 rounded-md border border-[var(--border-subtle)] px-4 text-sm font-medium hover:bg-[var(--surface-muted)] disabled:opacity-60">취소</button>
+          <button type="button" onClick={handleBind} disabled={!selectedRow || !selectedUser || confirmation.trim() !== BIND_PHRASE || submitting} className="h-10 rounded-md bg-[var(--brand-primary)] px-4 text-sm font-semibold text-white hover:bg-[var(--brand-primary-hover)] disabled:cursor-not-allowed disabled:opacity-60">
+            {submitting ? "처리 중…" : "레코드 연결"}
+          </button>
+        </div>
+      }
+    >
+      <div className="space-y-3 text-sm">
+        <div>
+          <p className="mb-1.5 text-xs font-medium text-[var(--text-secondary)]">1. 연결할 기존 레코드 선택</p>
+          <div className="max-h-40 overflow-y-auto rounded-md border border-[var(--border-default)]">
+            {loadingRows ? (
+              <p className="px-3 py-4 text-center text-xs text-[var(--text-tertiary)]">불러오는 중…</p>
+            ) : !rows || rows.length === 0 ? (
+              <p className="px-3 py-4 text-center text-xs text-[var(--text-tertiary)]">미연결 레코드가 없습니다.</p>
+            ) : (
+              rows.map((r) => (
+                <button
+                  key={r.masterAdminId}
+                  type="button"
+                  onClick={() => selectRow(r)}
+                  className={cn(
+                    "flex w-full items-center justify-between gap-2 border-b border-[var(--border-subtle)] px-3 py-2 text-left last:border-0 hover:bg-[var(--bg-subtle)]",
+                    selectedRow?.masterAdminId === r.masterAdminId && "bg-[var(--bg-muted)]",
+                  )}
+                >
+                  <span className="font-mono text-xs text-[var(--text-primary)]">{shortMasterAdminId(r.masterAdminId)}</span>
+                  <span className="text-[10px] text-[var(--text-tertiary)]">{r.isActive ? "활성 레코드" : "비활성 레코드"} · 등록 {new Date(r.createdAt).toLocaleDateString("ko-KR")}</span>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+
+        {selectedRow && (
+          <div>
+            <p className="mb-1.5 text-xs font-medium text-[var(--text-secondary)]">2. 연결할 활성 사용자 검색</p>
+            <div className="flex items-center gap-2">
+              <input value={searchDraft} aria-label="연결 대상 사용자 검색" onChange={(e) => setSearchDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void search(); }} placeholder="이름 또는 이메일 (2글자 이상)" className="h-9 flex-1 rounded-md border border-[var(--border-default)] px-3 text-sm outline-none focus:border-[var(--brand-primary)]" />
+              <button type="button" onClick={() => void search()} className="h-9 rounded-md border border-[var(--border-default)] bg-white px-3 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]">검색</button>
+            </div>
+            {candidates !== null && (
+              <div className="mt-2 max-h-48 overflow-y-auto rounded-md border border-[var(--border-default)]">
+                {searching ? (
+                  <p className="px-3 py-4 text-center text-xs text-[var(--text-tertiary)]">검색 중…</p>
+                ) : candidates.length === 0 ? (
+                  <p className="px-3 py-4 text-center text-xs text-[var(--text-tertiary)]">검색 결과가 없습니다.</p>
+                ) : (
+                  candidates.map((c) => (
+                    <button
+                      key={c.userId}
+                      type="button"
+                      onClick={() => setSelectedUser(c)}
+                      className={cn(
+                        "flex w-full items-center justify-between gap-2 border-b border-[var(--border-subtle)] px-3 py-2 text-left last:border-0 hover:bg-[var(--bg-subtle)]",
+                        selectedUser?.userId === c.userId && "bg-[var(--bg-muted)]",
+                      )}
+                    >
+                      <span className="font-medium text-[var(--text-primary)]">{c.name}</span>
+                      <span className="text-xs text-[var(--text-tertiary)]">{c.email}</span>
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {selectedRow && selectedUser && (
+          <div className="space-y-2 rounded-md border border-[var(--border-default)] bg-[var(--bg-subtle)] px-3 py-3">
+            <p className="text-xs text-[var(--text-secondary)]">레코드 <strong className="font-mono">{shortMasterAdminId(selectedRow.masterAdminId)}</strong> → <strong>{selectedUser.name}</strong> ({selectedUser.email})</p>
+            <label className="block">
+              <span className="text-[var(--text-secondary)]">계속하려면 <strong>{BIND_PHRASE}</strong>를 정확히 입력해 주세요.</span>
+              <input value={confirmation} onChange={(e) => setConfirmation(e.target.value)} placeholder={BIND_PHRASE} aria-label="연결 확인 문구" className="mt-2 h-10 w-full rounded-md border border-[var(--border-default)] px-3 text-sm outline-none focus:border-[var(--brand-primary)]" />
+            </label>
+            <p className="text-[11px] text-[var(--text-tertiary)]">연결만 수행됩니다. 대상에게 관리자 권한이 자동 부여되지 않으며, 권한 인정 여부는 별도 기준을 따릅니다.</p>
+          </div>
+        )}
         {error && <p className="text-sm text-[var(--danger-text)]">{error}</p>}
       </div>
     </DialogShell>

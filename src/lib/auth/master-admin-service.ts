@@ -189,3 +189,76 @@ export async function revokeMasterAdmin(
 
   return { changed: true };
 }
+
+/** c10-9: legacy(userId=null) MasterAdmin 수동 연결 차단 사유. */
+export type LegacyBindBlockedReason =
+  | "LEGACY_NOT_FOUND"
+  | "ALREADY_BOUND"
+  | "USER_NOT_FOUND"
+  | "USER_NOT_ACTIVE"
+  | "USER_ALREADY_BOUND";
+
+/**
+ * c10-9: userId=null 인 legacy MasterAdmin 레코드를 **명시 선택된 활성 User** 에 수동 연결(bind)한다.
+ *
+ * 강한 제약(기존 기능 영향 금지):
+ * - email/name fallback·자동 bind 없음 — target 은 호출자가 명시한 `targetUserId` 뿐.
+ * - bind 이후 target User 의 role/state/session·admin 승격을 **일절 자동 수행하지 않는다**.
+ *   (isActive 그대로 보존 — 권한 인정 여부는 c10-7 fail-closed/active 집계가 그대로 판정.)
+ * - legacy email/name/passwordHash 등 기존 컬럼은 그대로 보존(덮어쓰지 않는다).
+ * - 동시성: 반드시 `runMasterAdminChange`(Serializable + advisory xact lock) 내부에서 호출.
+ *   conditional updateMany(where userId IS NULL) count=0 → 경쟁에서 이미 연결됨(ALREADY_BOUND).
+ *
+ * 권한 미검사 — `requireRecentMasterAdminAuth`(step-up) 통과 route 에서만 호출.
+ * audit(MASTER_ADMIN_LEGACY_BOUND)는 helper 밖(route)에서 실제 전이 1회에만 best-effort.
+ */
+export async function bindLegacyMasterAdmin(
+  masterAdminId: string,
+  targetUserId: string,
+  _actorUserId: string,
+  client: DbClient = prisma,
+): Promise<{ changed: true } | { changed: false; reason: LegacyBindBlockedReason }> {
+  // 1) legacy 레코드 재검증(잠금 안에서 최신 상태로).
+  const legacy = await client.masterAdmin.findUnique({
+    where: { id: masterAdminId },
+    select: { id: true, userId: true },
+  });
+  if (!legacy) {
+    return { changed: false, reason: "LEGACY_NOT_FOUND" };
+  }
+  if (legacy.userId !== null) {
+    return { changed: false, reason: "ALREADY_BOUND" };
+  }
+
+  // 2) target User 검증 — 명시 선택만(email 매칭/추론 없음).
+  const target = await client.user.findUnique({
+    where: { id: targetUserId },
+    select: { id: true, deletedAt: true },
+  });
+  if (!target) {
+    return { changed: false, reason: "USER_NOT_FOUND" };
+  }
+  if (target.deletedAt) {
+    return { changed: false, reason: "USER_NOT_ACTIVE" };
+  }
+
+  // 3) target 이 이미 다른 MasterAdmin 레코드에 연결되어 있으면 차단(userId @unique 보호).
+  const userBound = await client.masterAdmin.findUnique({
+    where: { userId: targetUserId },
+    select: { id: true },
+  });
+  if (userBound) {
+    return { changed: false, reason: "USER_ALREADY_BOUND" };
+  }
+
+  // 4) conditional update — userId IS NULL 인 동안만 단일 승자. isActive/legacy 컬럼은 보존.
+  const bound = await client.masterAdmin.updateMany({
+    where: { id: masterAdminId, userId: null },
+    data: { userId: targetUserId },
+  });
+  if (bound.count === 0) {
+    return { changed: false, reason: "ALREADY_BOUND" };
+  }
+
+  return { changed: true };
+}
