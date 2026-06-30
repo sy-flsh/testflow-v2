@@ -12,6 +12,7 @@ import {
   ScrollText,
   ShieldCheck,
   Settings,
+  ShieldPlus,
   Users,
 } from "lucide-react";
 import Link from "next/link";
@@ -101,6 +102,14 @@ export function AppSidebar() {
             label="전역 보안 감사"
             icon={ScrollText}
             active={pathname.startsWith("/admin/security-audit")}
+          />
+        )}
+        {isMasterAdmin && (
+          <SidebarLink
+            href="/admin/master-admins"
+            label="MasterAdmin 관리"
+            icon={ShieldPlus}
+            active={pathname.startsWith("/admin/master-admins")}
           />
         )}
         <SidebarLink

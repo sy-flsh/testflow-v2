@@ -4726,6 +4726,242 @@ async function main() {
         }
       }
 
+      // c10-8: MasterAdmin 권한 위임/해제
+      {
+        const FWD = { "x-forwarded-for": "198.51.100.99" };
+        const GRANT = "MasterAdmin 권한을 부여합니다";
+        const REVOKE = "MasterAdmin 권한을 해제합니다";
+        const seedHash = (await prisma.user.findUnique({ where: { email: accounts.admin }, select: { passwordHash: true } }))?.passwordHash;
+        const masterUserId = (await prisma.user.findUnique({ where: { email: "master@testflow.local" }, select: { id: true } }))?.id;
+        const createdUserIds = [];
+        const masterFixtureEmails = [];
+        let c108ws = null;
+
+        async function c108Login(email) {
+          const jar = new CookieJar();
+          await request("/api/auth/login", { method: "POST", headers: FWD, body: { email, password: PASSWORD }, jar, expectedStatus: 200 });
+          assert(jar.cookies.has("tf_session"), `${email} login failed`);
+          return jar;
+        }
+        async function elevate(jar) {
+          await request("/api/admin/reauth", { method: "POST", jar, headers: FWD, body: { password: PASSWORD }, expectedStatus: 200 });
+        }
+        async function createSessionFor(userId, elevated = false) {
+          const rawToken = `c108tok-${RUN_ID}-${Math.floor(Math.random() * 1e9)}`;
+          const tokenHash = createHash("sha256").update(rawToken).digest("hex");
+          await prisma.session.create({ data: { userId, tokenHash, expiresAt: new Date(Date.now() + 86_400_000), lastSeenAt: new Date(), adminReauthenticatedAt: elevated ? new Date() : null } });
+          const jar = new CookieJar();
+          jar.cookies.set("tf_session", rawToken);
+          return jar;
+        }
+        async function mkLoginableUser(tag) {
+          const u = await prisma.user.create({ data: { email: `c108-${tag}.${RUN_ID}@x.local`, name: `c108${tag}`, passwordHash: seedHash } });
+          createdUserIds.push(u.id);
+          await prisma.workspaceMember.create({ data: { workspaceId: c108ws.id, userId: u.id, role: "ADMIN", status: "ACTIVE" } });
+          return u;
+        }
+        async function mkMaster(tag, { isActive = true } = {}) {
+          const u = await mkLoginableUser(tag);
+          await prisma.masterAdmin.create({ data: { userId: u.id, email: u.email, name: `마스터${tag}`, passwordHash: seedHash, isActive } });
+          masterFixtureEmails.push(u.email);
+          return u;
+        }
+        // grant/revoke 는 (actor+IP) rate-limit(10/10분, confirmation 검증 전 적용)이 있어 호출마다 IP 회전.
+        let chgSeq = 0;
+        function chgHeaders() {
+          chgSeq += 1;
+          return { "x-forwarded-for": `198.51.103.${1 + (chgSeq % 200)}` };
+        }
+        async function grant(jar, userId, confirmation = GRANT, expectedStatus) {
+          return request(`/api/admin/master-admins/${userId}/grant`, { method: "POST", jar, headers: chgHeaders(), body: { confirmation }, ...(expectedStatus ? { expectedStatus } : {}) });
+        }
+        async function revoke(jar, userId, confirmation = REVOKE, expectedStatus) {
+          return request(`/api/admin/master-admins/${userId}/revoke`, { method: "POST", jar, headers: chgHeaders(), body: { confirmation }, ...(expectedStatus ? { expectedStatus } : {}) });
+        }
+        async function masterIsActive(userId) {
+          return (await prisma.masterAdmin.findUnique({ where: { userId }, select: { isActive: true } }))?.isActive;
+        }
+
+        try {
+          c108ws = await prisma.workspace.create({ data: { name: `C108WS ${RUN_ID}`, slug: `c108ws-${RUN_ID}` } });
+          const masterJar = await c108Login("master@testflow.local");
+
+          // A. 권한 / step-up
+          await check("c10-8 permission: unauth 401 / CO·member 403 / no-reauth 403 / deleted-master 403", async () => {
+            const dummy = `nope-${RUN_ID}`;
+            const calls = [
+              (o) => request("/api/admin/master-admins", o),
+              (o) => request(`/api/admin/master-admins/candidates?q=ab`, o),
+              (o) => request(`/api/admin/master-admins/${dummy}/grant`, { method: "POST", body: { confirmation: GRANT }, ...o }),
+              (o) => request(`/api/admin/master-admins/${dummy}/revoke`, { method: "POST", body: { confirmation: REVOKE }, ...o }),
+            ];
+            for (const c of calls) {
+              assert((await c({ expectedStatus: 401 })).json?.error?.code === "AUTH_UNAUTHORIZED", "unauth 401");
+              assert((await c({ jar: adminJar, expectedStatus: 403 })).json?.error?.code === "AUTH_FORBIDDEN", "CO 403");
+              assert((await c({ jar: memberJar, expectedStatus: 403 })).json?.error?.code === "AUTH_FORBIDDEN", "member 403");
+              assert((await c({ jar: masterJar, headers: FWD, expectedStatus: 403 })).json?.error?.code === "ADMIN_REAUTH_REQUIRED", "no-reauth 403");
+            }
+            const dmEmail = `c108-delmaster.${RUN_ID}@x.local`;
+            const dm = await prisma.user.create({ data: { email: dmEmail, name: "탈퇴마스터", passwordHash: seedHash, deletedAt: new Date(), deletedByUserId: leadUser.id, deletionReason: "ADMIN_FORCED_DELETION" } });
+            createdUserIds.push(dm.id);
+            await prisma.masterAdmin.create({ data: { userId: dm.id, email: dmEmail, name: "탈퇴마스터", passwordHash: seedHash } });
+            masterFixtureEmails.push(dmEmail);
+            const staleJar = await createSessionFor(dm.id);
+            assert((await request("/api/admin/master-admins", { jar: staleJar, expectedStatus: 403 })).json?.error?.code === "USER_ACCOUNT_DELETED", "deleted master USER_ACCOUNT_DELETED");
+          });
+
+          await elevate(masterJar);
+
+          // B. audit enum + global/company scope
+          await check("c10-8 audit enum: global audit includes MASTER_ADMIN_* (7 summary keys); company audit unaffected", async () => {
+            const ev = await prisma.securityAuditEvent.create({ data: { eventType: "MASTER_ADMIN_GRANTED", actorUserId: masterUserId, targetUserId: masterUserId, guardName: `c108enum-${RUN_ID}` } });
+            const r = await request(`/api/admin/security-audit?guard=c108enum-${RUN_ID}`, { jar: masterJar, expectedStatus: 200 });
+            assert(r.json.data.events.length === 1 && r.json.data.events[0].eventType === "MASTER_ADMIN_GRANTED" && r.json.data.events[0].scope === "GLOBAL", "global audit shows MASTER_ADMIN_GRANTED");
+            assert(Object.keys(r.json.data.summary.byEventType).length === 7, "summary has 7 event keys");
+            // company audit summary unchanged (3 keys), global event 미포함
+            const co = await request("/api/company/security-audit", { jar: adminJar, expectedStatus: 200 });
+            assert(Object.keys(co.json.data.summary.byEventType).length === 3, "company summary stays 3 keys");
+            await prisma.securityAuditEvent.delete({ where: { id: ev.id } });
+          });
+
+          // C. 위임
+          await check("c10-8 grant: success(binding/audit/no-auto-elevation/preserve) + confirmation/dup/soft-deleted/inactive-reactivate/legacy", async () => {
+            const target = await mkLoginableUser("grant");
+            masterFixtureEmails.push(target.email); // grant 로 bound master 가 되므로 cleanup 대상
+            await prisma.userRole.create({ data: { userId: target.id, scopeType: "WORKSPACE", scopeId: c108ws.id, role: "MEMBER" } });
+            await createSessionFor(target.id); // 비elevated
+            // confirmation 불일치
+            assert((await grant(masterJar, target.id, "nope", 400)).json?.error?.code === "MASTER_ADMIN_GRANT_CONFIRMATION_REQUIRED", "wrong confirmation 400");
+            // 성공
+            const ok = await grant(masterJar, target.id, GRANT, 200);
+            assert(ok.json?.data?.ok === true, "grant ok");
+            const m = await prisma.masterAdmin.findUnique({ where: { userId: target.id }, select: { isActive: true } });
+            assert(m?.isActive === true, "bound MasterAdmin active");
+            assert((await prisma.session.findFirst({ where: { userId: target.id, adminReauthenticatedAt: { not: null } } })) === null, "target session not auto-elevated");
+            assert((await prisma.userRole.count({ where: { userId: target.id } })) === 1, "UserRole preserved");
+            assert((await prisma.workspaceMember.count({ where: { userId: target.id } })) === 1, "WorkspaceMember preserved");
+            const ev = await prisma.securityAuditEvent.findMany({ where: { eventType: "MASTER_ADMIN_GRANTED", targetUserId: target.id } });
+            assert(ev.length === 1 && ev[0].actorUserId === masterUserId && ev[0].companyId === null && ev[0].guardName === "admin.master-admin.grant", "MASTER_ADMIN_GRANTED audit correct");
+            // dup active
+            assert((await grant(masterJar, target.id, GRANT, 409)).json?.error?.code === "USER_ALREADY_MASTER_ADMIN", "dup grant 409");
+            // soft-deleted target
+            const delU = await prisma.user.create({ data: { email: `c108-graveyard.${RUN_ID}@x.local`, name: "탈퇴", passwordHash: seedHash, deletedAt: new Date(), deletedByUserId: leadUser.id, deletionReason: "SELF_WITHDRAWAL" } });
+            createdUserIds.push(delU.id);
+            assert((await grant(masterJar, delU.id, GRANT, 409)).json?.error?.code === "USER_ACCOUNT_NOT_ACTIVE", "soft-deleted target 409");
+            // inactive bound master → reactivate (no new row)
+            const inactive = await mkMaster("inact", { isActive: false });
+            const before = await prisma.masterAdmin.count({ where: { userId: inactive.id } });
+            assert((await grant(masterJar, inactive.id, GRANT, 200)).json?.data?.ok === true, "reactivate ok");
+            assert((await masterIsActive(inactive.id)) === true, "reactivated isActive true");
+            assert((await prisma.masterAdmin.count({ where: { userId: inactive.id } })) === before, "no duplicate row");
+            // legacy email conflict
+            const legacyU = await mkLoginableUser("legacy");
+            await prisma.masterAdmin.create({ data: { email: legacyU.email, name: "레거시", passwordHash: seedHash } }); // userId null, same email
+            masterFixtureEmails.push(legacyU.email); // unbound legacy row cleanup
+            assert((await grant(masterJar, legacyU.id, GRANT, 409)).json?.error?.code === "MASTER_ADMIN_LEGACY_BINDING_REQUIRED", "legacy email conflict 409");
+          });
+
+          // D. 동시 grant
+          await check("c10-8 concurrent grant: one 200, rest 409 ALREADY; one audit", async () => {
+            const target = await mkLoginableUser("concgrant");
+            const results = await Promise.all([0, 1, 2].map(() => grant(masterJar, target.id)));
+            const ok = results.filter((r) => r.status === 200).length;
+            const dup = results.filter((r) => r.status === 409 && r.json?.error?.code === "USER_ALREADY_MASTER_ADMIN").length;
+            assert(ok === 1, `one 200, got ${ok}`);
+            assert(ok + dup === 3, `rest 409 ALREADY (ok=${ok}, dup=${dup})`);
+            assert((await prisma.securityAuditEvent.count({ where: { eventType: "MASTER_ADMIN_GRANTED", targetUserId: target.id } })) === 1, "one audit");
+            masterFixtureEmails.push(target.email);
+          });
+
+          // E. 해제
+          await check("c10-8 revoke: success(inactive/session-elevation-cleared/audit/preserve) + self/inactive/notfound", async () => {
+            const m = await mkMaster("revoke");
+            await createSessionFor(m.id, true); // 대상에 elevated(adminReauthenticatedAt set) 세션 1건
+            assert((await revoke(masterJar, m.id, "nope", 400)).json?.error?.code === "MASTER_ADMIN_REVOKE_CONFIRMATION_REQUIRED", "wrong confirmation 400");
+            const ok = await revoke(masterJar, m.id, REVOKE, 200);
+            assert(ok.json?.data?.ok === true, "revoke ok");
+            assert((await masterIsActive(m.id)) === false, "isActive false");
+            assert((await prisma.user.findUnique({ where: { id: m.id }, select: { deletedAt: true } }))?.deletedAt === null, "User not soft-deleted");
+            assert((await prisma.session.count({ where: { userId: m.id } })) >= 1, "general session preserved");
+            assert((await prisma.session.count({ where: { userId: m.id, adminReauthenticatedAt: { not: null } } })) === 0, "all step-up elevation cleared");
+            const ev = await prisma.securityAuditEvent.findMany({ where: { eventType: "MASTER_ADMIN_REVOKED", targetUserId: m.id } });
+            assert(ev.length === 1 && ev[0].actorUserId === masterUserId && ev[0].companyId === null && ev[0].guardName === "admin.master-admin.revoke", "MASTER_ADMIN_REVOKED audit correct");
+            // self
+            assert((await revoke(masterJar, masterUserId, REVOKE, 409)).json?.error?.code === "ADMIN_CANNOT_REVOKE_SELF", "self 409");
+            // already inactive (m again)
+            assert((await revoke(masterJar, m.id, REVOKE, 409)).json?.error?.code === "MASTER_ADMIN_NOT_ACTIVE", "inactive 409");
+            // unbound/missing target (a plain non-master user)
+            const plain = await mkLoginableUser("nomaster");
+            assert((await revoke(masterJar, plain.id, REVOKE, 404)).json?.error?.code === "MASTER_ADMIN_NOT_FOUND", "non-master 404");
+          });
+
+          // F. 동시 revoke → 마지막 master 0 방지(LAST_ACTIVE_MASTER reachable via retry)
+          await check("c10-8 concurrent revoke never drops active masters to 0 (one 200, one LAST)", async () => {
+            const mb = await mkMaster("mb");
+            const mc = await mkMaster("mc");
+            const jarB = await c108Login(mb.email);
+            await elevate(jarB);
+            const jarC = await c108Login(mc.email);
+            await elevate(jarC);
+            // mb/mc 만 active master(2명) 가 되도록 그 외(seed + 이전 check 의 granted master)를 모두 비활성화
+            // → 상호 동시 해제로 "마지막 active master" 경계에 도달(0 방지 검증).
+            await prisma.masterAdmin.updateMany({ where: { isActive: true, userId: { notIn: [mb.id, mc.id] } }, data: { isActive: false } });
+            const [r1, r2] = await Promise.all([revoke(jarB, mc.id), revoke(jarC, mb.id)]);
+            const oks = [r1, r2].filter((r) => r.status === 200).length;
+            const lasts = [r1, r2].filter((r) => r.status === 409 && r.json?.error?.code === "LAST_MASTER_ADMIN_REVOKE_FORBIDDEN").length;
+            assert(oks === 1 && lasts === 1, `one 200 one LAST (oks=${oks}, lasts=${lasts}, codes=${[r1, r2].map((r) => r.status + (r.json?.error?.code ? ":" + r.json.error.code : "")).join(",")})`);
+            const stillActive = (await masterIsActive(mb.id)) || (await masterIsActive(mc.id));
+            assert(stillActive, "at least one of mb/mc remains active");
+            // seed master 복구.
+            await prisma.masterAdmin.update({ where: { email: "master@testflow.local" }, data: { isActive: true } });
+          });
+
+          // G. list + candidates
+          await check("c10-8 list(bound only/legacyUnboundCount/hints/DTO) + candidates(eligibility/min-len/limit)", async () => {
+            const list = await request("/api/admin/master-admins?status=ALL&size=50", { jar: masterJar, expectedStatus: 200 });
+            const ids = list.json.data.masterAdmins.map((m) => m.userId);
+            assert(ids.includes(masterUserId), "seed master in bound list");
+            assert(list.json.data.legacyUnboundCount >= 1, "legacyUnboundCount counts unbound rows");
+            // unbound row 는 목록에 미포함(legacy fixture email)
+            assert(!list.json.data.masterAdmins.some((m) => !m.userId), "no unbound rows in list");
+            // DTO allowlist
+            const row = list.json.data.masterAdmins[0];
+            const keys = Object.keys(row).sort().join(",");
+            assert(keys === "createdAt,email,isCurrentActor,masterAdminId,name,revokeAllowed,revokeBlockedReason,status,updatedAt,userId", `unexpected DTO keys: ${keys}`);
+            for (const banned of ["passwordHash", "tokenHash", "sessionId", "companyId", "roles"]) {
+              assert(!list.text.includes(banned), `must not expose ${banned}`);
+            }
+            // self hint
+            const self = list.json.data.masterAdmins.find((m) => m.userId === masterUserId);
+            assert(self && self.isCurrentActor === true && self.revokeBlockedReason === "SELF", "actor row SELF");
+            // candidates
+            assert((await request("/api/admin/master-admins/candidates?q=a", { jar: masterJar, expectedStatus: 200 })).json.data.candidates.length === 0, "q<2 → empty");
+            const cand = await request("/api/admin/master-admins/candidates?q=master@testflow.local", { jar: masterJar, expectedStatus: 200 });
+            const seedCand = cand.json.data.candidates.find((c) => c.userId === masterUserId);
+            assert(seedCand && seedCand.eligibility === "ALREADY_ACTIVE_MASTER", "active master candidate → ALREADY_ACTIVE_MASTER");
+            const ck = Object.keys(seedCand).sort().join(",");
+            assert(ck === "eligibility,email,name,userId", `candidate DTO allowlist; got: ${ck}`);
+          });
+        } finally {
+          // seed master 활성 복구(테스트 도중 변경 대비) + 정리.
+          await prisma.masterAdmin.updateMany({ where: { email: "master@testflow.local" }, data: { isActive: true } });
+          await prisma.securityAuditEvent.deleteMany({ where: { OR: [{ targetUserId: { in: createdUserIds } }, { actorUserId: { in: createdUserIds } }] } });
+          await prisma.rateLimitBucket.deleteMany({ where: { scope: { in: ["admin:master-admin-change:actor", "admin:reauth:fail"] } } });
+          if (masterUserId) {
+            await prisma.session.deleteMany({ where: { userId: masterUserId } });
+          }
+          if (masterFixtureEmails.length) {
+            await prisma.masterAdmin.deleteMany({ where: { email: { in: masterFixtureEmails } } });
+          }
+          for (const id of createdUserIds) {
+            await prisma.user.delete({ where: { id } }).catch(() => {});
+          }
+          if (c108ws) {
+            await prisma.workspace.delete({ where: { id: c108ws.id } }).catch(() => {});
+          }
+        }
+      }
+
       await check("CO can sync WORKSPACE role to another user", async () => {
         const original = await prisma.userRole.findUnique({
           where: {

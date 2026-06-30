@@ -58,6 +58,8 @@ const EVENT_BADGE_STYLES: Record<string, string> = {
   INACTIVE_COMPANY_ACCESS_DENIED: "bg-amber-50 text-amber-700 ring-amber-200",
   USER_SOFT_DELETED: "bg-red-50 text-red-700 ring-red-200",
   USER_RESTORED: "bg-sky-50 text-sky-700 ring-sky-200",
+  MASTER_ADMIN_GRANTED: "bg-indigo-50 text-indigo-700 ring-indigo-200",
+  MASTER_ADMIN_REVOKED: "bg-orange-50 text-orange-700 ring-orange-200",
 };
 
 const SCOPE_OPTIONS: Array<[string, string]> = [

@@ -94,6 +94,8 @@ export async function GET(request: Request) {
         INACTIVE_COMPANY_ACCESS_DENIED: 0,
         USER_SOFT_DELETED: 0,
         USER_RESTORED: 0,
+        MASTER_ADMIN_GRANTED: 0,
+        MASTER_ADMIN_REVOKED: 0,
       },
     };
     for (const row of grouped) {
